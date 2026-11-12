@@ -5,6 +5,8 @@
 (import "lang.text" :as t)
 (import "lang.ir" :as ir)
 (import "lang.pass" :as pass)
+(import "lang.isa" :as isa)
+(import "lang.lower" :as lower)
 
 (reader-provider "lang.readers" read-any)
 
@@ -17,4 +19,6 @@
     (cond (t/ends-with path ".ir") (ir/module-text src path)
           (t/ends-with path ".unit") (pass/unit-text context)
           (t/ends-with path ".pass") (pass/pass-text context)
+          (t/ends-with path ".isa") (isa/module-text src path)
+          (t/ends-with path ".lower") (lower/module-text context)
           :else (t/fail-at path 1 1 "no language reads a file with this extension"))))

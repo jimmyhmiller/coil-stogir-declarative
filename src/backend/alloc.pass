@@ -1,0 +1,174 @@
+# Register allocation: linear scan over the instructions in layout order.
+#
+# A virtual register is live from where it is first written to where it is last
+# read, stretched to the end of any loop it is read in but was written before.
+# It gets a register when it is first written and keeps it. When none is free,
+# the live value that ends last moves to the frame for its whole life.
+pass in backend.unit
+use backend.cfg as cfg
+use backend.mach as mach
+import backend.a64 as isa
+
+entity Vreg
+column start: Vreg -> Int             # the first instruction that touches it, or 0
+column end: Vreg -> Int               # the last
+column reg: Vreg -> Int               # its register + 1, or 0
+column slot: Vreg -> Int              # its frame slot + 1, or 0
+column hint: Vreg -> Int              # an operand it is moved to or from, or 0
+
+# A machine register is busy from where an instruction writes it to where one
+# reads it; `busy` holds those spans as from, to, from, to.
+entity Phys
+column busy: Phys -> [Int]
+column written: Phys -> Int
+
+state active: [Vreg]
+state free: Word
+state slots: Int
+
+fn reg-kind?(kind: Int) -> Bool = kind == isa.K-DEF or kind == isa.K-USE or kind == isa.K-MOD
+
+fn writes?(kind: Int) -> Bool = kind == isa.K-DEF or kind == isa.K-MOD
+
+# `orr d, zr, s` is how a register is copied: its source, or 0.
+fn move-source(i: Inst) -> Int =
+  if i.inst-op == isa.ORR and i.a0 == 1 and i.a2 == 0 - isa.ZR - 1 then i.a3 else 0
+
+fn touch(i: Inst, kind: Int, a: Int) {
+  let at = int(i)
+  if a > 0 {
+    let v = id(a)
+    if v.start == 0 { v.start = at }
+    if at > v.end { v.end = at }
+  } else if isa.in-set?(isa.ALLOCATABLE, 0 - a - 1) {
+    let p = id(0 - a)
+    if kind != isa.K-DEF {
+      p.busy.push(p.written)
+      p.busy.push(at)
+    }
+    if writes?(kind) { p.written = at }
+  }
+}
+
+fn intervals() {
+  for n in 0..next-vreg { Vreg.new() }
+  for r in 0..32 { Phys.new() }
+  for i in Inst {
+    let op = i.inst-op
+    for k in 0..isa.operand-count(op) {
+      let kind = isa.operand-kind(op, k)
+      if reg-kind?(kind) { touch(i, kind, mach.arg(i, k)) }
+    }
+    # Each side of a copy would like the other's register.
+    let source = move-source(i)
+    if source != 0 {
+      let target = i.a1
+      if target > 0 and id(target).hint == 0 { id(target).hint = source }
+      if source > 0 and id(source).hint == 0 { id(source).hint = target }
+    }
+  }
+  for h in order {
+    if h.head is LOOP {
+      let from = h.first-inst
+      let to = greatest b in h.loop-blocks: b.last-inst
+      for v in Vreg {
+        if v.start != 0 and v.start < from and v.end >= from and v.end < to { v.end = to }
+      }
+    }
+  }
+}
+
+# Whether something fixed needs register `r` while `v` is live.
+fn conflicts?(v: Vreg, r: Int) -> Bool {
+  var from = 0
+  var second = false
+  for x in id(r + 1).busy {
+    if second {
+      if v.start < x and from < v.end { return true }
+    } else {
+      from = x
+    }
+    second = not second
+  }
+  false
+}
+
+fn usable?(v: Vreg, r: Int) -> Bool = has-bit(free, r) and not conflicts?(v, r)
+
+# A free register for `v`, the one it is copied to or from if that one will do, or -1.
+fn pick(v: Vreg) -> Int {
+  let h = v.hint
+  if h > 0 and id(h).reg != 0 and usable?(v, id(h).reg - 1) { return id(h).reg - 1 }
+  if h < 0 and usable?(v, 0 - h - 1) { return 0 - h - 1 }
+  var candidates = free
+  while candidates != word(0) {
+    let r = lowest-bit(candidates)
+    if not conflicts?(v, r) { return r }
+    candidates = clear-bit(candidates, r)
+  }
+  -1
+}
+
+fn spill(v: Vreg) {
+  slots = slots + 1
+  v.slot = slots
+}
+
+fn assign(v: Vreg) {
+  let r = pick(v)
+  if r >= 0 {
+    v.reg = r + 1
+    free = clear-bit(free, r)
+    active.push(v)
+    return
+  }
+  var worst = v
+  var index = -1
+  for j in 0..active.len {
+    let a = active[j]
+    if a.end > worst.end and not conflicts?(v, a.reg - 1) {
+      worst = a
+      index = j
+    }
+  }
+  if index >= 0 {
+    v.reg = worst.reg
+    worst.reg = 0
+    active[index] = v
+  }
+  spill(worst)
+}
+
+# Registers of values that are read for the last time by now are free again.
+fn expire(at: Int) {
+  var kept = 0
+  for j in 0..active.len {
+    let v = active[j]
+    if v.end <= at {
+      free = set-bit(free, v.reg - 1)
+    } else {
+      active[kept] = v
+      kept = kept + 1
+    }
+  }
+  while active.len > kept { active.pop() }
+}
+
+fn scan() {
+  free = isa.ALLOCATABLE
+  for i in Inst {
+    expire(int(i))
+    let op = i.inst-op
+    for k in 0..isa.operand-count(op) {
+      let a = mach.arg(i, k)
+      if writes?(isa.operand-kind(op, k)) and a > 0 and id(a).reg == 0 and id(a).slot == 0 {
+        assign(id(a))
+      }
+    }
+  }
+}
+
+fn run() {
+  intervals()
+  scan()
+}

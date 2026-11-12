@@ -13,6 +13,7 @@ column loop-depth: Block -> Int
 column rpo: Block -> Int
 column seen: Block -> Bool
 column mark: Block -> Int
+column loop-blocks: Block -> [Block]  # for a loop's head: the head and its body
 state post: [Block]
 state order: [Block]                  # reverse postorder from the entry
 state stamp: Int
@@ -133,6 +134,7 @@ fn loops() {
       var work: [Block] = []
       h.mark = stamp
       h.loop-depth = h.loop-depth + 1
+      h.loop-blocks.push(h)
       for p in h.preds {
         if dominates(h, p) and p.mark != stamp {
           p.mark = stamp
@@ -142,6 +144,7 @@ fn loops() {
       while work.len > 0 {
         let b = work.pop()
         b.loop-depth = b.loop-depth + 1
+        h.loop-blocks.push(b)
         for p in b.preds {
           if p.mark != stamp {
             p.mark = stamp

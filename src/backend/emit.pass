@@ -1,0 +1,92 @@
+# From chosen registers to bytes: values in the frame go through scratch
+# registers, copies to the same register and jumps to the next block go away,
+# the frame is opened and closed, and each instruction is encoded.
+pass in backend.unit
+use backend.mach as mach
+use backend.alloc as alloc
+use backend.a64-lower as lower
+import backend.a64 as isa
+
+column final-first: Block -> Int      # a block's first final instruction
+state final-start: Int                # final instructions follow the selected ones
+state frame: Int                      # bytes of frame, a multiple of 16
+state loads: Int
+state code: [Word]
+
+fn marker(r: Int) -> Int = 0 - r - 1
+
+fn scratch(n: Int) -> Int =
+  if n == 0 then isa.SCRATCH1 else if n == 1 then isa.SCRATCH2 else isa.SCRATCH0
+
+# Operand `k` of `i` as a machine register, read from the frame first if that
+# is where it lives; any other operand as it is.
+fn resolve(i: Inst, k: Int) -> Int {
+  let op = i.inst-op
+  if k >= isa.operand-count(op) { return 0 }
+  let kind = isa.operand-kind(op, k)
+  let a = mach.arg(i, k)
+  if not alloc.reg-kind?(kind) or a < 0 { return a }
+  let v = id(a)
+  if v.reg != 0 { return marker(v.reg - 1) }
+  if kind == isa.K-DEF { return marker(isa.SCRATCH0) }
+  let s = marker(scratch(loads))
+  loads = loads + 1
+  lower.from-frame(s, v.slot - 1)
+  s
+}
+
+fn finish(i: Inst, k: Int) {
+  let op = i.inst-op
+  if k < isa.operand-count(op) and alloc.writes?(isa.operand-kind(op, k)) {
+    let a = mach.arg(i, k)
+    if a > 0 and id(a).reg == 0 {
+      # A value both read and written was read into the register it is written from.
+      lower.to-frame(if isa.operand-kind(op, k) == isa.K-DEF then marker(isa.SCRATCH0) else marker(isa.SCRATCH1), id(a).slot - 1)
+    }
+  }
+}
+
+fn rewrite(i: Inst, next: Int) {
+  let op = i.inst-op
+  loads = 0
+  let x0 = resolve(i, 0)
+  let x1 = resolve(i, 1)
+  let x2 = resolve(i, 2)
+  let x3 = resolve(i, 3)
+  let x4 = resolve(i, 4)
+  if alloc.move-source(i) != 0 and x1 == x3 { return }
+  if op == isa.B and x0 == next { return }
+  if op == isa.RET and frame > 0 { lower.shrink-stack(frame) }
+  mach.emit(op, x0, x1, x2, x3, x4)
+  for k in 0..5 { finish(i, k) }
+}
+
+fn encoded(i: Inst, k: Int) -> Int {
+  let op = i.inst-op
+  if k >= isa.operand-count(op) { return 0 }
+  let kind = isa.operand-kind(op, k)
+  let a = mach.arg(i, k)
+  if alloc.reg-kind?(kind) { return 0 - a - 1 }
+  if kind == isa.K-LABEL { return id(a).final-first - int(i) }
+  a
+}
+
+fn run() {
+  frame = (slots * 8 + 15) / 16 * 16
+  final-start = Inst.count
+  if frame > 0 { lower.grow-stack(frame) }
+  for index in 0..order.len {
+    let b = order[index]
+    let next = if index + 1 < order.len then int(order[index + 1]) else 0
+    b.final-first = Inst.count + 1
+    if b.last-inst >= b.first-inst {
+      for at in b.first-inst..b.last-inst + 1 { rewrite(id(at), next) }
+    }
+  }
+  # The entry block's code starts at the frame's opening.
+  order[0].final-first = final-start + 1
+  for at in final-start + 1..Inst.count + 1 {
+    let i = id(at)
+    code.push(word(isa.encode(i.inst-op, encoded(i, 0), encoded(i, 1), encoded(i, 2), encoded(i, 3), encoded(i, 4))))
+  }
+}

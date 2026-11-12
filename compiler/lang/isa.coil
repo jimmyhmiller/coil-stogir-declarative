@@ -1,0 +1,307 @@
+;;; The `.isa` language: a machine's registers and instruction encodings.
+;;;
+;;;   word 32
+;;;   class gpr 5
+;;;   reg x0..x30 : gpr
+;;;   set callee-saved = x19..x28
+;;;   inst add-imm(sf: u1, rd: def gpr, rn: use gpr, imm: u12) = sf 0 0 100010 0 imm rn rd
+;;;
+;;; An encoding is the instruction's bits from the most significant: literal bits
+;;; and operand fields, which must add up to the word. From it: instruction
+;;; numbers, what each operand is (defined, used, an immediate, a label), register
+;;; numbers and sets, and an encoder. Other languages read the same file through
+;;; `parse`.
+(module lang.isa)
+(import "coil.alloc" :use [malloc-allocator])
+(import "coil.arraylist" :use [ArrayList])
+(import "lang.text" :as t)
+
+(const K-NONE 0)
+(const K-DEF 1)
+(const K-USE 2)
+(const K-MOD 3)
+(const K-IMM 4)
+(const K-LABEL 5)
+(const K-SYMBOL 6)
+
+(defstruct Class [(name (slice u8)) (width i64)])
+
+(defstruct Reg [(name (slice u8)) (number i64) (class (slice u8))])
+
+(defstruct RegSet [(name (slice u8)) (members (ArrayList (slice u8)))])
+
+;;; class: a register operand's class. width: an immediate's bits. signed: `sN`.
+(defstruct Operand
+  [(name (slice u8)) (kind i64) (class (slice u8)) (width i64) (signed bool)])
+
+;;; One piece of an encoding: literal bits, or `width` bits of an operand.
+(defstruct Piece [(bits (slice u8)) (field (slice u8)) (width i64)])
+
+(defstruct Inst
+  [(name (slice u8)) (operands (ArrayList Operand)) (pieces (ArrayList Piece)) (line i64)])
+
+(defstruct Spec
+  [(word i64)
+   (classes (ArrayList Class))
+   (regs (ArrayList Reg))
+   (sets (ArrayList RegSet))
+   (consts (ArrayList Reg))
+   (insts (ArrayList Inst))])
+
+(defn class-width [(spec Spec) (name (slice u8))] (-> i64)
+  (let [(mut width) 0]
+    (for c (.classes spec) (when (= (.name c) name) (set! width (.width c))))
+    width))
+
+(defn reg-number [(spec Spec) (name (slice u8))] (-> i64)
+  (let [(mut number) -1]
+    (for r (.regs spec) (when (= (.name r) name) (set! number (.number r))))
+    number))
+
+;;; A named constant's value, or -1.
+(defn const-number [(spec Spec) (name (slice u8))] (-> i64)
+  (let [(mut number) -1]
+    (for k (.consts spec) (when (= (.name k) name) (set! number (.number k))))
+    number))
+
+;;; An instruction's number, from 1 in declaration order, or 0.
+(defn inst-number [(spec Spec) (name (slice u8))] (-> i64)
+  (let [(mut found) 0]
+    (for i (range 0 (len (.insts spec)))
+      (when (= (.name (get (.insts spec) i)) name) (set! found (+ i 1))))
+    found))
+
+(defn operand-index [(inst Inst) (name (slice u8))] (-> i64)
+  (let [(mut found) -1]
+    (for i (range 0 (len (.operands inst)))
+      (when (= (.name (get (.operands inst) i)) name) (set! found i)))
+    found))
+
+;;; `x0..x30` as its names: a shared prefix and a run of numbers.
+(defn expand-range [(c (mut t/Cur)) (at t/Tok) (lo (slice u8)) (hi (slice u8))]
+  (-> (ArrayList (slice u8)))
+  (let [(mut out) (ArrayList::new [(slice u8)] (malloc-allocator))
+        (mut split) (len lo)]
+    (while (and (> split 0) (t/digit? (get lo (- split 1)))) (set! split (- split 1)))
+    (let [prefix (t/slice-of lo 0 split)
+          (mut a) 0
+          (mut b) 0]
+      (when (or (= split (len lo)) (< (len hi) (+ split 1)) (!= (t/slice-of hi 0 split) prefix))
+        (t/die (mut c) at "a register range is NAMEn..NAMEm"))
+      (for i (range split (len lo)) (set! a (+ (* a 10) (cast i64 (- (get lo i) #\0)))))
+      (for i (range split (len hi)) (set! b (+ (* b 10) (cast i64 (- (get hi i) #\0)))))
+      (for n (range a (+ b 1)) (push! (mut out) (t/cat2 prefix (t/int-text n)))))
+    out))
+
+;;; Register names up to the end of the line: names and ranges.
+(defn parse-reg-list [(c (mut t/Cur))] (-> (ArrayList (slice u8)))
+  (let [(mut out) (ArrayList::new [(slice u8)] (malloc-allocator))]
+    (while (and (t/at-ident? (mut c)) (not (t/at-line-start? (mut c))))
+      (let [at (t/peek (mut c))
+            name (t/name! (mut c) "a register")]
+        (if (t/accept! (mut c) "..")
+            (for r (expand-range (mut c) at name (t/name! (mut c) "a register")) (push! (mut out) r))
+            (push! (mut out) name))))
+    out))
+
+(defn parse-operand [(c (mut t/Cur)) (spec Spec)] (-> Operand)
+  (let [name (t/name! (mut c) "an operand name")]
+    (t/expect! (mut c) ":")
+    (let [at (t/peek (mut c))
+          word (t/name! (mut c) "def, use, mod, label, symbol or an immediate type")]
+      (cond
+        (or (= word "def") (= word "use") (= word "mod"))
+          (let [class (t/name! (mut c) "a register class")]
+            (when (= (class-width spec class) 0) (t/die (mut c) at (t/cat2 "no class named " class)))
+            (Operand
+              :name name
+              :kind (cond (= word "def") K-DEF (= word "use") K-USE :else K-MOD)
+              :class class
+              :width (class-width spec class)
+              :signed false))
+        (= word "label") (Operand :name name :kind K-LABEL :class "" :width 0 :signed true)
+        (= word "symbol") (Operand :name name :kind K-SYMBOL :class "" :width 0 :signed true)
+        (and (> (len word) 1) (or (= (get word 0) #\u) (= (get word 0) #\s))
+             (t/digit? (get word 1)))
+          (let [(mut width) 0]
+            (for i (range 1 (len word)) (set! width (+ (* width 10) (cast i64 (- (get word i) #\0)))))
+            (Operand :name name :kind K-IMM :class "" :width width :signed (= (get word 0) #\s)))
+        :else (t/die (mut c) at (t/cat2 "not an operand kind: " word))))))
+
+(defn parse-inst [(c (mut t/Cur)) (spec (mut Spec))] (-> void)
+  (let [at (t/peek (mut c))
+        name (t/name! (mut c) "an instruction name")
+        (mut inst) (Inst
+                     :name name
+                     :operands (ArrayList::new [Operand] (malloc-allocator))
+                     :pieces (ArrayList::new [Piece] (malloc-allocator))
+                     :line (.line at))
+        (mut total) 0]
+    (when (!= (inst-number spec name) 0) (t/die (mut c) at (t/cat2 "instruction declared twice: " name)))
+    (t/expect! (mut c) "(")
+    (unless (t/at? (mut c) ")")
+      (let [(mut more) true]
+        (while more
+          (push! (mut (.operands inst)) (parse-operand (mut c) spec))
+          (set! more (t/accept! (mut c) ",")))))
+    (t/expect! (mut c) ")")
+    (when (> (len (.operands inst)) 5) (t/die (mut c) at "an instruction has at most five operands"))
+    (t/expect! (mut c) "=")
+    (while (not (t/at-line-start? (mut c)))
+      (let [tok (t/advance! (mut c))]
+        (cond
+          (= (.kind tok) t/T-NUM)
+            (do (for ch (.text tok)
+                  (when (and (!= ch #\0) (!= ch #\1)) (t/die (mut c) tok "literal bits are 0s and 1s")))
+                (push! (mut (.pieces inst)) (Piece :bits (.text tok) :field "" :width (len (.text tok))))
+                (set! total (+ total (len (.text tok)))))
+          (= (.kind tok) t/T-IDENT)
+            (let [index (operand-index inst (.text tok))]
+              (when (< index 0) (t/die (mut c) tok (t/cat2 "no operand named " (.text tok))))
+              (let [given (if (and (t/at? (mut c) ":") (.glued (t/peek (mut c))))
+                              (do (t/advance! (mut c)) (cast i64 (t/num! (mut c) "a width")))
+                              0)
+                    width (if (> given 0) given (.width (get (.operands inst) index)))]
+                (when (= width 0) (t/die (mut c) tok "this field needs a width: `name:bits`"))
+                (push! (mut (.pieces inst)) (Piece :bits "" :field (.text tok) :width width))
+                (set! total (+ total width))))
+          :else (t/die (mut c) tok (t/cat2 "unexpected in an encoding: " (.text tok))))))
+    (when (!= total (.word spec))
+      (t/die (mut c) at
+             (t/cat4 "the encoding of " name " has " (t/cat4 (t/int-text total) " bits, the word "
+                                                             (t/int-text (.word spec)) ""))))
+    (push! (mut (.insts spec)) inst)))
+
+(defn parse [(src (slice u8)) (path (slice u8))] (-> Spec)
+  (let [(mut c) (t/cursor src path)
+        (mut spec) (Spec
+                     :word 32
+                     :classes (ArrayList::new [Class] (malloc-allocator))
+                     :regs (ArrayList::new [Reg] (malloc-allocator))
+                     :sets (ArrayList::new [RegSet] (malloc-allocator))
+                     :consts (ArrayList::new [Reg] (malloc-allocator))
+                     :insts (ArrayList::new [Inst] (malloc-allocator)))]
+    (while (not (t/eof? (mut c)))
+      (let [tok (t/advance! (mut c))]
+        (cond
+          (t/tok-is? tok "word") (set! (.word spec) (cast i64 (t/num! (mut c) "the word's bits")))
+          (t/tok-is? tok "class")
+            (let [name (t/name! (mut c) "a class name")]
+              (push! (mut (.classes spec))
+                     (Class :name name :width (cast i64 (t/num! (mut c) "the field width")))))
+          (t/tok-is? tok "reg")
+            (let [names (parse-reg-list (mut c))]
+              (t/expect! (mut c) ":")
+              (let [class (t/name! (mut c) "a register class")
+                    (mut number) (if (t/accept! (mut c) "=")
+                                     (cast i64 (t/num! (mut c) "a register number"))
+                                     -1)]
+                (for name names
+                  ; Unnumbered registers take the number their name ends in.
+                  (let [(mut split) (len name)
+                        (mut own) 0]
+                    (while (and (> split 0) (t/digit? (get name (- split 1)))) (set! split (- split 1)))
+                    (for i (range split (len name))
+                      (set! own (+ (* own 10) (cast i64 (- (get name i) #\0)))))
+                    (when (and (< number 0) (= split (len name)))
+                      (t/die (mut c) tok (t/cat2 "this register needs a number: " name)))
+                    (push! (mut (.regs spec))
+                           (Reg :name name :number (if (< number 0) own number) :class class))))))
+          (t/tok-is? tok "set")
+            (let [name (t/name! (mut c) "a set name")]
+              (t/expect! (mut c) "=")
+              (let [members (parse-reg-list (mut c))]
+                (for m members
+                  (when (< (reg-number spec m) 0) (t/die (mut c) tok (t/cat2 "no register named " m))))
+                (push! (mut (.sets spec)) (RegSet :name name :members members))))
+          (t/tok-is? tok "const")
+            (let [name (t/name! (mut c) "a constant's name")]
+              (t/expect! (mut c) "=")
+              (push! (mut (.consts spec))
+                     (Reg :name name :number (cast i64 (t/num! (mut c) "a number")) :class "")))
+          (t/tok-is? tok "inst") (parse-inst (mut c) (mut spec))
+          :else (t/die (mut c) tok (t/cat2 "expected word, class, reg, set or inst, found "
+                                           (.text tok))))))
+    spec))
+
+;; ---------------------------------------------------------------- output
+
+(defn arg-name [(i i64)] (-> (slice u8))
+  (cond (= i 0) "a" (= i 1) "b" (= i 2) "c" (= i 3) "d" :else "e"))
+
+;;; An instruction's word: its literal bits, and each field cut to its width
+;;; and shifted into place.
+(defn encode-text [(spec Spec) (inst Inst)] (-> (slice u8))
+  (let [(mut o) (t/out-new)
+        (mut shift) (.word spec)
+        (mut literal) (: 0 u64)]
+    (for piece (.pieces inst)
+      (set! shift (- shift (.width piece)))
+      (if (= (.field piece) "")
+          (for i (range 0 (len (.bits piece)))
+            (when (= (get (.bits piece) i) #\1)
+              (set! literal (| literal (<< (: 1 u64) (cast u64 (+ shift (- (- (.width piece) 1) i))))))))
+          (let [mask (- (<< (: 1 u64) (cast u64 (.width piece))) 1)]
+            (t/emit! (mut o)
+                     (t/cat4 " (<< (& (primitive/cast u64 "
+                             (arg-name (operand-index inst (.field piece)))
+                             ") "
+                             (t/cat4 (t/u64-text mask) ") " (t/int-text shift) ")"))))))
+    (t/cat4 "(primitive/cast u32 (| " (t/u64-text literal) (t/text-of (mut o)) "))")))
+
+(defn module-text [(src (slice u8)) (path (slice u8))] (-> (slice u8))
+  (let [spec (parse src path)
+        (mut o) (t/out-new)]
+    (t/line! (mut o) "(import \"coil.primitive\" :as primitive)")
+    (for i (range 0 (len (.insts spec)))
+      (t/line! (mut o)
+               (t/cat4 "(const " (t/upper (.name (get (.insts spec) i))) " "
+                       (t/cat2 (t/int-text (+ i 1)) ")"))))
+    (for r (.regs spec)
+      (t/line! (mut o) (t/cat4 "(const " (t/upper (.name r)) " " (t/cat2 (t/int-text (.number r)) ")"))))
+    (for k (.consts spec)
+      (t/line! (mut o) (t/cat4 "(const " (t/upper (.name k)) " " (t/cat2 (t/int-text (.number k)) ")"))))
+    (for s (.sets spec)
+      (let [(mut mask) (: 0 u64)]
+        (for m (.members s) (set! mask (| mask (<< (: 1 u64) (cast u64 (reg-number spec m))))))
+        (t/line! (mut o) (t/cat4 "(const " (t/upper (.name s)) " " (t/cat2 (t/u64-text mask) ")")))))
+    (t/emit! (mut o) "(def NAMES [\"\"")
+    (for inst (.insts spec) (t/emit! (mut o) (t/cat3 " \"" (.name inst) "\"")))
+    (t/line! (mut o) "])")
+    (t/emit! (mut o) "(def COUNTS [0")
+    (for inst (.insts spec) (t/emit! (mut o) (t/cat2 " " (t/int-text (len (.operands inst))))))
+    (t/line! (mut o) "])")
+    ; Five kinds per instruction, from instruction 0.
+    (t/emit! (mut o) "(def KINDS [0 0 0 0 0")
+    (for inst (.insts spec)
+      (for i (range 0 5)
+        (t/emit! (mut o)
+                 (t/cat2 " " (t/int-text (if (< i (len (.operands inst)))
+                                             (.kind (get (.operands inst) i))
+                                             K-NONE))))))
+    (t/line! (mut o) "])")
+    (t/emit! (mut o) "(def REG-NAMES [")
+    (for n (range 0 64)
+      (let [(mut name) "?"]
+        (for r (.regs spec) (when (and (= name "?") (= (.number r) n)) (set! name (.name r))))
+        (t/emit! (mut o) (t/cat3 " \"" name "\""))))
+    (t/line! (mut o) "])")
+    (t/line! (mut o) "(const K-DEF 1)")
+    (t/line! (mut o) "(const K-USE 2)")
+    (t/line! (mut o) "(const K-MOD 3)")
+    (t/line! (mut o) "(const K-IMM 4)")
+    (t/line! (mut o) "(const K-LABEL 5)")
+    (t/line! (mut o) "(const K-SYMBOL 6)")
+    (t/line! (mut o) "(defn name [(op i64)] (-> (slice u8)) (get NAMES op))")
+    (t/line! (mut o) "(defn reg-name [(r i64)] (-> (slice u8)) (get REG-NAMES r))")
+    (t/line! (mut o) "(defn operand-count [(op i64)] (-> i64) (get COUNTS op))")
+    (t/line! (mut o) "(defn operand-kind [(op i64) (i i64)] (-> i64) (get KINDS (+ (* op 5) i)))")
+    (t/line! (mut o) "(defn in-set? [(set u64) (r i64)] (-> bool) (!= (& set (<< (: 1 u64) (cast u64 r))) 0))")
+    (t/line! (mut o) "(defn encode [(op i64) (a i64) (b i64) (c i64) (d i64) (e i64)] (-> u32)")
+    (t/line! (mut o) "  (match op")
+    (for i (range 0 (len (.insts spec)))
+      (t/line! (mut o)
+               (t/cat4 "    (" (t/int-text (+ i 1)) " "
+                       (t/cat2 (encode-text spec (get (.insts spec) i)) ")"))))
+    (t/line! (mut o) "    (_ (: 0 u32))))")
+    (t/text-of (mut o))))

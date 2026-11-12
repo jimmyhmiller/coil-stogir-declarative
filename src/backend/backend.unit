@@ -3,3 +3,8 @@ unit
 nodes backend.nodes
 pass backend.cfg
 pass backend.schedule
+pass backend.mach
+lower backend.a64-lower
+pass backend.select
+pass backend.alloc
+pass backend.emit

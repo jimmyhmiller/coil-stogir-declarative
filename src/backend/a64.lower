@@ -1,0 +1,69 @@
+# Which AArch64 instructions compute each node.
+lower in backend.unit
+nodes backend.nodes
+target backend.a64
+emit backend.mach
+
+# What the allocator and the emitter ask for by name.
+template move(d, s)        = orr(1, d, zr, s)
+template jump(to)          = b(to)
+template from-frame(d, slot) = ldr(d, sp, slot)
+template to-frame(s, slot)   = str(s, sp, slot)
+template grow-stack(n)     = sub-imm(1, sp, sp, n)
+template shrink-stack(n)   = add-imm(1, sp, sp, n)
+
+# Control that is only structure.
+rule START   => nothing
+rule REGION  => nothing
+rule LOOP    => nothing
+rule TRUE    => nothing
+rule FALSE   => nothing
+rule PHI     => nothing
+
+rule PARAM i when i < 8          => orr(1, out, zr, reg(i))
+rule RETURN(_, v)                => orr(1, x0, zr, v) ; ret(x30)
+
+# Constants, by how many sixteen-bit pieces they need.
+rule CONST k when k >= 0 and k < 65536      => movz(1, out, k, 0)
+rule CONST k when k < 0 and k >= -65536     => movn(1, out, ~k, 0)
+rule CONST k when k >= 0 and k < 4294967296 => movz(1, out, k & 65535, 0) ; movk(1, out, (k >> 16) & 65535, 1)
+rule CONST k => movz(1, out, k & 65535, 0) ; movk(1, out, (k >> 16) & 65535, 1) ; movk(1, out, (k >> 32) & 65535, 2) ; movk(1, out, (k >> 48) & 65535, 3)
+
+rule ADD(x, CONST k) when u12(k)   => add-imm(sf, out, x, k)
+rule ADD(x, CONST k) when u12(-k)  => sub-imm(sf, out, x, -k)
+rule ADD(MUL(a, b), c)             => madd(sf, out, a, b, c)
+rule ADD(x, y)                     => add(sf, out, x, y)
+rule SUB(x, CONST k) when u12(k)   => sub-imm(sf, out, x, k)
+rule SUB(x, y)                     => sub(sf, out, x, y)
+rule MUL(x, y)                     => madd(sf, out, x, y, zr)
+rule AND(x, y)                     => and(sf, out, x, y)
+rule OR(x, y)                      => orr(sf, out, x, y)
+rule XOR(x, y)                     => eor(sf, out, x, y)
+rule SHL(x, y)                     => lslv(sf, out, x, y)
+rule SHR(x, y)                     => lsrv(sf, out, x, y)
+rule SAR(x, y)                     => asrv(sf, out, x, y)
+
+# A comparison as a value: the flags, then 1 where the condition holds.
+rule EQ(a, b)   => subs(sf(a), zr, a, b) ; csinc(0, out, zr, zr, ne)
+rule NE(a, b)   => subs(sf(a), zr, a, b) ; csinc(0, out, zr, zr, eq)
+rule LT(a, b)   => subs(sf(a), zr, a, b) ; csinc(0, out, zr, zr, ge)
+rule LE(a, b)   => subs(sf(a), zr, a, b) ; csinc(0, out, zr, zr, gt)
+rule ULT(a, b)  => subs(sf(a), zr, a, b) ; csinc(0, out, zr, zr, hs)
+rule ULE(a, b)  => subs(sf(a), zr, a, b) ; csinc(0, out, zr, zr, hi)
+
+# A branch on a comparison uses its flags directly.
+rule IF(_, EQ(a, CONST k)) when k == 0  => cbz(sf(a), a, then) ; b(else)
+rule IF(_, NE(a, CONST k)) when k == 0  => cbnz(sf(a), a, then) ; b(else)
+rule IF(_, EQ(a, CONST k)) when u12(k)  => subs-imm(sf(a), zr, a, k) ; b-cond(eq, then) ; b(else)
+rule IF(_, NE(a, CONST k)) when u12(k)  => subs-imm(sf(a), zr, a, k) ; b-cond(ne, then) ; b(else)
+rule IF(_, LT(a, CONST k)) when u12(k)  => subs-imm(sf(a), zr, a, k) ; b-cond(lt, then) ; b(else)
+rule IF(_, LE(a, CONST k)) when u12(k)  => subs-imm(sf(a), zr, a, k) ; b-cond(le, then) ; b(else)
+rule IF(_, ULT(a, CONST k)) when u12(k) => subs-imm(sf(a), zr, a, k) ; b-cond(lo, then) ; b(else)
+rule IF(_, ULE(a, CONST k)) when u12(k) => subs-imm(sf(a), zr, a, k) ; b-cond(ls, then) ; b(else)
+rule IF(_, EQ(a, b))   => subs(sf(a), zr, a, b) ; b-cond(eq, then) ; b(else)
+rule IF(_, NE(a, b))   => subs(sf(a), zr, a, b) ; b-cond(ne, then) ; b(else)
+rule IF(_, LT(a, b))   => subs(sf(a), zr, a, b) ; b-cond(lt, then) ; b(else)
+rule IF(_, LE(a, b))   => subs(sf(a), zr, a, b) ; b-cond(le, then) ; b(else)
+rule IF(_, ULT(a, b))  => subs(sf(a), zr, a, b) ; b-cond(lo, then) ; b(else)
+rule IF(_, ULE(a, b))  => subs(sf(a), zr, a, b) ; b-cond(ls, then) ; b(else)
+rule IF(_, c)          => cbnz(0, c, then) ; b(else)

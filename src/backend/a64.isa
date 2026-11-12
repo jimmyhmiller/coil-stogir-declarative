@@ -1,0 +1,63 @@
+# AArch64: registers and the instructions the backend emits.
+word 32
+
+class gpr 5
+reg x0..x30 : gpr
+reg sp : gpr = 31
+reg zr : gpr = 31
+
+set allocatable  = x0..x14
+set caller-saved = x0..x17
+set callee-saved = x19..x28
+set arguments    = x0..x7
+
+# Registers the emitter may use for a value that lives in the frame.
+const scratch0 = 16
+const scratch1 = 17
+const scratch2 = 15
+
+# Condition codes.
+const eq = 0
+const ne = 1
+const hs = 2
+const lo = 3
+const hi = 8
+const ls = 9
+const ge = 10
+const lt = 11
+const gt = 12
+const le = 13
+
+# Arithmetic on registers. `sf` picks 64-bit (1) or 32-bit (0) registers.
+inst add(sf: u1, rd: def gpr, rn: use gpr, rm: use gpr)   = sf 0 0 01011 00 0 rm 000000 rn rd
+inst sub(sf: u1, rd: def gpr, rn: use gpr, rm: use gpr)   = sf 1 0 01011 00 0 rm 000000 rn rd
+inst subs(sf: u1, rd: def gpr, rn: use gpr, rm: use gpr)  = sf 1 1 01011 00 0 rm 000000 rn rd
+inst and(sf: u1, rd: def gpr, rn: use gpr, rm: use gpr)   = sf 00 01010 00 0 rm 000000 rn rd
+inst orr(sf: u1, rd: def gpr, rn: use gpr, rm: use gpr)   = sf 01 01010 00 0 rm 000000 rn rd
+inst eor(sf: u1, rd: def gpr, rn: use gpr, rm: use gpr)   = sf 10 01010 00 0 rm 000000 rn rd
+inst madd(sf: u1, rd: def gpr, rn: use gpr, rm: use gpr, ra: use gpr) = sf 00 11011 000 rm 0 ra rn rd
+inst lslv(sf: u1, rd: def gpr, rn: use gpr, rm: use gpr)  = sf 0 0 11010110 rm 0010 00 rn rd
+inst lsrv(sf: u1, rd: def gpr, rn: use gpr, rm: use gpr)  = sf 0 0 11010110 rm 0010 01 rn rd
+inst asrv(sf: u1, rd: def gpr, rn: use gpr, rm: use gpr)  = sf 0 0 11010110 rm 0010 10 rn rd
+inst csinc(sf: u1, rd: def gpr, rn: use gpr, rm: use gpr, cond: u4) = sf 0 0 11010100 rm cond 0 1 rn rd
+
+# Arithmetic with a 12-bit immediate.
+inst add-imm(sf: u1, rd: def gpr, rn: use gpr, imm: u12)  = sf 0 0 100010 0 imm rn rd
+inst sub-imm(sf: u1, rd: def gpr, rn: use gpr, imm: u12)  = sf 1 0 100010 0 imm rn rd
+inst subs-imm(sf: u1, rd: def gpr, rn: use gpr, imm: u12) = sf 1 1 100010 0 imm rn rd
+
+# Constants, sixteen bits at a time: `hw` is which sixteen.
+inst movz(sf: u1, rd: def gpr, imm: u16, hw: u2)          = sf 10 100101 hw imm rd
+inst movn(sf: u1, rd: def gpr, imm: u16, hw: u2)          = sf 00 100101 hw imm rd
+inst movk(sf: u1, rd: mod gpr, imm: u16, hw: u2)          = sf 11 100101 hw imm rd
+
+# Control. A label field holds the distance in instructions.
+inst b(to: label)                                         = 000101 to:26
+inst b-cond(cond: u4, to: label)                          = 01010100 to:19 0 cond
+inst cbz(sf: u1, rt: use gpr, to: label)                  = sf 0110100 to:19 rt
+inst cbnz(sf: u1, rt: use gpr, to: label)                 = sf 0110101 to:19 rt
+inst ret(rn: use gpr)                                     = 1101011001011111000000 rn 00000
+
+# The frame: 64-bit loads and stores at a multiple of eight from a base.
+inst ldr(rt: def gpr, rn: use gpr, imm: u12)              = 1111100101 imm rn rt
+inst str(rt: use gpr, rn: use gpr, imm: u12)              = 1111100100 imm rn rt

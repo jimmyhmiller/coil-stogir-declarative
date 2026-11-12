@@ -20,6 +20,7 @@
 (import "lang.text" :as t)
 (import "lang.ir" :as ir)
 (import "lang.project" :as project)
+(import "lang.lower" :as lower)
 
 ;; ---------------------------------------------------------------- declarations
 
@@ -69,6 +70,11 @@
       (let [f (get (.funcs d) i)]
         (when (and (= (.name f) name) (= (.module f) module)) (set! found i))))
     found))
+
+;;; A list column of `Int`s holds them as the 32-bit cells every list column has.
+(defn int-list? [(d Decls) (column (slice u8))] (-> bool)
+  (let [i (column-index d column)]
+    (and (>= i 0) (= (.type (get (.columns d) i)) "[Int]"))))
 
 (defn list-type? [(type (slice u8))] (-> bool)
   (and (> (len type) 0) (= (get type 0) #\[)))
@@ -136,6 +142,7 @@
         (cond
           (t/tok-is? tok "pass") (skip-body! (mut c))
           (t/tok-is? tok "use") (skip-body! (mut c))
+          (t/tok-is? tok "import") (skip-body! (mut c))
           (t/tok-is? tok "entity") (push! (mut (.entities d)) (t/name! (mut c) "an entity name"))
           (t/tok-is? tok "column")
             (let [name (t/name! (mut c) "a column name")]
@@ -196,7 +203,27 @@
                   pass-file (project/file-of p name (.line at) (.col at))]
               (scan! (mut d) (project/read-file pass-file file) pass-file name)
               (push! (mut (.files d)) pass-file))
-          :else (t/die (mut c) tok (t/cat2 "expected nodes or pass, found " (.text tok))))))
+          ; A .lower file gives the passes its three functions and its templates.
+          (t/tok-is? tok "lower")
+            (let [name (module-name! (mut c))
+                  lower-file (project/file-of p name (.line at) (.col at))
+                  node (ArrayList::new [Field] (malloc-allocator))
+                  (mut node-rule) (ArrayList::new [Field] (malloc-allocator))]
+              (push! (mut node-rule) (Field :name "n" :type "Node"))
+              (push! (mut (.funcs d)) (Func :module name :name "select" :params node-rule :result "Int"))
+              (let [(mut two) (ArrayList::new [Field] (malloc-allocator))]
+                (push! (mut two) (Field :name "n" :type "Node"))
+                (push! (mut two) (Field :name "rule" :type "Int"))
+                (push! (mut (.funcs d)) (Func :module name :name "mark" :params two :result "Void"))
+                (push! (mut (.funcs d)) (Func :module name :name "emit" :params two :result "Void")))
+              (for template (lower/templates (project/read-file lower-file file) lower-file)
+                (let [(mut params) (ArrayList::new [Field] (malloc-allocator))]
+                  (for i (range 1 (len template))
+                    (push! (mut params) (Field :name (get template i) :type "Int")))
+                  (push! (mut (.funcs d))
+                         (Func :module name :name (get template 0) :params params :result "Void"))))
+              (push! (mut (.files d)) lower-file))
+          :else (t/die (mut c) tok (t/cat2 "expected nodes, pass or lower, found " (.text tok))))))
     (for column (.columns d)
       (unless (entity? d (.key column))
         (t/fail-at file 1 1 (t/cat4 "column " (.name column) " is over no entity: " (.key column))))
@@ -328,6 +355,7 @@
 (const E-CELL 6)
 (const E-ENTITY 7)
 (const E-MODULE 8)
+(const E-RAW 9)
 
 (defstruct E [(code (slice u8)) (kind i64) (x (slice u8)) (y (slice u8))])
 
@@ -340,6 +368,7 @@
    (module (slice u8))
    (locals (ArrayList (slice u8)))
    (aliases (ArrayList Field))
+   (raws (ArrayList (slice u8)))
    (returns bool)
    (breaks bool)
    (tmp i64)])
@@ -485,7 +514,9 @@
         (let [col (t/cat3 "(." (.a it) " cx)")]
           (cat6 (t/cat4 "(let [(mut " x ") (lists/first " (t/cat4 col " " (.b it) ")] (while (>= "))
                 x
-                (t/cat4 " 0) (let [" v " (lists/at " (t/cat4 col " " x ")] "))
+                (if (int-list? (.d k) (.a it))
+                    (t/cat4 " 0) (let [" v " (cast i64 (lists/at " (t/cat4 col " " x "))] "))
+                    (t/cat4 " 0) (let [" v " (lists/at " (t/cat4 col " " x ")] ")))
                 body
                 (t/cat4 ") (set! " x " (lists/after " (t/cat4 col " " x "))))"))
                 ""))
@@ -529,6 +560,13 @@
                              (cat6 "(when (and (= " acc " 0) " body ") (set! "
                                    (t/cat4 acc " " v "))")))
                     " " (t/cat2 acc ")"))
+            ; greatest: the largest value, or 0.
+            (= word "greatest")
+              (cat6 "(let [(mut " acc ") 0] "
+                    (gen-for (mut k) var it
+                             (cat6 "(let [w* " body "] (when (> w* " acc ") (set! "
+                                   (t/cat2 acc " w*)))")))
+                    " " (t/cat2 acc ")"))
             ; least: the one whose value is smallest, or none.
             :else
               (cat6 "(let [(mut " acc (t/cat3 ") (: 0 i32) (mut " best ") 0] ")
@@ -566,7 +604,7 @@
             (t/expect! (mut (.c k)) "else")
             (value (cat6 "(if " test " " yes " " (t/cat2 (.code (expr (mut k) 0)) ")")))))
       (or (= name "any") (= name "all") (= name "count") (= name "sum") (= name "first")
-          (= name "least"))
+          (= name "least") (= name "greatest"))
         (quantifier (mut k) name)
       (t/at? (mut (.c k)) "(")
         (do (t/advance! (mut (.c k)))
@@ -578,8 +616,9 @@
               :else (builtin-call (mut k) name tok)))
       (>= (cell-index (.d k) name) 0)
         (E :code (t/cat3 "(." name " cx)") :kind E-CELL :x name :y "")
-      (>= (t/index-of (.entities (.d k)) name) 0) (E :code "" :kind E-ENTITY :x name :y "")
+      (entity? (.d k) name) (E :code "" :kind E-ENTITY :x name :y "")
       (!= (alias-module (mut k) name) "") (E :code "" :kind E-MODULE :x name :y "")
+      (>= (t/index-of (.raws k) name) 0) (E :code "" :kind E-RAW :x name :y "")
       (!= (ir/node-number (.spec (.d k)) name) 0) (value (t/cat2 "ir/" name))
       (!= (ir/type-number (.spec (.d k)) name) 0) (value (t/cat2 "ir/T-" (t/upper name)))
       :else (t/die (mut (.c k)) tok (t/cat2 "no such name: " name)))))
@@ -613,6 +652,13 @@
         (and (= name "min") (= n 2)) (cat5 "(let [x* " a " y* " b "] (if (< x* y*) x* y*))")
         (and (= name "max") (= n 2)) (cat5 "(let [x* " a " y* " b "] (if (> x* y*) x* y*))")
         (and (= name "panic") (= n 1)) (t/cat3 "(panic " a ")")
+        ; Sets of small numbers, as the bits of a Word.
+        (and (= name "bit") (= n 1)) (t/cat3 "(<< (: 1 u64) (cast u64 " a "))")
+        (and (= name "has-bit") (= n 2)) (cat5 "(!= (& " a " (<< (: 1 u64) (cast u64 " b "))) 0)")
+        (and (= name "set-bit") (= n 2)) (cat5 "(| " a " (<< (: 1 u64) (cast u64 " b ")))")
+        (and (= name "clear-bit") (= n 2))
+          (cat5 "(& " a " (^ (<< (: 1 u64) (cast u64 " b ")) (: 0xFFFFFFFFFFFFFFFF u64)))")
+        (and (= name "lowest-bit") (= n 1)) (t/cat3 "(bv/lowest " a ")")
         (and (= name "print") (>= n 1))
           (let [(mut o) (t/out-new)]
             (t/emit! (mut o) "(println")
@@ -638,7 +684,11 @@
                   (t/expect! (mut (.c k)) "]")
                   (set! e
                         (if (= (.kind e) E-LISTS)
-                            (E :code (cat6 "(lists/nth (." (.x e) " cx) " (.y e) " " (t/cat2 index ")"))
+                            (E :code (if (int-list? (.d k) (.x e))
+                                         (cat6 "(cast i64 (lists/nth (." (.x e) " cx) " (.y e) " "
+                                               (t/cat2 index "))"))
+                                         (cat6 "(lists/nth (." (.x e) " cx) " (.y e) " "
+                                               (t/cat2 index ")")))
                                :kind E-INDEX :x (t/cat2 "!" (.x e)) :y (t/cat3 (.y e) " " index))
                             (E :code (cat5 "(get " (.code e) " " index ")")
                                :kind E-INDEX :x (.code e) :y index)))))
@@ -659,10 +709,22 @@
           (t/expect! (mut (.c k)) "(")
           (value (cat6 "(" (.x e) "/" name " (mut cx)"
                        (t/cat2 (call-args (mut k) (get (.funcs (.d k)) index) tok) ")"))))
+      ; A module that is not a pass: its names as they are, its functions without the state.
+      (= (.kind e) E-RAW)
+        (if call
+            (do (t/advance! (mut (.c k)))
+                (let [args (plain-args (mut k))
+                      (mut o) (t/out-new)]
+                  (t/emit! (mut o) (cat5 "(" (.x e) "/" name ""))
+                  (for arg args (t/emit! (mut o) (t/cat2 " " arg)))
+                  (t/emit! (mut o) ")")
+                  (value (t/text-of (mut o)))))
+            (value (t/cat3 (.x e) "/" name)))
       (= (.kind e) E-ENTITY)
         (cond (= name "new")
                 (do (t/expect! (mut (.c k)) "(") (t/expect! (mut (.c k)) ")")
                     (value (t/cat3 "(st/" (t/lower (.x e)) "-new! (mut cx))")))
+              (and (= name "count") (= (.x e) "Node")) (value "(- (graph/size (.g cx)) 1)")
               (= name "count") (value (t/cat3 "(cast i64 (." (t/lower (.x e)) "-count cx))"))
               :else (t/die (mut (.c k)) tok "an entity has `new()` and `count`"))
       ; A list column's own operations.
@@ -674,7 +736,9 @@
               (do (t/expect! (mut (.c k)) "(")
                   (let [v (.code (expr (mut k) 0))]
                     (t/expect! (mut (.c k)) ")")
-                    (value (cat6 "(lists/push! (mut " col ") " (.y e) " " (t/cat2 v ")")))))
+                    (value (if (int-list? (.d k) (.x e))
+                               (cat6 "(lists/push! (mut " col ") " (.y e) " (cast i32 " (t/cat2 v "))"))
+                               (cat6 "(lists/push! (mut " col ") " (.y e) " " (t/cat2 v ")"))))))
             (= name "clear")
               (do (t/expect! (mut (.c k)) "(") (t/expect! (mut (.c k)) ")")
                   (value (cat5 "(lists/clear-key! (mut " col ") " (.y e) ")")))
@@ -774,8 +838,11 @@
     (= (.kind place) E-COLUMN)
       (cat6 "(set! (mut (." (.x place) " cx)) (cast i64 " (.y place) ") " (t/cat2 v ")"))
     (and (= (.kind place) E-INDEX) (> (len (.x place)) 0) (= (get (.x place) 0) #\!))
-      (cat6 "(lists/set-nth! (mut (." (t/slice-of (.x place) 1 (len (.x place))) " cx)) "
-            (.y place) " " (t/cat2 v ")"))
+      (if (int-list? (.d k) (t/slice-of (.x place) 1 (len (.x place))))
+          (cat6 "(lists/set-nth! (mut (." (t/slice-of (.x place) 1 (len (.x place))) " cx)) "
+                (.y place) " (cast i32 " (t/cat2 v "))"))
+          (cat6 "(lists/set-nth! (mut (." (t/slice-of (.x place) 1 (len (.x place))) " cx)) "
+                (.y place) " " (t/cat2 v ")")))
     (= (.kind place) E-INDEX)
       (cat6 "(set! (mut " (.x place) ") " (.y place) " " (t/cat2 v ")"))
     (= (.kind place) E-FIELD) (cat6 "(set! (." (.y place) " " (.x place) ") " (t/cat2 v ")"))
@@ -971,6 +1038,7 @@
                     :module (project/module-of p path)
                     :locals (ArrayList::new [(slice u8)] (malloc-allocator))
                     :aliases (ArrayList::new [Field] (malloc-allocator))
+                    :raws (ArrayList::new [(slice u8)] (malloc-allocator))
                     :returns false
                     :breaks false
                     :tmp 0)
@@ -979,6 +1047,7 @@
       (t/line! (mut o) "(import \"coil.arraylist\" :use [ArrayList])")
       (t/line! (mut o) "(import \"rt.graph\" :as graph)")
       (t/line! (mut o) "(import \"rt.lists\" :as lists)")
+      (t/line! (mut o) "(import \"rt.bits\" :as bv)")
       (t/line! (mut o) (t/cat3 "(import \"" unit "\" :as st)"))
       (t/line! (mut o) (t/cat3 "(import \"" (.nodes-module d) "\" :as ir)"))
       (while (not (t/eof? (mut (.c k))))
@@ -989,6 +1058,12 @@
                 (t/expect! (mut (.c k)) "as")
                 (let [alias (t/name! (mut (.c k)) "a name")]
                   (push! (mut (.aliases k)) (Field :name alias :type module))
+                  (t/line! (mut o) (cat5 "(import \"" module "\" :as " alias ")"))))
+            (t/tok-is? tok "import")
+              (let [module (module-name! (mut (.c k)))]
+                (t/expect! (mut (.c k)) "as")
+                (let [alias (t/name! (mut (.c k)) "a name")]
+                  (push! (mut (.raws k)) alias)
                   (t/line! (mut o) (cat5 "(import \"" module "\" :as " alias ")"))))
             (t/tok-is? tok "fn")
               (let [f (parse-signature (mut (.c k)) d (.module k))]

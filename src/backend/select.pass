@@ -1,0 +1,73 @@
+# Instruction selection: choose a rule for every node that must be computed,
+# then emit the rules' instructions block by block.
+pass in backend.unit
+use backend.cfg as cfg
+use backend.mach as mach
+use backend.a64-lower as lower
+
+fn choose(n: Node) {
+  let rule = lower.select(n)
+  if rule == 0 {
+    print("no rule computes {} (node {})", n.name, n)
+    panic("instruction selection failed")
+  }
+  n.tile = rule
+  lower.mark(n, rule)
+  if n is PHI { for i in 1..n.arity { mach.need(n.in(i)) } }
+}
+
+fn phi-of?(u: Node, h: Node) -> Bool = u is PHI and u.in(0) == h
+
+# The moves that give a region's phis their values on the edge from `b`. Where
+# one phi's value is another phi of the same region, every value is read
+# before any phi is written.
+fn phi-moves(b: Block, s: Block) {
+  var k = 0
+  var index = 0
+  for p in s.preds {
+    if p == b { k = index }
+    index = index + 1
+  }
+  let h = s.head
+  let cyclic = any u in users(h): phi-of?(u, h) and phi-of?(u.in(k + 1), h) and u.in(k + 1) != u
+  if cyclic {
+    var temps: [Int] = []
+    for u in users(h) {
+      if phi-of?(u, h) {
+        let t = mach.fresh()
+        temps.push(t)
+        lower.move(t, int(u.in(k + 1)))
+      }
+    }
+    var j = 0
+    for u in users(h) {
+      if phi-of?(u, h) {
+        lower.move(int(u), temps[j])
+        j = j + 1
+      }
+    }
+  } else {
+    for u in users(h) {
+      if phi-of?(u, h) and u.in(k + 1) != u { lower.move(int(u), int(u.in(k + 1))) }
+    }
+  }
+}
+
+fn run() {
+  next-vreg = Node.count
+  for b in order {
+    for n in b.seq { if cfg.control?(n) or n is PHI { mach.need(n) } }
+  }
+  while worklist.len > 0 { choose(worklist.pop()) }
+  for b in order {
+    b.first-inst = Inst.count + 1
+    for n in b.seq { if n.tile != 0 { lower.emit(n, n.tile) } }
+    if not (b.last is IF) and not (b.last is RETURN) {
+      for s in b.succs {
+        phi-moves(b, s)
+        lower.jump(int(s))
+      }
+    }
+    b.last-inst = Inst.count
+  }
+}

@@ -1,0 +1,50 @@
+# Machine code before registers are chosen: instructions in layout order, each
+# with up to five operands. A register operand is a virtual register (a positive
+# number: the node it holds, or a fresh one) or a machine register r, written
+# -(r + 1). What each operand is comes from the target's description.
+pass in backend.unit
+
+entity Inst
+column inst-op: Inst -> Int
+column a0: Inst -> Int
+column a1: Inst -> Int
+column a2: Inst -> Int
+column a3: Inst -> Int
+column a4: Inst -> Int
+column first-inst: Block -> Int       # a block's instructions are first..last
+column last-inst: Block -> Int
+column needed: Node -> Bool           # must be in a register
+column tile: Node -> Int              # the rule that computes it, or 0
+state next-vreg: Int
+state worklist: [Node]
+
+fn emit(op: Int, a: Int, b: Int, c: Int, d: Int, e: Int) {
+  let i = Inst.new()
+  i.inst-op = op
+  i.a0 = a
+  i.a1 = b
+  i.a2 = c
+  i.a3 = d
+  i.a4 = e
+}
+
+fn arg(i: Inst, k: Int) -> Int =
+  if k == 0 then i.a0 else if k == 1 then i.a1 else if k == 2 then i.a2 else if k == 3 then i.a3 else i.a4
+
+fn fresh() -> Int {
+  next-vreg = next-vreg + 1
+  next-vreg
+}
+
+fn need(n: Node) {
+  if not n.needed {
+    n.needed = true
+    worklist.push(n)
+  }
+}
+
+# The block an IF goes to when its condition holds (taken = 1) or does not.
+fn target(n: Node, taken: Int) -> Int {
+  let proj = first u in users(n): if taken == 1 then u is TRUE else u is FALSE
+  int(proj.block-of)
+}
