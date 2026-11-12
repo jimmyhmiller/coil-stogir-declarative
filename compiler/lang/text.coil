@@ -278,6 +278,9 @@
                    :else ch)))
     (finish! (mut b))))
 
+(defn slice-of [(s (slice u8)) (lo i64) (hi i64)] (-> (slice u8))
+  (subslice s lo hi))
+
 (defn index-of [(names (ArrayList (slice u8))) (name (slice u8))] (-> i64)
   (let [(mut found) -1]
     (for i (range 0 (len names))

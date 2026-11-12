@@ -1,0 +1,95 @@
+# Where each floating node goes, and in what order a block computes its nodes.
+# Click's global code motion: as early as its inputs allow, as late as its uses
+# allow, and between those the block in the fewest loops.
+pass in backend.unit
+use backend.cfg as cfg
+
+column early-done: Node -> Bool
+column late-done: Node -> Bool
+column placed: Node -> Bool
+column seq: Block -> [Node]           # a block's nodes, in the order they run
+column members: Block -> [Node]       # the floating nodes scheduled into a block
+
+fn pinned?(n: Node) -> Bool = cfg.control?(n) or n is PHI or n is PARAM
+
+fn early(n: Node) {
+  if n.early-done { return }
+  n.early-done = true
+  var b = cfg.entry()
+  for i in inputs(n) {
+    if i != none {
+      early(i)
+      if i.block-of != none and i.block-of.dom-depth > b.dom-depth { b = i.block-of }
+    }
+  }
+  if not pinned?(n) { n.block-of = b }
+}
+
+fn late(n: Node) {
+  if n.late-done { return }
+  n.late-done = true
+  for u in users(n) { late(u) }
+  if pinned?(n) { return }
+  var lca: Block = none
+  for u in users(n) {
+    if u is PHI {
+      let region = u.in(0).block-of
+      for i in 1..u.arity {
+        if u.in(i) == n { lca = cfg.join(lca, region.preds[i - 1]) }
+      }
+    } else if u.block-of != none {
+      lca = cfg.join(lca, u.block-of)
+    }
+  }
+  let earliest = n.block-of
+  n.block-of = none
+  if lca != none {
+    var best = lca
+    var x = lca
+    while x != earliest {
+      x = x.idom
+      if x.loop-depth < best.loop-depth { best = x }
+    }
+    n.block-of = best
+    best.members.push(n)
+  }
+}
+
+# `n` after whatever it needs from its own block.
+fn place(n: Node, b: Block) {
+  if n.placed { return }
+  n.placed = true
+  for i in inputs(n) {
+    if i != none and i.block-of == b and not pinned?(i) { place(i, b) }
+  }
+  b.seq.push(n)
+}
+
+fn order-block(b: Block) {
+  let h = b.head
+  place(h, b)
+  for u in users(h) { if u is PHI and u.in(0) == h { place(u, b) } }
+  if h is START { for n in Node { if n is PARAM and not n.dead { place(n, b) } } }
+  var c = cfg.follower(h)
+  while c != none and c is CALL {
+    place(c, b)
+    c = cfg.follower(c)
+  }
+  for n in b.members { place(n, b) }
+  if c != none { place(c, b) }
+}
+
+fn build() {
+  for n in Node { if n is PHI { n.block-of = n.in(0).block-of } }
+  for n in Node { if n is PARAM { n.block-of = cfg.entry() } }
+  for n in Node { if not n.dead { early(n) } }
+  for n in Node { if not n.dead { late(n) } }
+  for b in order { order-block(b) }
+}
+
+fn dump() {
+  for b in order {
+    print("block {} head={} idom={} loop-depth={}", b, b.head, b.idom, b.loop-depth)
+    for n in b.seq { print("  {} {}", n, n.name) }
+  }
+}

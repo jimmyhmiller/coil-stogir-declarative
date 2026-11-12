@@ -5,6 +5,11 @@ source-roots = ["compiler"]
 
 [readers]
 ".ir" = "lang.readers"
+".unit" = "lang.readers"
+".pass" = "lang.readers"
 
 [modules]
 "backend.nodes" = "src/backend/nodes.ir"
+"backend.unit" = "src/backend/backend.unit"
+"backend.cfg" = "src/backend/cfg.pass"
+"backend.schedule" = "src/backend/schedule.pass"

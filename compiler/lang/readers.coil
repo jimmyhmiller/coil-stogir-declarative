@@ -4,6 +4,7 @@
 (import "coil.primitive" :as primitive)
 (import "lang.text" :as t)
 (import "lang.ir" :as ir)
+(import "lang.pass" :as pass)
 
 (reader-provider "lang.readers" read-any)
 
@@ -14,4 +15,6 @@
   (let [path (t/path-of context)
         src (t/source-of context)]
     (cond (t/ends-with path ".ir") (ir/module-text src path)
+          (t/ends-with path ".unit") (pass/unit-text context)
+          (t/ends-with path ".pass") (pass/pass-text context)
           :else (t/fail-at path 1 1 "no language reads a file with this extension"))))

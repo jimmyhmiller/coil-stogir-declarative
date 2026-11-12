@@ -1,0 +1,161 @@
+# Blocks, from control nodes: who follows whom, dominators, loop depths.
+pass in backend.unit
+
+entity Block
+column head: Block -> Node            # the control node a block starts at
+column last: Block -> Node            # the control node it ends at
+column succs: Block -> [Block]
+column preds: Block -> [Block]        # for a region, in the order of its inputs
+column block-of: Node -> Block
+column idom: Block -> Block
+column dom-depth: Block -> Int
+column loop-depth: Block -> Int
+column rpo: Block -> Int
+column seen: Block -> Bool
+column mark: Block -> Int
+state post: [Block]
+state order: [Block]                  # reverse postorder from the entry
+state stamp: Int
+
+fn head?(n: Node) -> Bool = n is START or n is REGION or n is LOOP or n is TRUE or n is FALSE
+
+fn control?(n: Node) -> Bool = head?(n) or n is IF or n is RETURN or n is CALL
+
+# The control node that follows `c` inside its block, if any.
+fn follower(c: Node) -> Node = first u in users(c): (u is CALL or u is IF or u is RETURN) and u.in(0) == c
+
+fn blocks() {
+  for n in Node {
+    if not n.dead and head?(n) {
+      let b = Block.new()
+      b.head = n
+      n.block-of = b
+    }
+  }
+  for b in Block {
+    var c = b.head
+    var next = follower(c)
+    while next != none {
+      next.block-of = b
+      c = next
+      next = if c is CALL then follower(c) else none
+    }
+    b.last = c
+  }
+  for b in Block {
+    let h = b.head
+    if h is REGION or h is LOOP {
+      for c in inputs(h) {
+        b.preds.push(c.block-of)
+        c.block-of.succs.push(b)
+      }
+    } else if h is TRUE or h is FALSE {
+      b.preds.push(h.in(0).block-of)
+      h.in(0).block-of.succs.push(b)
+    }
+  }
+}
+
+fn visit(b: Block) {
+  b.seen = true
+  for s in b.succs { if not s.seen { visit(s) } }
+  post.push(b)
+}
+
+fn ordering() {
+  visit(entry())
+  for i in reverse 0..post.len {
+    post[i].rpo = order.len
+    order.push(post[i])
+  }
+}
+
+fn entry() -> Block = first b in Block: b.head is START
+
+fn intersect(a: Block, b: Block) -> Block {
+  var x = a
+  var y = b
+  while x != y {
+    while x.rpo > y.rpo { x = x.idom }
+    while y.rpo > x.rpo { y = y.idom }
+  }
+  x
+}
+
+# Cooper, Harvey and Kennedy's iteration over reverse postorder.
+fn dominators() {
+  let root = order[0]
+  root.idom = root
+  var changed = true
+  while changed {
+    changed = false
+    for i in 1..order.len {
+      let b = order[i]
+      var best: Block = none
+      for p in b.preds {
+        if p.idom != none { best = if best == none then p else intersect(p, best) }
+      }
+      if b.idom != best {
+        b.idom = best
+        changed = true
+      }
+    }
+  }
+  for b in order { b.dom-depth = if b == root then 0 else b.idom.dom-depth + 1 }
+}
+
+fn dominates(a: Block, b: Block) -> Bool {
+  var x = b
+  while x.dom-depth > a.dom-depth { x = x.idom }
+  x == a
+}
+
+# The nearest block that dominates both; `none` stands for "no block yet".
+fn join(a: Block, b: Block) -> Block {
+  if a == none { return b }
+  if b == none { return a }
+  var x = a
+  var y = b
+  while x.dom-depth > y.dom-depth { x = x.idom }
+  while y.dom-depth > x.dom-depth { y = y.idom }
+  while x != y {
+    x = x.idom
+    y = y.idom
+  }
+  x
+}
+
+# A loop is its head and everything that reaches a back edge without passing the head.
+fn loops() {
+  for h in order {
+    if h.head is LOOP {
+      stamp = stamp + 1
+      var work: [Block] = []
+      h.mark = stamp
+      h.loop-depth = h.loop-depth + 1
+      for p in h.preds {
+        if dominates(h, p) and p.mark != stamp {
+          p.mark = stamp
+          work.push(p)
+        }
+      }
+      while work.len > 0 {
+        let b = work.pop()
+        b.loop-depth = b.loop-depth + 1
+        for p in b.preds {
+          if p.mark != stamp {
+            p.mark = stamp
+            work.push(p)
+          }
+        }
+      }
+    }
+  }
+}
+
+fn build() {
+  blocks()
+  ordering()
+  dominators()
+  loops()
+}
