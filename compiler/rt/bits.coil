@@ -1,0 +1,35 @@
+;;; Arithmetic on values held as 64-bit words of a narrower declared width.
+(module rt.bits)
+(import "coil.primitive" :as primitive)
+
+(defn mask [(bits i64)] (-> u64) :inline (Always)
+  (if (>= bits 64)
+      (: 0xFFFFFFFFFFFFFFFF u64)
+      (primitive/isub (<< (: 1 u64) (cast u64 bits)) (: 1 u64))))
+
+;;; The low `bits` bits of a word.
+(defn cut [(v u64) (bits i64)] (-> u64) :inline (Always)
+  (& v (mask bits)))
+
+;;; A `bits`-wide value's sign carried up through all 64 bits.
+(defn sext [(v u64) (bits i64)] (-> u64) :inline (Always)
+  (if (or (>= bits 64) (<= bits 0))
+      v
+      (let [sign (<< (: 1 u64) (cast u64 (- bits 1)))]
+        (primitive/isub (^ (& v (mask bits)) sign) sign))))
+
+(defn signed [(v u64) (bits i64)] (-> i64) :inline (Always)
+  (primitive/cast i64 (sext v bits)))
+
+(defn shl [(v u64) (n u64)] (-> u64) :inline (Always)
+  (if (>= n 64) (: 0 u64) (<< v n)))
+
+(defn shr [(v u64) (n u64)] (-> u64) :inline (Always)
+  (if (>= n 64) (: 0 u64) (>> v n)))
+
+;;; Arithmetic shift of a word already sign-extended to 64 bits.
+(defn sar [(v u64) (n u64)] (-> u64) :inline (Always)
+  (primitive/cast u64 (>> (primitive/cast i64 v) (if (>= n 64) (: 63 i64) (primitive/cast i64 n)))))
+
+(defn urem [(v u64) (n u64)] (-> u64) :inline (Always)
+  (if (= n 0) (: 0 u64) (% v n)))

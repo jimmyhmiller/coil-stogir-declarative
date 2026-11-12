@@ -1,0 +1,17 @@
+;;; Every language's reader, as one provider. Each language is a function from a
+;;; file's text to the text of a Coil module, read back here.
+(module lang.readers)
+(import "coil.primitive" :as primitive)
+(import "lang.text" :as t)
+(import "lang.ir" :as ir)
+
+(reader-provider "lang.readers" read-any)
+
+(defn read-any [(context Code)] (-> Code)
+  (primitive/code-read (module-text context) `(reader-config)))
+
+(defn module-text [(context Code)] (-> (slice u8))
+  (let [path (t/path-of context)
+        src (t/source-of context)]
+    (cond (t/ends-with path ".ir") (ir/module-text src path)
+          :else (t/fail-at path 1 1 "no language reads a file with this extension"))))

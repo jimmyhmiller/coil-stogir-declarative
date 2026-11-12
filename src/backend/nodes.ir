@@ -1,0 +1,49 @@
+# The node set: a sea of nodes with explicit control.
+
+type ctrl : 0 control
+type bool : 1 unsigned
+type i8  : 8 signed
+type i16 : 16 signed
+type i32 : 32 signed
+type i64 : 64 signed
+type u8  : 8 unsigned
+type u16 : 16 unsigned
+type u32 : 32 unsigned
+type u64 : 64 unsigned
+type ptr : 64 unsigned
+
+set int = i8 i16 i32 i64 u8 u16 u32 u64 ptr
+
+# Control. A control node's first operand is the control it follows.
+node START : ctrl                               role start
+node RETURN(c: ctrl, value)                     role return
+node REGION(c...: ctrl) : ctrl                  role region
+node LOOP(c...: ctrl) : ctrl                    role loop
+node IF(c: ctrl, cond: bool) : ctrl             role if
+node TRUE(branch: ctrl) : ctrl                  role true
+node FALSE(branch: ctrl) : ctrl                 role false
+node CALL(c: ctrl, args...) : T                 role call   payload symbol
+
+# Values that come from outside the graph.
+node PARAM : T                                  role param  payload index
+node CONST : T                                  role const  payload value
+node PHI(region: ctrl, in...: T) : T            role phi
+
+# Arithmetic. Operands and result share a width; results wrap.
+node ADD(a: T, b: T) : T in int   commutative   = a + b
+node SUB(a: T, b: T) : T in int                 = a - b
+node MUL(a: T, b: T) : T in int   commutative   = a * b
+node AND(a: T, b: T) : T in int   commutative   = a & b
+node OR(a: T, b: T)  : T in int   commutative   = a | b
+node XOR(a: T, b: T) : T in int   commutative   = a ^ b
+node SHL(a: T, n: T) : T in int                 = a << (n % bits)
+node SHR(a: T, n: T) : T in int                 = a >> (n % bits)
+node SAR(a: T, n: T) : T in int                 = sar(a, n % bits)
+
+# Comparisons.
+node EQ(a: S, b: S)  : bool, S in int  commutative = a == b
+node NE(a: S, b: S)  : bool, S in int  commutative = a != b
+node LT(a: S, b: S)  : bool, S in int           = slt(a, b)
+node LE(a: S, b: S)  : bool, S in int           = sle(a, b)
+node ULT(a: S, b: S) : bool, S in int           = ult(a, b)
+node ULE(a: S, b: S) : bool, S in int           = ule(a, b)

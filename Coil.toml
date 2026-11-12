@@ -1,0 +1,10 @@
+[package]
+name = "backend"
+entry = "compiler/boot/hello.coil"
+source-roots = ["compiler"]
+
+[readers]
+".ir" = "lang.readers"
+
+[modules]
+"backend.nodes" = "src/backend/nodes.ir"
