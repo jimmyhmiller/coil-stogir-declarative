@@ -15,6 +15,9 @@ column first-inst: Block -> Int       # a block's instructions are first..last
 column last-inst: Block -> Int
 column needed: Node -> Bool           # must be in a register
 column tile: Node -> Int              # the rule that computes it, or 0
+column local-reg: Node -> Int         # for a node computed per block: its register there
+column local-block: Node -> Block
+state emitting: Block                 # the block whose instructions are being emitted
 state next-vreg: Int
 state worklist: [Node]
 
@@ -52,3 +55,13 @@ fn target(n: Node, taken: Int) -> Int {
 # A node a rule may compute as part of its root: nothing else reads it, and it
 # was not moved to a block that runs less often than the root's.
 fn fusable(inner: Node, root: Node) -> Bool = inner.uses == 1 and inner.block-of == root.block-of
+
+# The register a per-block node has in the block being emitted, or 0.
+fn local(n: Node) -> Int = if n.local-block == emitting then n.local-reg else 0
+
+fn set-local(n: Node, r: Int) {
+  n.local-block = emitting
+  n.local-reg = r
+}
+
+fn rule-of(n: Node) -> Int = n.tile

@@ -12,6 +12,9 @@
 ;;; must be in a register, so its own rule runs; a node matched inside a pattern
 ;;; is computed by this rule and needs none of its own.
 ;;;
+;;; `local CONST` in the header says a node is cheap enough to compute again in
+;;; every block that needs it, so it never holds a register across blocks.
+;;;
 ;;; From the rules: `select` (which rule computes a node), `mark` (which nodes that
 ;;; rule needs in registers) and `emit` (its instructions). Instructions go to the
 ;;; pass module named by `emit`, which decides how machine code is stored.
@@ -39,7 +42,8 @@
    (target isa/Spec)
    (bindings (ArrayList Binding))
    (temps (ArrayList (slice u8)))
-   (params (ArrayList (slice u8)))])
+   (params (ArrayList (slice u8)))
+   (locals (ArrayList (slice u8)))])
 
 (defn parse-pattern [(l (mut L))] (-> Pat)
   (let [tok (t/peek (mut (.c l)))
@@ -150,14 +154,16 @@
           (let [x (value-expr (mut l) 0 false)]
             (t/expect! (mut (.c l)) ")")
             (fits-text (= (get name 0) #\s) width x)))
-      (= name "out") "(cast i64 n)"
+      (= name "out") "out"
       (= name "sf") "(if (= (ir/type-bits (graph/ty (.g cx) n)) 64) 1 0)"
       (= name "then") (t/cat3 "(" "mach/target" " (mut cx) n 1)")
       (= name "else") (t/cat3 "(" "mach/target" " (mut cx) n 0)")
       (>= (t/index-of (.params l) name) 0) name
       (>= (binding-of (mut l) name) 0)
         (let [b (get (.bindings l) (binding-of (mut l) name))]
-          (if (.is-node b) (t/cat3 "(cast i64 " (.code b) ")") (.code b)))
+          (cond (not (.is-node b)) (.code b)
+                operand (t/cat3 "(operand (mut cx) " (.code b) ")")
+                :else (t/cat3 "(cast i64 " (.code b) ")")))
       (and call (= name "reg"))
         (do (t/advance! (mut (.c l)))
             (let [x (value-expr (mut l) 0 false)]
@@ -232,7 +238,8 @@
         (mut target-module) ""
         (mut mach-module) ""
         (mut nodes-file) ""
-        (mut target-file) ""]
+        (mut target-file) ""
+        (mut locals) (ArrayList::new [(slice u8)] (malloc-allocator))]
     (t/expect! (mut c) "lower")
     (t/expect! (mut c) "in")
     (set! unit (module-name! (mut c)))
@@ -247,6 +254,7 @@
               (do (set! target-module (module-name! (mut c)))
                   (set! target-file (project/file-of p target-module (.line at) (.col at))))
             (t/accept! (mut c) "emit") (set! mach-module (module-name! (mut c)))
+            (t/accept! (mut c) "local") (push! (mut locals) (t/name! (mut c) "a node name"))
             :else (set! header false)))))
     (when (or (= nodes-file "") (= target-file "") (= mach-module ""))
       (t/fail-at path 1 1 "a .lower file names its `nodes`, its `target` and where it `emit`s"))
@@ -256,7 +264,8 @@
                     :target (isa/parse (project/read-file target-file path) target-file)
                     :bindings (ArrayList::new [Binding] (malloc-allocator))
                     :temps (ArrayList::new [(slice u8)] (malloc-allocator))
-                    :params (ArrayList::new [(slice u8)] (malloc-allocator)))
+                    :params (ArrayList::new [(slice u8)] (malloc-allocator))
+                    :locals locals)
           (mut o) (t/out-new)
           (mut selects) (t/out-new)
           (mut marks) (t/out-new)
@@ -334,8 +343,24 @@
             (t/line! (mut o) "  (match rule")
       (t/emit! (mut o) (t/text-of (mut marks)))
       (t/line! (mut o) "    (_ (do))))")
-      (t/line! (mut o) ";;; The instructions of rule `rule` for `n`.")
-      (t/line! (mut o) "(defn emit [(cx (mut st/State)) (n i32) (rule i64)] (-> void)")
+      (t/line! (mut o) ";;; Whether `n` is computed again in each block that needs it.")
+      (t/emit! (mut o) "(defn local? [(cx (mut st/State)) (n i32)] (-> bool) (or false")
+      (for name (.locals l)
+        (t/emit! (mut o) (t/cat3 " (= (graph/op (.g cx) n) ir/" name ")")))
+      (t/line! (mut o) "))")
+      (t/line! (mut o) ";;; The register that holds `n` where instructions are being emitted.")
+      (t/line! (mut o) "(defn operand [(cx (mut st/State)) (n i32)] (-> i64)")
+      (t/line! (mut o) "  (if (not (local? (mut cx) n))")
+      (t/line! (mut o) "      (cast i64 n)")
+      (t/line! (mut o) "      (let [r (mach/local (mut cx) n)]")
+      (t/line! (mut o) "        (if (!= r 0)")
+      (t/line! (mut o) "            r")
+      (t/line! (mut o) "            (let [fresh (mach/fresh (mut cx))]")
+      (t/line! (mut o) "              (mach/set-local (mut cx) n fresh)")
+      (t/line! (mut o) "              (emit (mut cx) n (mach/rule-of (mut cx) n) fresh)")
+      (t/line! (mut o) "              fresh)))))")
+      (t/line! (mut o) ";;; The instructions of rule `rule` for `n`, leaving its value in `out`.")
+      (t/line! (mut o) "(defn emit [(cx (mut st/State)) (n i32) (rule i64) (out i64)] (-> void)")
             (t/line! (mut o) "  (match rule")
       (t/emit! (mut o) (t/text-of (mut emits)))
       (t/line! (mut o) "    (_ (do))))")

@@ -14,9 +14,12 @@ column rpo: Block -> Int
 column seen: Block -> Bool
 column mark: Block -> Int
 column loop-blocks: Block -> [Block]  # for a loop's head: the head and its body
+column loop-head: Block -> Block      # the head of the innermost loop a block is in
+column loop-parent: Block -> Block    # for a loop's head: the head of the loop around it
 state post: [Block]
 state order: [Block]                  # reverse postorder from the entry
 state stamp: Int
+state root: Block                     # where control starts
 
 fn head?(n: Node) -> Bool = n is START or n is REGION or n is LOOP or n is TRUE or n is FALSE
 
@@ -64,14 +67,15 @@ fn visit(b: Block) {
 }
 
 fn ordering() {
-  visit(entry())
+  root = first b in Block: b.head is START
+  visit(root)
   for i in reverse 0..post.len {
     post[i].rpo = order.len
     order.push(post[i])
   }
 }
 
-fn entry() -> Block = first b in Block: b.head is START
+fn entry() -> Block = root
 
 fn intersect(a: Block, b: Block) -> Block {
   var x = a
@@ -126,7 +130,9 @@ fn join(a: Block, b: Block) -> Block {
   x
 }
 
-# A loop is its head and everything that reaches a back edge without passing the head.
+# A loop is its head and everything that reaches a back edge without passing the
+# head. Heads come outermost first, so the last loop to claim a block is its
+# innermost.
 fn loops() {
   for h in order {
     if h.head is LOOP {
@@ -135,6 +141,8 @@ fn loops() {
       h.mark = stamp
       h.loop-depth = h.loop-depth + 1
       h.loop-blocks.push(h)
+      h.loop-parent = h.loop-head
+      h.loop-head = h
       for p in h.preds {
         if dominates(h, p) and p.mark != stamp {
           p.mark = stamp
@@ -145,6 +153,7 @@ fn loops() {
         let b = work.pop()
         b.loop-depth = b.loop-depth + 1
         h.loop-blocks.push(b)
+        b.loop-head = h
         for p in b.preds {
           if p.mark != stamp {
             p.mark = stamp

@@ -18,6 +18,12 @@ fn choose(n: Node) {
 
 fn phi-of?(u: Node, h: Node) -> Bool = u is PHI and u.in(0) == h
 
+# `n`'s value into register `d`: computed straight into it if `n` is computed
+# per block, copied otherwise.
+fn copy(d: Int, n: Node) {
+  if lower.local?(n) { lower.emit(n, n.tile, d) } else { lower.move(d, int(n)) }
+}
+
 # The moves that give a region's phis their values on the edge from `b`. Where
 # one phi's value is another phi of the same region, every value is read
 # before any phi is written.
@@ -36,7 +42,7 @@ fn phi-moves(b: Block, s: Block) {
       if phi-of?(u, h) {
         let t = mach.fresh()
         temps.push(t)
-        lower.move(t, int(u.in(k + 1)))
+        copy(t, u.in(k + 1))
       }
     }
     var j = 0
@@ -48,7 +54,7 @@ fn phi-moves(b: Block, s: Block) {
     }
   } else {
     for u in users(h) {
-      if phi-of?(u, h) and u.in(k + 1) != u { lower.move(int(u), int(u.in(k + 1))) }
+      if phi-of?(u, h) and u.in(k + 1) != u { copy(int(u), u.in(k + 1)) }
     }
   }
 }
@@ -61,7 +67,8 @@ fn run() {
   while worklist.len > 0 { choose(worklist.pop()) }
   for b in order {
     b.first-inst = Inst.count + 1
-    for n in b.seq { if n.tile != 0 { lower.emit(n, n.tile) } }
+    emitting = b
+    for n in b.seq { if n.tile != 0 and not lower.local?(n) { lower.emit(n, n.tile, int(n)) } }
     if not (b.last is IF) and not (b.last is RETURN) {
       for s in b.succs {
         phi-moves(b, s)

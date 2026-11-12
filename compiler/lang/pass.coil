@@ -214,8 +214,14 @@
               (let [(mut two) (ArrayList::new [Field] (malloc-allocator))]
                 (push! (mut two) (Field :name "n" :type "Node"))
                 (push! (mut two) (Field :name "rule" :type "Int"))
-                (push! (mut (.funcs d)) (Func :module name :name "mark" :params two :result "Void"))
-                (push! (mut (.funcs d)) (Func :module name :name "emit" :params two :result "Void")))
+                (push! (mut (.funcs d)) (Func :module name :name "mark" :params two :result "Void")))
+              (let [(mut three) (ArrayList::new [Field] (malloc-allocator))]
+                (push! (mut three) (Field :name "n" :type "Node"))
+                (push! (mut three) (Field :name "rule" :type "Int"))
+                (push! (mut three) (Field :name "out" :type "Int"))
+                (push! (mut (.funcs d)) (Func :module name :name "emit" :params three :result "Void")))
+              (push! (mut (.funcs d)) (Func :module name :name "operand" :params node-rule :result "Int"))
+              (push! (mut (.funcs d)) (Func :module name :name "local?" :params node-rule :result "Bool"))
               (for template (lower/templates (project/read-file lower-file file) lower-file)
                 (let [(mut params) (ArrayList::new [Field] (malloc-allocator))]
                   (for i (range 1 (len template))

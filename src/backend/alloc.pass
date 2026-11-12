@@ -1,9 +1,11 @@
 # Register allocation: linear scan over the instructions in layout order.
 #
-# A virtual register is live from where it is first written to where it is last
-# read, stretched to the end of any loop it is read in but was written before.
-# It gets a register when it is first written and keeps it. When none is free,
-# the live value that ends last moves to the frame for its whole life.
+# A virtual register's interval runs from the first position where it is live
+# to the last. Liveness is found one register at a time, walking back from each
+# read to the blocks that write it, so it is exact for any block layout and
+# needs no sets. A register is chosen where the interval starts and kept. When
+# none is free, the live value that ends last moves to the frame for its whole
+# life.
 pass in backend.unit
 use backend.cfg as cfg
 use backend.mach as mach
@@ -15,6 +17,13 @@ column end: Vreg -> Int               # the last
 column reg: Vreg -> Int               # its register + 1, or 0
 column slot: Vreg -> Int              # its frame slot + 1, or 0
 column hint: Vreg -> Int              # an operand it is moved to or from, or 0
+column reads: Vreg -> [Int]           # the instructions that read it
+column writes: Vreg -> [Int]          # the instructions that write it
+column home: Inst -> Block
+column starting: Inst -> [Vreg]       # the registers whose intervals start here
+column write-mark: Block -> Int       # the register last seen written in this block
+column write-first: Block -> Int      # and where it is first written there
+column live-mark: Block -> Int        # the register last found live into this block
 
 # A machine register is busy from where an instruction writes it to where one
 # reads it; `busy` holds those spans as from, to, from, to.
@@ -25,6 +34,7 @@ column written: Phys -> Int
 state active: [Vreg]
 state free: Word
 state slots: Int
+state stack: [Block]
 
 fn reg-kind?(kind: Int) -> Bool = kind == isa.K-DEF or kind == isa.K-USE or kind == isa.K-MOD
 
@@ -40,6 +50,8 @@ fn touch(i: Inst, kind: Int, a: Int) {
     let v = id(a)
     if v.start == 0 { v.start = at }
     if at > v.end { v.end = at }
+    if kind != isa.K-DEF { v.reads.push(at) }
+    if writes?(kind) { v.writes.push(at) }
   } else if isa.in-set?(isa.ALLOCATABLE, 0 - a - 1) {
     let p = id(0 - a)
     if kind != isa.K-DEF {
@@ -50,30 +62,65 @@ fn touch(i: Inst, kind: Int, a: Int) {
   }
 }
 
-fn intervals() {
+fn occurrences() {
   for n in 0..next-vreg { Vreg.new() }
   for r in 0..32 { Phys.new() }
-  for i in Inst {
-    let op = i.inst-op
-    for k in 0..isa.operand-count(op) {
-      let kind = isa.operand-kind(op, k)
-      if reg-kind?(kind) { touch(i, kind, mach.arg(i, k)) }
-    }
-    # Each side of a copy would like the other's register.
-    let source = move-source(i)
-    if source != 0 {
-      let target = i.a1
-      if target > 0 and id(target).hint == 0 { id(target).hint = source }
-      if source > 0 and id(source).hint == 0 { id(source).hint = target }
+  for b in order {
+    for at in b.first-inst..b.last-inst + 1 {
+      let i = id(at)
+      let op = i.inst-op
+      i.home = b
+      for k in 0..isa.operand-count(op) {
+        let kind = isa.operand-kind(op, k)
+        if reg-kind?(kind) { touch(i, kind, mach.arg(i, k)) }
+      }
+      # Each side of a copy would like the other's register.
+      let source = move-source(i)
+      if source != 0 {
+        let target = i.a1
+        if target > 0 and id(target).hint == 0 { id(target).hint = source }
+        if source > 0 and id(source).hint == 0 { id(source).hint = target }
+      }
     }
   }
-  for h in order {
-    if h.head is LOOP {
-      let from = h.first-inst
-      let to = greatest b in h.loop-blocks: b.last-inst
-      for v in Vreg {
-        if v.start != 0 and v.start < from and v.end >= from and v.end < to { v.end = to }
+}
+
+# `v` is needed at the top of `b`: it is live out of every block that comes
+# before, and into each of those that does not write it.
+fn live-into(v: Vreg, b: Block) {
+  if b.live-mark == int(v) { return }
+  b.live-mark = int(v)
+  stack.push(b)
+  while stack.len > 0 {
+    let x = stack.pop()
+    # Live before the block's first instruction reads anything.
+    if x.first-inst - 1 < v.start { v.start = max(1, x.first-inst - 1) }
+    for p in x.preds {
+      if p.last-inst > v.end { v.end = p.last-inst }
+      if p.write-mark != int(v) and p.live-mark != int(v) {
+        p.live-mark = int(v)
+        stack.push(p)
       }
+    }
+  }
+}
+
+fn intervals() {
+  occurrences()
+  for v in Vreg {
+    if v.start != 0 {
+      for w in v.writes {
+        let b = id(w).home
+        if b.write-mark != int(v) {
+          b.write-mark = int(v)
+          b.write-first = w
+        }
+      }
+      for r in v.reads {
+        let b = id(r).home
+        if not (b.write-mark == int(v) and b.write-first < r) { live-into(v, b) }
+      }
+      id(min(v.start, Inst.count)).starting.push(v)
     }
   }
 }
@@ -158,13 +205,7 @@ fn scan() {
   free = isa.ALLOCATABLE
   for i in Inst {
     expire(int(i))
-    let op = i.inst-op
-    for k in 0..isa.operand-count(op) {
-      let a = mach.arg(i, k)
-      if writes?(isa.operand-kind(op, k)) and a > 0 and id(a).reg == 0 and id(a).slot == 0 {
-        assign(id(a))
-      }
-    }
+    for v in i.starting { assign(v) }
   }
 }
 

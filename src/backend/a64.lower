@@ -4,6 +4,9 @@ nodes backend.nodes
 target backend.a64
 emit backend.mach
 
+# A constant is built again in each block that needs it in a register.
+local CONST
+
 # What the allocator and the emitter ask for by name.
 template move(d, s)        = orr(1, d, zr, s)
 template jump(to)          = b(to)
