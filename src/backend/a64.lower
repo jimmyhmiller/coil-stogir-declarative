@@ -31,7 +31,7 @@ rule CONST k => movz(1, out, k & 65535, 0) ; movk(1, out, (k >> 16) & 65535, 1) 
 
 rule ADD(x, CONST k) when u12(k)   => add-imm(sf, out, x, k)
 rule ADD(x, CONST k) when u12(-k)  => sub-imm(sf, out, x, -k)
-rule ADD(MUL(a, b), c)             => madd(sf, out, a, b, c)
+rule ADD(once MUL(a, b), c)        => madd(sf, out, a, b, c)
 rule ADD(x, y)                     => add(sf, out, x, y)
 rule SUB(x, CONST k) when u12(k)   => sub-imm(sf, out, x, k)
 rule SUB(x, y)                     => sub(sf, out, x, y)

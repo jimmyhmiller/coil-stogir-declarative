@@ -12,24 +12,25 @@ column members: Block -> [Node]       # the floating nodes scheduled into a bloc
 
 fn pinned?(n: Node) -> Bool = cfg.control?(n) or n is PHI or n is PARAM
 
+# Both walks stop at pinned nodes, whose blocks are known: the floating nodes
+# between them form no cycle, so each is placed after all it depends on.
 fn early(n: Node) {
-  if n.early-done { return }
+  if n.early-done or pinned?(n) { return }
   n.early-done = true
   var b = cfg.entry()
   for i in inputs(n) {
     if i != none {
       early(i)
-      if i.block-of != none and i.block-of.dom-depth > b.dom-depth { b = i.block-of }
+      if i.block-of.dom-depth > b.dom-depth { b = i.block-of }
     }
   }
-  if not pinned?(n) { n.block-of = b }
+  n.block-of = b
 }
 
 fn late(n: Node) {
-  if n.late-done { return }
+  if n.late-done or pinned?(n) { return }
   n.late-done = true
   for u in users(n) { late(u) }
-  if pinned?(n) { return }
   var lca: Block = none
   for u in users(n) {
     if u is PHI {
@@ -47,6 +48,7 @@ fn late(n: Node) {
     var best = lca
     var x = lca
     while x != earliest {
+      if x == x.idom { panic("a node's uses are not dominated by its inputs") }
       x = x.idom
       if x.loop-depth < best.loop-depth { best = x }
     }

@@ -48,3 +48,7 @@ fn target(n: Node, taken: Int) -> Int {
   let proj = first u in users(n): if taken == 1 then u is TRUE else u is FALSE
   int(proj.block-of)
 }
+
+# A node a rule may compute as part of its root: nothing else reads it, and it
+# was not moved to a block that runs less often than the root's.
+fn fusable(inner: Node, root: Node) -> Bool = inner.uses == 1 and inner.block-of == root.block-of

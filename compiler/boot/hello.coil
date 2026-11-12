@@ -1,6 +1,7 @@
 (module boot.hello)
 (import "coil.alloc" :use [malloc-allocator])
 (import "coil.primitive" :as primitive)
+(import "coil.arraylist" :use [ArrayList])
 (import "coil.cc" :as cc)
 (import "rt.graph" :as graph)
 (import "rt.jit" :as jit)
@@ -37,6 +38,11 @@
     (graph/set-input! (mut g) acc 1 zero)
     (graph/set-input! (mut g) acc 2 acc2)
     (println "verify: '{}'" (ir/verify g))
+    (let [(mut args) (ArrayList::new [u64] (malloc-allocator))]
+      (push! (mut args) 10)
+      (match (ir/interpret g (slice args) 100000)
+        (Some [v] (println "interpreted sum(10) = {}" v))
+        (None [] (println "interpreter gave up"))))
     (let [(mut cx) (st/create g (malloc-allocator))]
       (st/begin! (mut cx))
       (cfg/build (mut cx))

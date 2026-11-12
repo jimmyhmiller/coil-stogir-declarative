@@ -1,0 +1,15 @@
+# The whole compile, in order.
+pass in backend.unit
+use backend.cfg as cfg
+use backend.schedule as schedule
+use backend.select as select
+use backend.alloc as alloc
+use backend.emit as emit
+
+fn compile() {
+  cfg.build()
+  schedule.build()
+  select.run()
+  alloc.run()
+  emit.run()
+}
