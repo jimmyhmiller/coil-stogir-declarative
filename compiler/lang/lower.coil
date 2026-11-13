@@ -12,6 +12,9 @@
 ;;; must be in a register, so its own rule runs; a node matched inside a pattern
 ;;; is computed by this rule and needs none of its own.
 ;;;
+;;; `rule TRUNC(x) => x` says a node is another node: it has no instructions and
+;;; no register of its own.
+;;;
 ;;; `local CONST` in the header says a node is cheap enough to compute again in
 ;;; every block that needs it, so it never holds a register across blocks.
 ;;;
@@ -282,6 +285,7 @@
           (mut selects) (t/out-new)
           (mut marks) (t/out-new)
           (mut emits) (t/out-new)
+          (mut aliases) (t/out-new)
           (mut rule) 0
           names (templates (t/source-of context) path)
           (mut extends) false]
@@ -342,11 +346,21 @@
                         (when (.is-node b)
                           (t/emit! (mut marks) (t/cat3 " (mach/need (mut cx) " (.code b) ")"))))
                       (t/line! (mut marks) " (do)))")
-                      (let [body (sequence-text (mut l))]
-                        (t/emit! (mut emits) (t/cat3 "    (" (t/int-text rule) " (let ["))
-                        (for temp (.temps l)
-                          (t/emit! (mut emits) (t/cat3 "t*" temp " (mach/fresh (mut cx)) ")))
-                        (t/line! (mut emits) (t/cat3 "] (do" body " (do))))")))))))
+                      ; `=> x`: the node is `x` itself, in whatever register `x` is in.
+                      (let [first (t/peek (mut (.c l)))
+                            index (binding-of (mut l) (.text first))
+                            next (t/peek-at (mut (.c l)) 1)]
+                        (if (and (>= index 0) (.is-node (get (.bindings l) index))
+                                 (not (and (t/tok-is? next "(") (.glued next))))
+                            (do (t/advance! (mut (.c l)))
+                                (t/line! (mut aliases)
+                                         (t/cat4 "    (" (t/int-text rule) " "
+                                                 (t/cat2 (.code (get (.bindings l) index)) ")"))))
+                            (let [body (sequence-text (mut l))]
+                              (t/emit! (mut emits) (t/cat3 "    (" (t/int-text rule) " (let ["))
+                              (for temp (.temps l)
+                                (t/emit! (mut emits) (t/cat3 "t*" temp " (mach/fresh (mut cx)) ")))
+                              (t/line! (mut emits) (t/cat3 "] (do" body " (do))))")))))))))
             :else (t/die (mut (.c l)) tok (t/cat2 "expected rule or template, found " (.text tok))))))
       (t/line! (mut o) ";;; The rule that computes `n`, or 0 if none matches.")
       (t/line! (mut o) "(defn select [(cx (mut st/State)) (n i32)] (-> i64)")
@@ -363,10 +377,16 @@
       (for name (.locals l)
         (t/emit! (mut o) (t/cat3 " (= (graph/op (.g cx) n) ir/" name ")")))
       (t/line! (mut o) "))")
+      (t/line! (mut o) ";;; The node `n` simply is, by the rule chosen for it, or 0.")
+      (t/line! (mut o) "(defn alias-of [(cx (mut st/State)) (n i32)] (-> i32)")
+      (t/line! (mut o) "  (match (mach/rule-of (mut cx) n)")
+      (t/emit! (mut o) (t/text-of (mut aliases)))
+      (t/line! (mut o) "    (_ (: 0 i32))))")
       (t/line! (mut o) ";;; The register that holds `n` where instructions are being emitted.")
       (t/line! (mut o) "(defn operand [(cx (mut st/State)) (n i32)] (-> i64)")
       (t/line! (mut o) "  (if (not (local? (mut cx) n))")
-      (t/line! (mut o) "      (cast i64 n)")
+      (t/line! (mut o) "      (let [same (alias-of (mut cx) n)]")
+      (t/line! (mut o) "        (if (!= same 0) (operand (mut cx) same) (cast i64 n)))")
       (t/line! (mut o) "      (let [r (mach/local (mut cx) n)]")
       (t/line! (mut o) "        (if (!= r 0)")
       (t/line! (mut o) "            r")

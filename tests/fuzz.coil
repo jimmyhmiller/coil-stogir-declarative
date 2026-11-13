@@ -30,7 +30,7 @@
     h))
 
 (defn check [(seed u64) (type i32) (show bool) (stats (mut Stats)) (memory (ptr u8))] (-> bool)
-  (let [g (gen/program seed type 60 (primitive/cast u64 memory))
+  (let [g (gen/program seed type 60 (primitive/cast u64 memory) true (if (= (% seed 3) 0) 12 0))
         problem (ir/verify g)
         bits (ir/type-bits type)
         (mut args) (ArrayList::new [u64] (malloc-allocator))

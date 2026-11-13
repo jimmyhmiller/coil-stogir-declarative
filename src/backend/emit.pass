@@ -1,6 +1,9 @@
-# From chosen registers to bytes: values in the frame go through scratch
-# registers, copies to the same register and jumps to the next block go away,
-# the frame is opened and closed, and each instruction is encoded.
+# From chosen registers to bytes. Each operand is the register its value's
+# piece has there. Where a value changes home, inside a block or along an edge,
+# it is moved or brought back from the frame; a value that ever waits in the
+# frame is stored there as it is written. Copies to the same register and jumps
+# to the next block go away, the frame is opened and closed, and each
+# instruction is encoded.
 pass in backend.unit
 use backend.mach as mach
 use backend.alloc as alloc
@@ -12,55 +15,126 @@ column final-first: Block -> Int      # a block's first final instruction
 state final-start: Int                # final instructions follow the selected ones
 state frame: Int                      # bytes of frame, a multiple of 16
 state saved: Word                     # the registers the caller expects back unchanged
-state loads: Int
+state move-to: [Int]                  # moves to make together: the registers written
+state move-from: [Int]                # and read; -(slot + 1) for a value in the frame
 state code: [Word]
 
 fn marker(r: Int) -> Int = 0 - r - 1
 
-fn scratch(n: Int) -> Int =
-  if n == 0 then isa.SCRATCH1 else if n == 1 then isa.SCRATCH2 else isa.SCRATCH0
+# The piece that holds `v` at `pos`. Emission moves forward, so this never looks back.
+fn here(v: Vreg, pos: Int) -> Piece {
+  var p = v.at-piece
+  if p == none { p = v.first-piece }
+  while p.next-piece != none and pos >= p.pend { p = p.next-piece }
+  v.at-piece = p
+  p
+}
 
-# Operand `k` of `i` as a machine register, read from the frame first if that
-# is where it lives; any other operand as it is.
+# Operand `k` of `i`: for a virtual register, the machine register it is in there.
 fn resolve(i: Inst, k: Int) -> Int {
   let op = i.inst-op
   if k >= isa.operand-count(op) { return 0 }
   let kind = isa.operand-kind(op, k)
   let a = mach.arg(i, k)
   if not alloc.reg-kind?(kind) or a < 0 { return a }
-  let v = id(a)
-  if v.reg != 0 { return marker(v.reg - 1) }
-  if kind == isa.K-DEF { return marker(isa.SCRATCH0) }
-  let s = marker(scratch(loads))
-  loads = loads + 1
-  lower.from-frame(s, out-slots + v.slot - 1)
-  s
+  let p = here(id(a), if kind == isa.K-DEF then 2 * int(i) + 1 else 2 * int(i))
+  if p.reg == 0 { panic("emission: a value has no register where it is used") }
+  marker(p.reg - 1)
 }
 
+# A value that waits in the frame anywhere is stored there wherever it is written.
 fn finish(i: Inst, k: Int) {
   let op = i.inst-op
   if k < isa.operand-count(op) and alloc.writes?(isa.operand-kind(op, k)) {
     let a = mach.arg(i, k)
-    if a > 0 and id(a).reg == 0 {
-      # A value both read and written was read into the register it is written from.
-      lower.to-frame(if isa.operand-kind(op, k) == isa.K-DEF then marker(isa.SCRATCH0) else marker(isa.SCRATCH1), out-slots + id(a).slot - 1)
+    if a > 0 and id(a).slot != 0 {
+      lower.to-frame(marker(here(id(a), 2 * int(i) + 1).reg - 1), out-slots + id(a).slot - 1)
     }
   }
 }
 
+# ---------------------------------------------------------------- moves made together
+
+fn move(to: Int, from: Int) {
+  if to != from {
+    move-to.push(to)
+    move-from.push(from)
+  }
+}
+
+fn emit-move(to: Int, from: Int) {
+  if from < 0 { lower.from-frame(marker(to), out-slots + (0 - from) - 1) }
+  else { lower.move(marker(to), marker(from)) }
+}
+
+# Every pending move, each source read before anything overwrites it. A ring
+# of registers is opened by setting one of them aside in the scratch register.
+fn flush-moves() {
+  var left = move-to.len
+  while left > 0 {
+    var progress = false
+    for j in 0..move-to.len {
+      let d = move-to[j]
+      if d >= 0 {
+        let wanted = any k in 0..move-to.len: k != j and move-to[k] >= 0 and move-from[k] == d
+        if not wanted {
+          emit-move(d, move-from[j])
+          move-to[j] = -1
+          left = left - 1
+          progress = true
+        }
+      }
+    }
+    if not progress {
+      var d = -1
+      for j in 0..move-to.len { if d < 0 and move-to[j] >= 0 { d = move-to[j] } }
+      lower.move(marker(isa.SCRATCH0), marker(d))
+      for j in 0..move-to.len { if move-to[j] >= 0 and move-from[j] == d { move-from[j] = isa.SCRATCH0 } }
+    }
+  }
+  move-to.clear()
+  move-from.clear()
+}
+
+# A piece that starts inside a block takes its value from the piece before it.
+fn transition(p: Piece) {
+  let q = p.prev-piece
+  if q == none or p.in-frame or p.reg == 0 { return }
+  if q.in-frame or q.reg == 0 { move(p.reg - 1, 0 - p.owner.slot) }
+  else { move(p.reg - 1, q.reg - 1) }
+}
+
+# The values live into `s`, from where they are at the end of `p` to where `s`
+# expects them.
+fn bring(p: Block, s: Block) {
+  for v in s.live-in {
+    # A value with one piece is in one place everywhere.
+    if v.first-piece.next-piece != none {
+      let to = alloc.piece-at(v, 2 * s.first-inst)
+      let from = alloc.piece-at(v, 2 * p.last-inst + 1)
+      if not to.in-frame and to.reg != 0 {
+        if from.in-frame or from.reg == 0 { move(to.reg - 1, 0 - v.slot) }
+        else { move(to.reg - 1, from.reg - 1) }
+      }
+    }
+  }
+  flush-moves()
+}
+
 fn rewrite(i: Inst, next: Int) {
   let op = i.inst-op
-  loads = 0
   let x0 = resolve(i, 0)
   let x1 = resolve(i, 1)
   var x2 = resolve(i, 2)
   let x3 = resolve(i, 3)
   let x4 = resolve(i, 4)
-  if alloc.move-source(i) != 0 and x1 == x3 { return }
-  if op == isa.B and x0 == next { return }
-  if op == isa.RET and frame > 0 { leave() }
-  if i.above-frame { x2 = x2 + frame / 8 }
-  mach.emit(op, x0, x1, x2, x3, x4)
+  let same-register = alloc.move-source(i) != 0 and x1 == x3
+  let falls-through = op == isa.B and x0 == next
+  if not same-register and not falls-through {
+    if op == isa.RET and frame > 0 { leave() }
+    if i.above-frame { x2 = x2 + frame / 8 }
+    mach.emit(op, x0, x1, x2, x3, x4)
+  }
   for k in 0..5 { finish(i, k) }
 }
 
@@ -119,8 +193,17 @@ fn run() {
     let b = order[index]
     let next = if index + 1 < order.len then int(order[index + 1]) else 0
     b.final-first = Inst.count + 1
-    if b.last-inst >= b.first-inst {
-      for at in b.first-inst..b.last-inst + 1 { rewrite(id(at), next) }
+    # A block with one way in, from a block with two ways out, takes its values here.
+    if b.preds.len == 1 and b.preds[0].succs.len > 1 { bring(b.preds[0], b) }
+    for at in b.first-inst..b.last-inst + 1 {
+      let i = id(at)
+      if at != b.first-inst {
+        for p in i.starts-even { transition(p) }
+        flush-moves()
+      }
+      # Before a block's closing jump, the values the next block expects.
+      if at == b.last-inst and b.succs.len == 1 { bring(b, b.succs[0]) }
+      rewrite(i, next)
     }
   }
   # The entry block's code starts at the frame's opening.

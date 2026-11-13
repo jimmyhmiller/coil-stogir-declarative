@@ -1,5 +1,7 @@
 ;;; Generation speed: random programs built first, then compiled against the clock.
-;;; Usage: bench [programs] [size]
+;;; Usage: bench [programs] [size] [classic|rich] [histogram]
+;;; classic: the programs tools/old-bench compiles with the existing Stogir.
+;;; rich: every node, with a window of 24 values in scope, as real code has.
 (module tests.bench)
 (import "coil.alloc" :use [malloc-allocator])
 (import "coil.arraylist" :use [ArrayList])
@@ -32,12 +34,13 @@
 (defn main [(argc i32) (argv (ptr (ptr i8)))] (-> i64)
   (let [programs (arg-or argc argv 1 2000)
         size (arg-or argc argv 2 60)
+        rich (and (> (cast i64 argc) 3) (= (str/from-cstr (primitive/load (primitive/index argv 3))) "rich"))
         (mut graphs) (ArrayList::new [graph/Graph] (malloc-allocator))
         (mut nodes) 0
         (mut words) 0
         (mut histogram) (ArrayList::new [i64] (malloc-allocator))]
     (for _ (range 0 64) (push! (mut histogram) 0))
-    (for seed (range 1 (+ programs 1)) (push! (mut graphs) (gen/program (cast u64 seed) ir/T-I64 size (primitive/cast u64 (scratch-memory 256)))))
+    (for seed (range 1 (+ programs 1)) (push! (mut graphs) (gen/program (cast u64 seed) ir/T-I64 size (primitive/cast u64 (scratch-memory 256)) rich (if rich 24 0))))
     ; One state for every compile, as a compiler thread would keep.
     (let [start (now-ns)
           (mut cx) (st/create (get graphs 0) (malloc-allocator))]
@@ -47,7 +50,7 @@
         (driver/compile (mut cx))
         (set! nodes (+ nodes (graph/size (.g cx))))
         (set! words (+ words (len (.code cx))))
-        (when (> (cast i64 argc) 3)
+        (when (> (cast i64 argc) 4)
           (for at (range (+ (.final-start cx) 1) (+ (cast i64 (.inst-count cx)) 1))
             (let [op (get (.inst-op cx) at)]
               (set! (mut histogram) op (+ (get histogram op) 1))))))
@@ -56,7 +59,7 @@
                  programs size nodes words (/ elapsed 1000000))
         (println "{} ns per node, {} ns per instruction, {} instructions per second"
                  (/ elapsed nodes) (/ elapsed words) (/ (* words 1000000000) elapsed))
-        (when (> (cast i64 argc) 3)
+        (when (> (cast i64 argc) 4)
           (for op (range 1 64)
             (when (> (get histogram op) 0) (println "  {:>8} {}" (get histogram op) (isa/name op)))))))
     0))

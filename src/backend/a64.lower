@@ -44,6 +44,7 @@ rule RETURN(_, v)                => orr(1, x0, zr, ex(v)) ; ret(x30)
 rule CONST k when k >= 0 and k < 65536      => movz(1, out, k, 0)
 rule CONST k when k < 0 and k >= -65536     => movn(1, out, ~k, 0)
 rule CONST k when k >= 0 and k < 4294967296 => movz(1, out, k & 65535, 0) ; movk(1, out, (k >> 16) & 65535, 1)
+rule CONST k when k >= 0 and k < 281474976710656 => movz(1, out, k & 65535, 0) ; movk(1, out, (k >> 16) & 65535, 1) ; movk(1, out, (k >> 32) & 65535, 2)
 rule CONST k => movz(1, out, k & 65535, 0) ; movk(1, out, (k >> 16) & 65535, 1) ; movk(1, out, (k >> 32) & 65535, 2) ; movk(1, out, (k >> 48) & 65535, 3)
 
 rule ADD(x, CONST k) when u12(k)   => add-imm(sf, out, x, k)
@@ -79,7 +80,8 @@ rule SREM(x, y)                    => sdiv(sf, $q, sx(x), sx(y)) ; msub(sf, out,
 rule ZEXT(x)                       => ubfm(1, out, x, 0, bits(x) - 1)
 rule SEXT(x)                       => sbfm(1, out, x, 0, bits(x) - 1)
 rule TRUNC(x) when width == 1      => ubfm(0, out, x, 0, 0)
-rule TRUNC(x)                      => orr(1, out, zr, x)
+# Cutting a value down leaves it where it is: the bits above are nobody's.
+rule TRUNC(x)                      => x
 
 # Memory. An address that is a base plus a small multiple of the width is one
 # instruction; any other address is computed first.

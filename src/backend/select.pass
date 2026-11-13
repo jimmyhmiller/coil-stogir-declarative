@@ -69,7 +69,7 @@ fn phi-of?(u: Node, h: Node) -> Bool = u is PHI and u.in(0) == h
 # `n`'s value into register `d`: computed straight into it if `n` is computed
 # per block, copied otherwise.
 fn copy(d: Int, n: Node) {
-  if lower.local?(n) { lower.emit(n, n.tile, d) } else { lower.move(d, int(n)) }
+  if lower.local?(n) { lower.emit(n, n.tile, d) } else { lower.move(d, lower.operand(n)) }
 }
 
 # The moves that give a region's phis their values on the edge from `b`. Where

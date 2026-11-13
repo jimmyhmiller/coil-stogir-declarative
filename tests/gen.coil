@@ -36,7 +36,7 @@
 
 (defstruct Gen
   [(g graph/Graph) (state u64) (control i32) (env (ArrayList i32)) (type i32) (budget i64)
-   (memory u64)])
+   (memory u64) (rich bool) (window i64)])
 
 (defn next! [(r (mut Gen))] (-> u64)
   (let [(mut x) (.state r)]
@@ -94,7 +94,7 @@
 (defn arithmetic! [(r (mut Gen))] (-> i32)
   (let [a (pick! (mut r))
         b (operand! (mut r))
-        op (below! (mut r) 16)]
+        op (below! (mut r) (if (.rich r) 16 9))]
     (if (= op 15)
         (ir/cond! (mut (.g r)) (.type r) (comparison! (mut r)) a b)
         (binary! (mut r) (.type r) op a b))))
@@ -190,18 +190,23 @@
 (defn statements! [(r (mut Gen)) (depth i64)] (-> void)
   (let [count (+ 1 (below! (mut r) 6))]
     (for _ (range 0 count)
-      (let [choice (below! (mut r) 14)]
+      (let [choice (below! (mut r) (if (.rich r) 14 10))]
         (set! (.budget r) (- (.budget r) 1))
         (cond
-          (or (< choice 5) (>= depth 3) (< (.budget r) 0))
+          (or (< choice (if (.rich r) 5 6)) (>= depth 3) (< (.budget r) 0))
             (push! (mut (.env r)) (arithmetic! (mut r)))
-          (< choice 6) (push! (mut (.env r)) (call! (mut r)))
-          (= choice 10) (push! (mut (.env r)) (narrow! (mut r)))
-          (= choice 11) (push! (mut (.env r)) (narrow! (mut r)))
-          (= choice 12) (write! (mut r))
-          (= choice 13) (push! (mut (.env r)) (read! (mut r)))
+          (and (.rich r) (< choice 6)) (push! (mut (.env r)) (call! (mut r)))
           (< choice 8) (diamond! (mut r) depth)
-          :else (counted-loop! (mut r) depth))))))
+          (< choice 10) (counted-loop! (mut r) depth)
+          (< choice 12) (push! (mut (.env r)) (narrow! (mut r)))
+          (= choice 12) (write! (mut r))
+          :else (push! (mut (.env r)) (read! (mut r))))
+        ; With a window, old values fall out of scope, as locals do in real code.
+        (when (and (> (.window r) 0) (= depth 0))
+          (while (> (len (.env r)) (.window r))
+            (let [gone (below! (mut r) (len (.env r)))]
+              (set! (mut (.env r)) gone (get (.env r) (- (len (.env r)) 1)))
+              (pop! (mut (.env r))))))))))
 
 ;;; if (cond) { … } else { … }, then phis for the values either side changed.
 (defn diamond! [(r (mut Gen)) (depth i64)] (-> void)
@@ -272,9 +277,13 @@
     (set! (.control r) exit)))
 
 ;;; One random function of ten parameters (two arrive on the stack), of about `size` statements beyond
-;;; its first few. `memory` is the address of 256 bytes it may read and write. Its result mixes every value still
+;;; its first few. `memory` is the address of 256 bytes it may read and write.
+;;; `rich` adds calls, other widths, division, choices and memory, and six more
+;;; parameters; without it the programs are the ones tools/old-bench also makes.
+;;; `window`, if not 0, is how many values stay in scope at the top level. Its result mixes every value still
 ;;; in scope, so all of them stay live to the end.
-(defn program [(seed u64) (type i32) (size i64) (memory u64)] (-> graph/Graph)
+(defn program [(seed u64) (type i32) (size i64) (memory u64) (rich bool) (window i64)]
+  (-> graph/Graph)
   (let [(mut r) (Gen
                   :g (graph/create (malloc-allocator))
                   :state (| (primitive/imul seed (: 0x9E3779B97F4A7C15 u64)) 1)
@@ -282,9 +291,11 @@
                   :env (ArrayList::new [i32] (malloc-allocator))
                   :type type
                   :budget size
-                  :memory memory)]
+                  :memory memory
+                  :rich rich
+                  :window window)]
     (set! (.control r) (ir/start! (mut (.g r))))
-    (for i (range 0 10) (push! (mut (.env r)) (ir/param! (mut (.g r)) type (cast u64 i))))
+    (for i (range 0 (if rich 10 4)) (push! (mut (.env r)) (ir/param! (mut (.g r)) type (cast u64 i))))
     (statements! (mut r) 0)
     (statements! (mut r) 0)
     (while (> (.budget r) 0) (statements! (mut r) 0))

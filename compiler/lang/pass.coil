@@ -923,8 +923,16 @@
   (if (t/at? (mut (.c k)) "{") (block (mut k)) (statement (mut k))))
 
 (defn if-statement [(k (mut K))] (-> (slice u8))
-  (let [test (.code (expr (mut k) 0))
-        yes (block (mut k))]
+  (let [test (.code (expr (mut k) 0))]
+    ; `if a then b else c` where a statement may stand: the expression.
+    (if (t/accept! (mut (.c k)) "then")
+        (let [yes (.code (expr (mut k) 0))]
+          (t/expect! (mut (.c k)) "else")
+          (cat6 "(if " test " " yes " " (t/cat2 (.code (expr (mut k) 0)) ")")))
+        (if-blocks (mut k) test))))
+
+(defn if-blocks [(k (mut K)) (test (slice u8))] (-> (slice u8))
+  (let [yes (block (mut k))]
     (if (t/accept! (mut (.c k)) "else")
         (let [no (if (t/accept! (mut (.c k)) "if") (if-statement (mut k)) (block (mut k)))]
           (cat6 "(if " test " " yes " " (t/cat2 no ")")))
