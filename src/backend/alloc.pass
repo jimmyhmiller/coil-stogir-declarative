@@ -71,6 +71,8 @@ column write-mark: Block -> Int        # the register last seen written in this 
 column write-first: Block -> Int       # and where it is first written there
 column live-mark: Block -> Int         # the register last found live into this block
 column live-in: Block -> [Vreg]
+column span-from: Block -> Int         # for a loop's head: the loop's first and last
+column span-to: Block -> Int           # instructions, once they are asked for
 
 state active: [Piece]                  # placed pieces live at the current position
 state inactive: [Piece]                # placed pieces in a hole at the current position
@@ -424,8 +426,32 @@ fn advance(pos: Int) {
   while inactive.len > kept { inactive.pop() }
 }
 
-# A register nothing else holds for some way ahead.
-fn try-free(p: Piece) -> Bool {
+# Whether `v` is read in the innermost loop around position `pos`: if it is,
+# it is wanted in a register every time round, however far off its next
+# reading is in the order of the code.
+fn read-in-loop?(v: Vreg, pos: Int) -> Bool {
+  let i: Inst = id(pos / 2)
+  let h = i.home.loop-head
+  if h == none { return false }
+  if h.span-to == 0 {
+    var low = far()
+    var high = 0
+    for b in h.loop-blocks {
+      low = min(low, b.first-inst)
+      high = max(high, b.last-inst)
+    }
+    h.span-from = low
+    h.span-to = high
+  }
+  for k in 0..v.reads.len {
+    if v.reads[k] >= h.span-from and v.reads[k] <= h.span-to { return true }
+  }
+  false
+}
+
+# A register nothing else holds for some way ahead; with `whole`, only one
+# free for all of the piece's life.
+fn try-free(p: Piece, whole: Bool) -> Bool {
   let pos = p.pstart
   for r in Phys { r.free-until = if fits?(p.owner, int(r) - 1) then far() else 0 }
   for a in active { id(a.reg).free-until = 0 }
@@ -454,25 +480,30 @@ fn try-free(p: Piece) -> Bool {
     until = id(want + 1).free-until
   }
   if until <= pos { return false }
+  if whole and until < p.pend { return false }
   place-in(p, best)
   if until < p.pend { to-frame-from(p, until) }
   true
 }
 
-# Nothing is free: take the register whose holder is needed furthest away.
-fn take-blocked(p: Piece) {
+# Take the register whose holder is needed furthest away; the holder waits in
+# the frame. With `far`, only if that holder is not needed for the whole of the
+# piece's life nor read in the loop the piece begins in, so that the piece has
+# the register throughout: better that a value wanted after a loop waits than
+# that one wanted every time round is fetched every time round.
+fn take-blocked(p: Piece, far-only: Bool) -> Bool {
   let pos = p.pstart
   for r in Phys {
     r.needed-at = if fits?(p.owner, int(r) - 1) then far() else 0
     r.blocked-at = far()
   }
   for a in active {
-    let x = next-need(a, pos)
+    let x = if far-only and read-in-loop?(a.owner, pos) then pos else next-need(a, pos)
     if x < id(a.reg).needed-at { id(a.reg).needed-at = x }
   }
   for a in inactive {
     if meeting(a.ranges, p.ranges) != 0 {
-      let x = next-need(a, pos)
+      let x = if far-only and read-in-loop?(a.owner, pos) then pos else next-need(a, pos)
       if x < id(a.reg).needed-at { id(a.reg).needed-at = x }
     }
   }
@@ -493,6 +524,7 @@ fn take-blocked(p: Piece) {
       needed = r.needed-at
     }
   }
+  if far-only and (needed < p.pend or id(best + 1).blocked-at < p.pend) { return false }
   if needed <= pos { panic("register allocation: every register is needed at once") }
   var kept = 0
   for j in 0..active.len {
@@ -514,12 +546,17 @@ fn take-blocked(p: Piece) {
   while inactive.len > kept { inactive.pop() }
   place-in(p, best)
   if id(best + 1).blocked-at < p.pend { to-frame-from(p, id(best + 1).blocked-at) }
+  true
 }
 
+# A register free for all of the piece's life; or one whose holder can wait
+# that long; or one free for a while; or the one whose holder is needed last.
 fn place(p: Piece) {
   if p.in-frame { return }
   advance(p.pstart)
-  if not try-free(p) { take-blocked(p) }
+  if try-free(p, true) { return }
+  if take-blocked(p, true) { return }
+  if not try-free(p, false) { take-blocked(p, false) }
 }
 
 fn scan() {
