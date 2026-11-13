@@ -57,6 +57,85 @@ fn late(n: Node) {
   }
 }
 
+# The block where `u` uses value `n`: its own, or for a phi the block the
+# value comes from.
+fn use-block(u: Node, n: Node) -> Block {
+  if not (u is PHI) { return u.block-of }
+  let region = u.in(0).block-of
+  var found: Block = none
+  for i in 1..u.arity {
+    if u.in(i) == n { found = cfg.join(found, region.preds[i - 1]) }
+  }
+  found
+}
+
+# Something in the control chain that may write memory.
+fn writes-memory?(n: Node) -> Bool =
+  n is STORE or n is CALL or n is COPY or n is FILL or n is ATOMIC-STORE or n is RESERVE or cfg.update?(n)
+
+# A load whose value is used only down one of the ways its block ends in is
+# made there instead, if nothing after it in its block could write what it
+# reads: the other way then does without it. `s` is the block that way begins.
+fn sink(l: Node, s: Block) {
+  let before = l.in(0)
+  var users: [Node] = []
+  var slots: [Int] = []
+  for e in edges(l) {
+    let u = edge-user(e)
+    let k = edge-slot(e)
+    if u is REGION or u is LOOP or (k == 0 and cfg.control?(u)) {
+      users.push(u)
+      slots.push(k)
+    }
+  }
+  for i in 0..users.len { set-input(users[i], slots[i], before) }
+  users.clear()
+  slots.clear()
+  let h = s.head
+  for e in edges(h) {
+    let u = edge-user(e)
+    let k = edge-slot(e)
+    if u != l and (u is REGION or u is LOOP or (k == 0 and cfg.control?(u))) {
+      users.push(u)
+      slots.push(k)
+    }
+  }
+  set-input(l, 0, h)
+  for i in 0..users.len { set-input(users[i], slots[i], l) }
+  l.block-of = s
+}
+
+fn sink-loads(b: Block) {
+  if b.succs.len < 2 { return }
+  # The loads of the block, and whether anything after each may write memory.
+  var loads: [Node] = []
+  var c = cfg.follower(b.head)
+  while c != none and cfg.chain?(c) {
+    if writes-memory?(c) { loads.clear() }
+    else if c is LOAD and c.payload == 0 { loads.push(c) }
+    c = cfg.follower(c)
+  }
+  for i in reverse 0..loads.len {
+    let l = loads[i]
+    var to: Block = none
+    var ok = l.uses > 1
+    for u in users(l) {
+      # Whatever reads the value, which may also be what follows the load.
+      let reads = any k in 1..u.arity: u.in(k) == l
+      if reads and not (u is REGION) and not (u is LOOP) {
+        let at = use-block(u, l)
+        if at == none { ok = false } else { to = cfg.join(to, at) }
+      }
+    }
+    if ok and to != none and to != b {
+      # The way out of `b` that leads there.
+      for s in b.succs {
+        if s.preds.len == 1 and s.loop-depth <= b.loop-depth and cfg.dominates(s, to) { sink(l, s) }
+      }
+    }
+  }
+}
+
 # `n` after whatever it needs from its own block. A phi needs nothing there:
 # its values are those the blocks before its own end with, and when the block
 # comes round to itself, what it reads is computed after it.
@@ -91,6 +170,7 @@ fn build() {
   for n in Node { if n is PARAM { n.block-of = cfg.entry() } }
   for n in Node { if not n.dead { early(n) } }
   for n in Node { if not n.dead { late(n) } }
+  for b in order { sink-loads(b) }
   for b in order { order-block(b) }
 }
 
