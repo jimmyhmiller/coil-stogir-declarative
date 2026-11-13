@@ -1,9 +1,9 @@
 # The System V calling convention on x86-64 for integers and floating point.
 target x64.target
 integers rdi rsi rdx rcx r8 r9
-result rax
+results rax rdx
 floats xmm0..xmm7
-float-result xmm0
+float-results xmm0 xmm1
 frame rbp
 return-address 8
 variadic count rax

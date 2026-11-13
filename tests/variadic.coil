@@ -29,7 +29,7 @@
     (graph/set-input! (mut g) call 5 n)
     (graph/set-input! (mut g) call 6 x)
     (graph/set-input! (mut g) call 7 (ir/add! (mut g) ir/T-I64 n (ir/const! (mut g) ir/T-I64 1)))
-    (ir/return! (mut g) call (ir/result! (mut g) ir/T-I32 call))
+    (graph/set-input! (mut g) (ir/return! (mut g) call 1) 1 (ir/result! (mut g) ir/T-I32 0 call))
     g))
 
 (defn main [] (-> i64)

@@ -236,7 +236,7 @@
             (graph/set-input! (mut (.g r)) node 3 (ir/zext! (mut (.g r)) ir/T-U64 (ir/trunc! (mut (.g r)) ir/T-U8 (pick! (mut r)))))
             (graph/set-input! (mut (.g r)) node 4 wide-b)
             (set! (.control r) node)
-            (float-result! (mut r) (ir/result! (mut (.g r)) ir/T-F64 node)))
+            (float-result! (mut r) (ir/result! (mut (.g r)) ir/T-F64 0 node)))
         :else
           ; The bits of an integer as a floating value, which may be anything at all.
           (let [bits (if (= ft ir/T-F64)
@@ -299,7 +299,7 @@
         node (ir/call-node! (mut (.g r)) 0 (.control r) target count)]
     (for i (range 0 count) (graph/set-input! (mut (.g r)) node (+ i 2) (operand! (mut r))))
     (set! (.control r) node)
-    (ir/result! (mut (.g r)) (.type r) node)))
+    (ir/result! (mut (.g r)) (.type r) 0 node)))
 
 ;;; A few statements: new values, calls, diamonds and counted loops.
 (defn statements! [(r (mut Gen)) (depth i64)] (-> void)
@@ -485,7 +485,7 @@
                                       (primitive/cast u64 (primitive/cast (ptr i8) (fnptr-of helper1)))))
                 node (ir/tailcall! (mut (.g r)) type (.control r) target 1)]
             (graph/set-input! (mut (.g r)) node 2 result))
-          (ir/return! (mut (.g r)) (.control r) result)))
+          (graph/set-input! (mut (.g r)) (ir/return! (mut (.g r)) (.control r) 1) 1 result)))
     (free! (mut (.env r)))
     (.g r)))
 

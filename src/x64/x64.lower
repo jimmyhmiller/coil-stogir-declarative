@@ -54,13 +54,12 @@ rule TRAP    => ud2()
 rule TAILCALL => nothing
 rule CALL    => nothing
 rule RESULT  => nothing
+rule RETURN  => nothing
 rule PARAM   => nothing
 
 rule SLOT                        => lea(out, rbp, 0 - object)
 rule SYMBOL s                    => lea-symbol(out, s)
 rule EXTERN s                    => mov-got(out, s)
-rule RETURN(_, v) when float(v)  => move-float(xmm0, v) ; leave()
-rule RETURN(_, v)                => move(rax, ex(v)) ; leave()
 
 # A floating constant is its bits, built in an integer register and moved across.
 rule CONST k when float and width == 32 => mov-imm32($t, k) ; bits-to-float(0, out, $t)

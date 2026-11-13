@@ -37,7 +37,7 @@
         x (ir/param! (mut g) ir/T-I64 0)
         r (ir/add! (mut g) ir/T-I64 (ir/mul! (mut g) ir/T-I64 x (ir/const! (mut g) ir/T-I64 3))
                    (ir/const! (mut g) ir/T-I64 1))]
-    (ir/return! (mut g) s r)
+    (graph/set-input! (mut g) (ir/return! (mut g) s 1) 1 r)
     g))
 
 (defn both [(triple-symbol i64) (helper-symbol i64) (table-symbol i64)] (-> graph/Graph)
@@ -45,21 +45,21 @@
         s (ir/start! (mut g))
         x (ir/param! (mut g) ir/T-I64 0)
         direct (ir/call-node! (mut g) 0 s (ir/symbol! (mut g) (cast u64 triple-symbol)) 1)
-        a (ir/result! (mut g) ir/T-I64 direct)
+        a (ir/result! (mut g) ir/T-I64 0 direct)
         outside (ir/call-node! (mut g) 0 direct (ir/extern! (mut g) (cast u64 helper-symbol)) 1)
-        b (ir/result! (mut g) ir/T-I64 outside)
+        b (ir/result! (mut g) ir/T-I64 0 outside)
         ; The same function again, through its address in a register.
         pointer (ir/add! (mut g) ir/T-PTR (ir/symbol! (mut g) (cast u64 triple-symbol))
                          (ir/sub! (mut g) ir/T-PTR (ir/trunc! (mut g) ir/T-PTR x) (ir/trunc! (mut g) ir/T-PTR x)))
         indirect (ir/call-node! (mut g) 0 outside pointer 1)
-        c (ir/result! (mut g) ir/T-I64 indirect)
+        c (ir/result! (mut g) ir/T-I64 0 indirect)
         ; A number out of the data, and a call through a pointer kept there.
         table (ir/symbol! (mut g) (cast u64 table-symbol))
         d (ir/load-node! (mut g) ir/T-I64 indirect table)
         kept (ir/load-node! (mut g) ir/T-PTR d
                             (ir/add! (mut g) ir/T-PTR table (ir/const! (mut g) ir/T-PTR 8)))
         through (ir/call-node! (mut g) 0 kept kept 1)
-        e (ir/result! (mut g) ir/T-I64 through)
+        e (ir/result! (mut g) ir/T-I64 0 through)
         sum (ir/add! (mut g) ir/T-I64
                      (ir/add! (mut g) ir/T-I64 (ir/add! (mut g) ir/T-I64 a b) c)
                      (ir/add! (mut g) ir/T-I64 d e))]
@@ -67,7 +67,7 @@
     (graph/set-input! (mut g) outside 2 (ir/add! (mut g) ir/T-I64 x (ir/const! (mut g) ir/T-I64 1)))
     (graph/set-input! (mut g) indirect 2 b)
     (graph/set-input! (mut g) through 2 x)
-    (ir/return! (mut g) through sum)
+    (graph/set-input! (mut g) (ir/return! (mut g) through 1) 1 sum)
     g))
 
 (defn expected [(x u64)] (-> u64)

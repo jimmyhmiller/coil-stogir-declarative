@@ -1,9 +1,9 @@
 # The C calling convention on AArch64 for integers and floating point.
 target a64.target
 integers x0..x7
-result x0
+results x0 x1
 floats v0..v7
-float-result v0
+float-results v0..v3
 link x30
 frame x29
 variadic stack

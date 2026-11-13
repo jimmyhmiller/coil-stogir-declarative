@@ -24,7 +24,9 @@ set unsigned-wide = u32 u64
 
 # Control. A control node's first operand is the control it follows.
 node START : ctrl                               role start
-node RETURN(c: ctrl, value)                     role return
+# A function returns any number of values: integers in the convention's integer
+# result registers in order, floating values in its floating ones.
+node RETURN(c: ctrl, values...)                 role return
 node REGION(c...: ctrl) : ctrl                  role region
 node LOOP(c...: ctrl) : ctrl                    role loop
 node IF(c: ctrl, cond: bool) : ctrl             role if
@@ -36,11 +38,12 @@ node CASE(switch: ctrl) : ctrl                  role case     payload value
 node DEFAULT(switch: ctrl) : ctrl               role default
 # Control that reaches a trap stops the program.
 node TRAP(c: ctrl)                              role trap
-# A call follows the C convention; RESULT is the value it returned. `named` is
-# 0, or for a function that takes any number of arguments, one more than the
-# number it names.
+# A call follows the C convention. `named` is 0, or for a function that takes
+# any number of arguments, one more than the number it names. RESULT is a value
+# the call returned: of the integers or of the floating values, whichever its
+# type is, the one numbered `index` from 0.
 node CALL(c: ctrl, target: ptr, args...) : ctrl role call  payload named
-node RESULT(call: ctrl) : T                     role result
+node RESULT(call: ctrl) : T                     role result  payload index
 # A call whose result is this function's: the function ends by going there,
 # with its own frame already given back. Its type is what it returns.
 node TAILCALL(c: ctrl, target: ptr, args...) : T  role tailcall

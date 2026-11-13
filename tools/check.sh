@@ -16,8 +16,11 @@ coil build tests/link.coil -O1 -o out/link | grep -v '^wrote' || true
 out/link
 clang tests/link-main.c out/link.o -o out/link-aot
 out/link-aot
-coil build tests/variadic.coil -O1 -o out/variadic | grep -v '^wrote' || true
-out/variadic
+# The tests that are one program each.
+for t in variadic results; do
+  coil build tests/$t.coil -O1 -o out/$t | grep -v '^wrote' || true
+  out/$t
+done
 coil build tests/fuzz.coil -O1 -o out/fuzz | grep -v '^wrote' || true
 # In chunks under a time limit, so that generated code that never returns fails the check.
 count=${1:-2000}

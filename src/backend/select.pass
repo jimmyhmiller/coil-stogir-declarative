@@ -15,7 +15,7 @@ fn choose(n: Node) {
   }
   n.tile = rule
   lower.mark(n, rule)
-  if n is PHI or n is CALL or n is SWITCH or n is TAILCALL { for i in 1..n.arity { mach.need(n.in(i)) } }
+  if n is PHI or n is CALL or n is SWITCH or n is TAILCALL or n is RETURN { for i in 1..n.arity { mach.need(n.in(i)) } }
 }
 
 # An argument's value into register `d`. The convention wants an integer
@@ -69,8 +69,31 @@ fn call(n: Node) {
   else { lower.call-register(lower.operand(n.in(1))) }
   mach.implicit(passed, if abi.LINK >= 0 then set-bit(isa.CALLER-SAVED, abi.LINK) else isa.CALLER-SAVED)
   calls = true
-  let result = first u in users(n): u is RESULT and u.needed
-  if result != none { arrive(result, 0 - (if result.float then abi.FLOAT-RESULT else abi.RESULT) - 1) }
+  for u in users(n) {
+    if u is RESULT and u.needed {
+      let r = if u.float then abi.float-result(int(u.payload)) else abi.int-result(int(u.payload))
+      if r < 0 { panic("a call's result is numbered past the convention's result registers") }
+      arrive(u, 0 - r - 1)
+    }
+  }
+}
+
+# The end of the function: each value to the register the convention returns
+# it in, then out.
+fn returns(n: Node) {
+  var given = word(0)
+  var ints = 0
+  var floats = 0
+  for i in 1..n.arity {
+    let a = n.in(i)
+    let r = if a.float then abi.float-result(floats) else abi.int-result(ints)
+    if a.float { floats = floats + 1 } else { ints = ints + 1 }
+    if r < 0 { panic("more values are returned than the convention has registers for") }
+    widened(0 - r - 1, a)
+    given = set-bit(given, r)
+  }
+  lower.leave()
+  mach.implicit(given, word(0))
 }
 
 # A tail call: arguments as for a call, all in registers, then out of this
@@ -195,6 +218,7 @@ fn run() {
       if n is CALL { call(n) }
       else if n is SWITCH { switch(n) }
       else if n is TAILCALL { tail-call(n) }
+      else if n is RETURN { returns(n) }
       else if n is PARAM { if n.tile != 0 { param(n) } }
       else if n.tile != 0 and not lower.local?(n) { lower.emit(n, n.tile, int(n)) }
     }
