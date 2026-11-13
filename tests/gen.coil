@@ -39,7 +39,7 @@
 
 (defstruct Gen
   [(g graph/Graph) (state u64) (control i32) (env (ArrayList i32)) (type i32) (budget i64)
-   (memory u64) (rich bool) (window i64) (object i32)])
+   (memory u64) (rich bool) (window i64) (object i32) (vars (ArrayList i32))])
 
 (defn next! [(r (mut Gen))] (-> u64)
   (let [(mut x) (.state r)]
@@ -305,7 +305,7 @@
 (defn statements! [(r (mut Gen)) (depth i64)] (-> void)
   (let [count (+ 1 (below! (mut r) 6))]
     (for _ (range 0 count)
-      (let [choice (below! (mut r) (if (.rich r) 18 10))]
+      (let [choice (below! (mut r) (if (.rich r) 21 10))]
         (set! (.budget r) (- (.budget r) 1))
         (cond
           (or (< choice (if (.rich r) 5 6)) (>= depth 3) (< (.budget r) 0))
@@ -318,6 +318,13 @@
           (= choice 13) (push! (mut (.env r)) (read! (mut r)))
           (= choice 16) (if (< depth 2) (switch! (mut r) depth) (trap! (mut r)))
           (= choice 17) (trap! (mut r))
+          (= choice 18)
+            (set! (.control r)
+                  (ir/store-node! (mut (.g r)) (.control r) (get (.vars r) (below! (mut r) 3)) (pick! (mut r))))
+          (or (= choice 19) (= choice 20))
+            (let [v (ir/load-node! (mut (.g r)) (.type r) (.control r) (get (.vars r) (below! (mut r) 3)))]
+              (set! (.control r) v)
+              (push! (mut (.env r)) v))
           :else (push! (mut (.env r)) (float! (mut r))))
         ; With a window, old values fall out of scope, as locals do in real code.
         (when (and (> (.window r) 0) (= depth 0))
@@ -442,7 +449,8 @@
                   :memory memory
                   :rich rich
                   :window window
-                  :object 0)]
+                  :object 0
+                  :vars (ArrayList::new [i32] (malloc-allocator)))]
     (set! (.control r) (ir/start! (mut (.g r))))
     ; Half the rich programs have a frame object of 64 bytes, filled before use.
     (when (and rich (= (% seed 2) 0))
@@ -454,6 +462,13 @@
                                        (ir/const! (mut (.g r)) ir/T-PTR (cast u64 (* i 8))))
                               (ir/const! (mut (.g r)) ir/T-U64 (cast u64 (* (+ i 1) 1000003)))))))
     (for i (range 0 (if rich 10 4)) (push! (mut (.env r)) (ir/param! (mut (.g r)) type (cast u64 i))))
+    ; Rich programs keep three variables in frame objects of their own, written
+    ; before they are read: the kind a compiler turns into values.
+    (when rich
+      (for i (range 0 3)
+        (let [v (ir/slot! (mut (.g r)) 8)]
+          (push! (mut (.vars r)) v)
+          (set! (.control r) (ir/store-node! (mut (.g r)) (.control r) v (get (.env r) i))))))
     (statements! (mut r) 0)
     (statements! (mut r) 0)
     (while (> (.budget r) 0) (statements! (mut r) 0))

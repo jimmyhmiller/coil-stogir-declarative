@@ -499,6 +499,7 @@
 (const I-LISTS 4)
 (const I-LIST 5)
 (const I-REVERSE 6)
+(const I-EDGES 7)
 
 (defstruct Iter [(kind i64) (a (slice u8)) (b (slice u8))])
 
@@ -511,6 +512,11 @@
             (let [n (.code (expr (mut k) 0))]
               (t/expect! (mut (.c k)) ")")
               (Iter :kind I-INPUTS :a n :b "")))
+      (and (t/tok-is? tok "edges") (t/tok-is? next "("))
+        (do (t/advance! (mut (.c k))) (t/advance! (mut (.c k)))
+            (let [n (.code (expr (mut k) 0))]
+              (t/expect! (mut (.c k)) ")")
+              (Iter :kind I-EDGES :a n :b "")))
       (and (t/tok-is? tok "users") (t/tok-is? next "("))
         (do (t/advance! (mut (.c k))) (t/advance! (mut (.c k)))
             (let [n (.code (expr (mut k) 0))]
@@ -556,6 +562,15 @@
                 (t/cat3 " (range 0 (graph/arity (.g cx) " n ")) (let [")
                 (t/cat4 v " (graph/input (.g cx) " n (t/cat3 " " x ")] "))
                 (t/cat2 body ")))")))
+      ; Each use of a node, as an edge; the body may move the edge elsewhere.
+      (= (.kind it) I-EDGES)
+        (let [next (fresh (mut k) "e")]
+          (cat6 (t/cat4 "(let [(mut " x ") (graph/first-use (.g cx) " (.a it))
+                (t/cat3 ")] (while (>= " x " 0) (let [")
+                (t/cat4 v " " x " ")
+                (t/cat4 next " (graph/next-use (.g cx) " x ")] ")
+                body
+                (t/cat4 " (set! " x " " (t/cat2 next "))))"))))
       (= (.kind it) I-USERS)
         (let [next (fresh (mut k) "e")]
           (cat6 (t/cat4 "(let [(mut " x ") (graph/first-use (.g cx) " (.a it))
@@ -648,6 +663,8 @@
       (!= (.kind tok) t/T-IDENT)
         (t/die (mut (.c k)) tok (t/cat2 "expected a value, found " name))
       (local? (mut k) name) (E :code (local-name name) :kind E-LOCAL :x (local-name name) :y "")
+      ; The graph itself, for the node set's builders: `ir.phi!(mut graph, …)`.
+      (= name "graph") (value "(.g cx)")
       (= name "true") (value "true")
       (= name "false") (value "false")
       (= name "none") (value "0")
@@ -725,6 +742,14 @@
             (t/emit! (mut o) ")")
             (t/text-of (mut o)))
         (and (= name "grow-nodes") (= n 0)) "(st/grow-nodes! (mut cx))"
+        ; Editing the graph.
+        (and (= name "replace-uses") (= n 2)) (cat5 "(graph/replace-uses! (mut (.g cx)) " a " " b ")")
+        (and (= name "drop") (= n 1)) (t/cat3 "(graph/drop! (mut (.g cx)) " a ")")
+        (and (= name "set-input") (= n 3))
+          (cat6 "(graph/set-input! (mut (.g cx)) " a " " b " " (t/cat2 (get args 2) ")"))
+        ; An edge is one use of a node: who uses it, and as which input.
+        (and (= name "edge-user") (= n 1)) (t/cat3 "(graph/user (.g cx) " a ")")
+        (and (= name "edge-slot") (= n 1)) (t/cat3 "(graph/slot (.g cx) " a ")")
         :else (t/die (mut (.c k)) at (t/cat2 "no function named " name))))))
 
 ;;; What follows a value: `.name`, `.name(args)`, `[index]`.
@@ -1111,6 +1136,8 @@
                     :breaks false
                     :tmp 0)
           (mut o) (t/out-new)]
+      ; The node set is there under the name `ir`, for its builders and tables.
+      (push! (mut (.raws k)) "ir")
       (t/emit! (mut o) (depends-text d))
       (t/line! (mut o) "(import \"coil.arraylist\" :use [ArrayList])")
       (t/line! (mut o) "(import \"rt.graph\" :as graph)")

@@ -30,6 +30,9 @@
                 (t/emit! (mut o)
                          (t/cat3 " (let [(mut changed*) 1] (while (> changed* 0) (set! changed* 0)"
                                  (steps (mut p) true) "))")))
+          ; `start-over`: forget everything the passes have worked out, keeping
+          ; the graph, as after a pass that changed it.
+          (= name "start-over") (t/emit! (mut o) " (st/begin! (mut cx))")
           ; Another plan, in full.
           (>= (t/index-of (.plans p) name) 0) (t/emit! (mut o) (t/cat3 " (" name " (mut cx))"))
           :else
