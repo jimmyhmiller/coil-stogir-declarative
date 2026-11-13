@@ -22,7 +22,7 @@ mkdir -p "$to/rt" "$to/declarative"
 cp compiler/rt/*.coil "$to/rt/"
 cp adapter/*.coil "$to/declarative/"
 for unit in a64 x64; do
-  for module in unit target lower abi simplify narrow facts cfg promote forward schedule mach select atomics blocks split alloc emit plans; do
+  for module in unit target lower abi simplify narrow facts cfg promote forward schedule order mach select atomics blocks split alloc emit plans; do
     [[ -f "$to/$unit/$module.coil" ]] || { echo "expand: $unit.$module was not written" >&2; exit 1; }
   done
 done
