@@ -18,6 +18,9 @@ state saved: Word                     # the registers the caller expects back un
 state move-to: [Int]                  # moves to make together: the registers written
 state move-from: [Int]                # and read; -(slot + 1) for a value in the frame
 state code: [Word]
+state reloc-at: [Int]                  # the words that depend on a symbol's address,
+state reloc-symbol: [Int]              # the symbol,
+state reloc-op: [Int]                  # and the instruction there
 
 fn marker(r: Int) -> Int = 0 - r - 1
 
@@ -145,6 +148,13 @@ fn encoded(i: Inst, k: Int) -> Int {
   let a = mach.arg(i, k)
   if alloc.reg-kind?(kind) { return 0 - a - 1 }
   if kind == isa.K-LABEL { return id(a).final-first - int(i) }
+  # A symbol's bits are filled in when the code is given addresses.
+  if kind == isa.K-SYMBOL {
+    reloc-at.push(int(i) - final-start - 1)
+    reloc-symbol.push(a)
+    reloc-op.push(op)
+    return 0
+  }
   a
 }
 

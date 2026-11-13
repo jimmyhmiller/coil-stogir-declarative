@@ -1,0 +1,82 @@
+;;; Two functions and a helper from outside, linked in memory:
+;;;   triple(x) = x * 3 + 1
+;;;   both(x)   = triple(x) + helper(x + 1), where the address of triple is also
+;;;               taken and called through a register.
+(module tests.link)
+(import "coil.alloc" :use [malloc-allocator])
+(import "coil.arraylist" :use [ArrayList])
+(import "coil.primitive" :as primitive)
+(import "coil.cc" :as cc)
+(import "rt.graph" :as graph)
+(import "rt.image" :as image)
+(import "rt.jit" :as jit)
+(import "backend.nodes" :as ir)
+(import "backend.unit" :as st)
+(import "backend.driver" :as driver)
+(import "backend.a64" :as isa)
+
+(defn helper [(a u64)] (-> u64)
+  (primitive/isub (primitive/imul a (: 7 u64)) (: 2 u64)))
+
+(defn compile! [(im (mut image/Image)) (name (slice u8)) (g graph/Graph)] (-> void)
+  (let [problem (ir/verify g)
+        (mut cx) (st/create g (malloc-allocator))]
+    (when (!= problem "") (panic "{}: {}" name problem))
+    (st/begin! (mut cx))
+    (driver/compile (mut cx))
+    (image/add-function! (mut im) (image/symbol! (mut im) name) (.code cx) (.reloc-at cx)
+                         (.reloc-symbol cx) (.reloc-op cx))))
+
+(defn triple [] (-> graph/Graph)
+  (let [(mut g) (graph/create (malloc-allocator))
+        s (ir/start! (mut g))
+        x (ir/param! (mut g) ir/T-I64 0)
+        r (ir/add! (mut g) ir/T-I64 (ir/mul! (mut g) ir/T-I64 x (ir/const! (mut g) ir/T-I64 3))
+                   (ir/const! (mut g) ir/T-I64 1))]
+    (ir/return! (mut g) s r)
+    g))
+
+(defn both [(triple-symbol i64) (helper-symbol i64)] (-> graph/Graph)
+  (let [(mut g) (graph/create (malloc-allocator))
+        s (ir/start! (mut g))
+        x (ir/param! (mut g) ir/T-I64 0)
+        direct (ir/call-node! (mut g) s (ir/symbol! (mut g) (cast u64 triple-symbol)) 1)
+        a (ir/result! (mut g) ir/T-I64 direct)
+        outside (ir/call-node! (mut g) direct (ir/extern! (mut g) (cast u64 helper-symbol)) 1)
+        b (ir/result! (mut g) ir/T-I64 outside)
+        ; The same function again, through its address in a register.
+        pointer (ir/add! (mut g) ir/T-PTR (ir/symbol! (mut g) (cast u64 triple-symbol))
+                         (ir/sub! (mut g) ir/T-PTR (ir/trunc! (mut g) ir/T-PTR x) (ir/trunc! (mut g) ir/T-PTR x)))
+        indirect (ir/call-node! (mut g) outside pointer 1)
+        c (ir/result! (mut g) ir/T-I64 indirect)
+        sum (ir/add! (mut g) ir/T-I64 (ir/add! (mut g) ir/T-I64 a b) c)]
+    (graph/set-input! (mut g) direct 2 x)
+    (graph/set-input! (mut g) outside 2 (ir/add! (mut g) ir/T-I64 x (ir/const! (mut g) ir/T-I64 1)))
+    (graph/set-input! (mut g) indirect 2 b)
+    (ir/return! (mut g) indirect sum)
+    g))
+
+(defn expected [(x u64)] (-> u64)
+  (let [a (primitive/iadd (primitive/imul x (: 3 u64)) (: 1 u64))
+        b (helper (primitive/iadd x (: 1 u64)))
+        c (primitive/iadd (primitive/imul b (: 3 u64)) (: 1 u64))]
+    (primitive/iadd (primitive/iadd a b) c)))
+
+(defn main [] (-> i64)
+  (let [(mut im) (image/create (malloc-allocator))
+        triple-symbol (image/symbol! (mut im) "triple")
+        helper-symbol (image/symbol! (mut im) "helper")
+        both-symbol (image/symbol! (mut im) "both")
+        (mut outside) (ArrayList::new [u64] (malloc-allocator))
+        (mut failures) 0]
+    (compile! (mut im) "both" (both triple-symbol helper-symbol))
+    (compile! (mut im) "triple" (triple))
+    (for _ (range 0 (len (.names im))) (push! (mut outside) 0))
+    (set! (mut outside) helper-symbol (primitive/cast u64 (primitive/cast (ptr i8) (fnptr-of helper))))
+    (let [loaded (jit/load-image im outside (fnptr-of isa/patch))
+          f (primitive/cast (fnptr (cc/C) [u64] u64) (jit/address-of loaded both-symbol))]
+      (for x (range 0 50)
+        (when (!= (f (cast u64 (* x 977))) (expected (cast u64 (* x 977))))
+          (set! failures (+ failures 1)))))
+    (println "linked in memory: {} failures" failures)
+    (if (= failures 0) 0 1)))

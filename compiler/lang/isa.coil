@@ -35,10 +35,15 @@
   [(name (slice u8)) (kind i64) (class (slice u8)) (width i64) (signed bool)])
 
 ;;; One piece of an encoding: literal bits, or `width` bits of an operand.
-(defstruct Piece [(bits (slice u8)) (field (slice u8)) (width i64)])
+;;; `low`: the operand's bit this piece starts at, for a field written `to[20:2]`.
+(defstruct Piece [(bits (slice u8)) (field (slice u8)) (width i64) (low i64)])
 
+;;; reloc: the relocation's name, or "". formula: Coil for the value its symbol
+;;; operand takes, over s (the symbol's address), g (its table slot's) and p (the
+;;; instruction's).
 (defstruct Inst
-  [(name (slice u8)) (operands (ArrayList Operand)) (pieces (ArrayList Piece)) (line i64)])
+  [(name (slice u8)) (operands (ArrayList Operand)) (pieces (ArrayList Piece)) (line i64)
+   (reloc (slice u8)) (formula (slice u8))])
 
 (defstruct Spec
   [(word i64)
@@ -135,7 +140,9 @@
                      :name name
                      :operands (ArrayList::new [Operand] (malloc-allocator))
                      :pieces (ArrayList::new [Piece] (malloc-allocator))
-                     :line (.line at))
+                     :line (.line at)
+                     :reloc ""
+                     :formula "")
         (mut total) 0]
     (when (!= (inst-number spec name) 0) (t/die (mut c) at (t/cat2 "instruction declared twice: " name)))
     (t/expect! (mut c) "(")
@@ -147,30 +154,82 @@
     (t/expect! (mut c) ")")
     (when (> (len (.operands inst)) 5) (t/die (mut c) at "an instruction has at most five operands"))
     (t/expect! (mut c) "=")
-    (while (not (t/at-line-start? (mut c)))
+    (while (and (not (t/at-line-start? (mut c))) (not (t/at? (mut c) "reloc")))
       (let [tok (t/advance! (mut c))]
         (cond
           (= (.kind tok) t/T-NUM)
             (do (for ch (.text tok)
                   (when (and (!= ch #\0) (!= ch #\1)) (t/die (mut c) tok "literal bits are 0s and 1s")))
-                (push! (mut (.pieces inst)) (Piece :bits (.text tok) :field "" :width (len (.text tok))))
+                (push! (mut (.pieces inst)) (Piece :bits (.text tok) :field "" :width (len (.text tok)) :low 0))
                 (set! total (+ total (len (.text tok)))))
           (= (.kind tok) t/T-IDENT)
             (let [index (operand-index inst (.text tok))]
               (when (< index 0) (t/die (mut c) tok (t/cat2 "no operand named " (.text tok))))
-              (let [given (if (and (t/at? (mut c) ":") (.glued (t/peek (mut c))))
-                              (do (t/advance! (mut c)) (cast i64 (t/num! (mut c) "a width")))
-                              0)
-                    width (if (> given 0) given (.width (get (.operands inst) index)))]
-                (when (= width 0) (t/die (mut c) tok "this field needs a width: `name:bits`"))
-                (push! (mut (.pieces inst)) (Piece :bits "" :field (.text tok) :width width))
-                (set! total (+ total width))))
+              (if (and (t/at? (mut c) "[") (.glued (t/peek (mut c))))
+                  ; `to[20:2]`: bits 20 down to 2 of the operand.
+                  (do (t/advance! (mut c))
+                      (let [high (cast i64 (t/num! (mut c) "the highest bit"))]
+                        (t/expect! (mut c) ":")
+                        (let [low (cast i64 (t/num! (mut c) "the lowest bit"))]
+                          (t/expect! (mut c) "]")
+                          (push! (mut (.pieces inst))
+                                 (Piece :bits "" :field (.text tok) :width (+ (- high low) 1) :low low))
+                          (set! total (+ total (+ (- high low) 1))))))
+                  (let [given (if (and (t/at? (mut c) ":") (.glued (t/peek (mut c))))
+                                  (do (t/advance! (mut c)) (cast i64 (t/num! (mut c) "a width")))
+                                  0)
+                        width (if (> given 0) given (.width (get (.operands inst) index)))]
+                    (when (= width 0) (t/die (mut c) tok "this field needs a width: `name:bits`"))
+                    (push! (mut (.pieces inst)) (Piece :bits "" :field (.text tok) :width width :low 0))
+                    (set! total (+ total width)))))
           :else (t/die (mut c) tok (t/cat2 "unexpected in an encoding: " (.text tok))))))
     (when (!= total (.word spec))
       (t/die (mut c) at
              (t/cat4 "the encoding of " name " has " (t/cat4 (t/int-text total) " bits, the word "
                                                              (t/int-text (.word spec)) ""))))
+    (when (t/accept! (mut c) "reloc")
+      (set! (.reloc inst) (t/name! (mut c) "a relocation name"))
+      (t/expect! (mut c) "=")
+      (set! (.formula inst) (formula-expr (mut c) 0)))
     (push! (mut (.insts spec)) inst)))
+
+;;; A relocation's value: arithmetic over S, G and P, and `page(x)`.
+(defn formula-level [(op (slice u8))] (-> i64)
+  (cond (= op "&") 1
+        (or (= op "<<") (= op ">>")) 2
+        (or (= op "+") (= op "-")) 3
+        :else 0))
+
+(defn formula-primary [(c (mut t/Cur))] (-> (slice u8))
+  (let [tok (t/advance! (mut c))]
+    (cond
+      (= (.kind tok) t/T-NUM) (t/int-text (cast i64 (.value tok)))
+      (t/tok-is? tok "(")
+        (let [e (formula-expr (mut c) 0)]
+          (t/expect! (mut c) ")")
+          e)
+      (t/tok-is? tok "S") "s"
+      (t/tok-is? tok "G") "g"
+      (t/tok-is? tok "P") "p"
+      (t/tok-is? tok "page")
+        (do (t/expect! (mut c) "(")
+            (let [e (formula-expr (mut c) 0)]
+              (t/expect! (mut c) ")")
+              (t/cat3 "(& " e " -4096)")))
+      :else (t/die (mut c) tok "a relocation is arithmetic over S, G and P"))))
+
+(defn formula-expr [(c (mut t/Cur)) (min i64)] (-> (slice u8))
+  (let [(mut left) (formula-primary (mut c))
+        (mut going) true]
+    (while going
+      (let [tok (t/peek (mut c))
+            level (if (.first tok) 0 (formula-level (.text tok)))]
+        (if (and (> level 0) (> level min))
+            (do (t/advance! (mut c))
+                (let [right (formula-expr (mut c) level)]
+                  (set! left (t/cat4 (t/cat3 "(" (.text tok) " ") left " " (t/cat2 right ")")))))
+            (set! going false))))
+    left))
 
 (defn parse [(src (slice u8)) (path (slice u8))] (-> Spec)
   (let [(mut c) (t/cursor src path)
@@ -243,9 +302,9 @@
               (set! literal (| literal (<< (: 1 u64) (cast u64 (+ shift (- (- (.width piece) 1) i))))))))
           (let [mask (- (<< (: 1 u64) (cast u64 (.width piece))) 1)]
             (t/emit! (mut o)
-                     (t/cat4 " (<< (& (primitive/cast u64 "
+                     (t/cat4 " (<< (& (>> (primitive/cast u64 "
                              (arg-name (operand-index inst (.field piece)))
-                             ") "
+                             (t/cat3 ") " (t/int-text (.low piece)) ") ")
                              (t/cat4 (t/u64-text mask) ") " (t/int-text shift) ")"))))))
     (t/cat4 "(primitive/cast u32 (| " (t/u64-text literal) (t/text-of (mut o)) "))")))
 
@@ -297,6 +356,46 @@
     (t/line! (mut o) "(defn operand-count [(op i64)] (-> i64) (get COUNTS op))")
     (t/line! (mut o) "(defn operand-kind [(op i64) (i i64)] (-> i64) (get KINDS (+ (* op 5) i)))")
     (t/line! (mut o) "(defn in-set? [(set u64) (r i64)] (-> bool) (!= (& set (<< (: 1 u64) (cast u64 r))) 0))")
+    ; Relocations: a number per name, which one an instruction carries, and how
+    ; its word is finished once the addresses are known.
+    (let [(mut relocs) (ArrayList::new [(slice u8)] (malloc-allocator))]
+      (for inst (.insts spec)
+        (when (and (!= (.reloc inst) "") (< (t/index-of relocs (.reloc inst)) 0))
+          (push! (mut relocs) (.reloc inst))))
+      (t/emit! (mut o) "(def RELOC-NAMES [\"\"")
+      (for name relocs (t/emit! (mut o) (t/cat3 " \"" name "\"")))
+      (t/line! (mut o) "])")
+      (for i (range 0 (len relocs))
+        (t/line! (mut o) (t/cat4 "(const R-" (t/upper (get relocs i)) " " (t/cat2 (t/int-text (+ i 1)) ")"))))
+      (t/emit! (mut o) "(def RELOCS [0")
+      (for inst (.insts spec)
+        (t/emit! (mut o) (t/cat2 " " (t/int-text (+ (t/index-of relocs (.reloc inst)) 1)))))
+      (t/line! (mut o) "])")
+      (t/line! (mut o) "(defn reloc-name [(reloc i64)] (-> (slice u8)) (get RELOC-NAMES reloc))")
+      (t/line! (mut o) "(defn reloc-of [(op i64)] (-> i64) (get RELOCS op))")
+      (t/line! (mut o) ";;; An instruction's word with its symbol's value filled in: `s` is the symbol's")
+      (t/line! (mut o) ";;; address, `g` the address of its slot in the table of addresses, `p` the")
+      (t/line! (mut o) ";;; instruction's own.")
+      (t/line! (mut o) "(defn patch [(op i64) (word u32) (s i64) (g i64) (p i64)] (-> u32)")
+      (t/line! (mut o) "  (match op")
+      (for i (range 0 (len (.insts spec)))
+        (let [inst (get (.insts spec) i)]
+          (when (!= (.reloc inst) "")
+            (let [(mut fields) (t/out-new)
+                  (mut shift) (.word spec)]
+              (for piece (.pieces inst)
+                (set! shift (- shift (.width piece)))
+                (when (and (!= (.field piece) "")
+                           (= (.kind (get (.operands inst) (operand-index inst (.field piece)))) K-SYMBOL))
+                  (t/emit! (mut fields)
+                           (t/cat4 " (<< (& (>> (primitive/cast u64 v) " (t/int-text (.low piece)) ") "
+                                   (t/cat4 (t/u64-text (- (<< (: 1 u64) (cast u64 (.width piece))) 1)) ") "
+                                           (t/int-text shift) ")")))))
+              (t/line! (mut o)
+                       (t/cat4 "    (" (t/int-text (+ i 1)) " (let [v " 
+                               (t/cat4 (.formula inst) "] (| word (primitive/cast u32 (|"
+                                       (t/text-of (mut fields)) " (: 0 u64))))))")))))))
+      (t/line! (mut o) "    (_ word)))"))
     (t/line! (mut o) "(defn encode [(op i64) (a i64) (b i64) (c i64) (d i64) (e i64)] (-> u32)")
     (t/line! (mut o) "  (match op")
     (for i (range 0 (len (.insts spec)))

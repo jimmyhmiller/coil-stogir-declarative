@@ -5,6 +5,7 @@
 (import "coil.cc" :as cc)
 (import "coil.os" :as os)
 (import "coil.arraylist" :use [ArrayList])
+(import "rt.image" :as image)
 
 (extern rt.jit.mmap :as "mmap" :cc (cc/C) [(ptr u8) i64 i32 i32 i32 i64] (-> (ptr u8)))
 (extern rt.jit.mprotect :as "mprotect" :cc (cc/C) [(ptr u8) i64 i32] (-> i32))
@@ -41,3 +42,57 @@
 (defn release! [(code Mapped)] (-> void)
   (rt.jit.munmap (.base code) (.size code))
   (do))
+
+;;; An image linked into this process. Its code is followed by a table with one
+;;; address per symbol, for code that reaches a symbol through the table.
+(defstruct Loaded [(base (ptr u8)) (size i64) (im image/Image)])
+
+(defn write32! [(base (ptr u8)) (i i64) (w u32)] (-> void)
+  (set! (index base (* i 4)) (primitive/cast u8 (& w 255)))
+  (set! (index base (+ (* i 4) 1)) (primitive/cast u8 (& (>> w 8) 255)))
+  (set! (index base (+ (* i 4) 2)) (primitive/cast u8 (& (>> w 16) 255)))
+  (set! (index base (+ (* i 4) 3)) (primitive/cast u8 (& (>> w 24) 255))))
+
+;;; Give an image addresses and make it runnable. `outside` has the address of
+;;; each symbol the image does not define, by symbol number. `patch` is the
+;;; target's: an instruction's word finished with its symbol's address, the
+;;; address of the symbol's table slot and its own address.
+(defn load-image [(im image/Image) (outside (ArrayList u64))
+                  (patch (fnptr (cc/C) [i64 u32 i64 i64 i64] u32))] (-> Loaded)
+  (let [words (len (.words im))
+        table (* 8 (/ (+ (* words 4) 7) 8))
+        length (+ table (* 8 (len (.names im))))
+        page (cast i64 (rt.jit.pagesize))
+        size (* (/ (+ (if (= length 0) 1 length) (- page 1)) page) page)
+        base (rt.jit.mmap (primitive/cast (ptr u8) 0) size 3 (os/os-pick 0x22 0x1002 0) -1 0)
+        here (primitive/cast i64 base)]
+    (when (= here -1) (panic "cannot map memory for code"))
+    (for i (range 0 words) (write32! base i (get (.words im) i)))
+    (for s (range 0 (len (.names im)))
+      (let [at (get (.defined im) s)
+            address (if (>= at 0)
+                        (primitive/cast u64 (+ here (* at 4)))
+                        (if (< s (len outside)) (get outside s) (: 0 u64)))]
+        (when (= address 0) (panic "undefined symbol {}" (get (.names im) s)))
+        (for b (range 0 8)
+          (set! (index base (+ table (+ (* s 8) b)))
+                (primitive/cast u8 (& (>> address (cast u64 (* b 8))) 255))))))
+    (for i (range 0 (len (.reloc-at im)))
+      (let [at (get (.reloc-at im) i)
+            s (get (.reloc-symbol im) i)
+            defined (get (.defined im) s)
+            address (if (>= defined 0)
+                        (+ here (* defined 4))
+                        (primitive/cast i64 (get outside s)))]
+        (write32! base at
+                  (patch (get (.reloc-op im) i) (get (.words im) at) address
+                         (+ here (+ table (* s 8))) (+ here (* at 4))))))
+    (when (!= (rt.jit.mprotect base size 5) 0) (panic "cannot make code executable"))
+    (os/os-pick (rt.jit.clear-cache base (primitive/index base length))
+                (rt.jit.invalidate base length)
+                (do))
+    (Loaded :base base :size size :im im)))
+
+;;; Where a symbol the image defines was put.
+(defn address-of [(loaded Loaded) (symbol i64)] (-> (ptr u8))
+  (primitive/index (.base loaded) (* 4 (get (.defined (.im loaded)) symbol))))

@@ -69,6 +69,13 @@ inst b-cond(cond: u4, to: label)                          = 01010100 to:19 0 con
 inst cbz(sf: u1, rt: use gpr, to: label)                  = sf 0110100 to:19 rt
 inst cbnz(sf: u1, rt: use gpr, to: label)                 = sf 0110101 to:19 rt
 inst ret(rn: use gpr)                                     = 1101011001011111000000 rn 00000
+# Symbols. S is the symbol's address, G the address of its slot in the table of
+# addresses, P the instruction's own.
+inst bl(to: symbol)                                       = 100101 to:26                  reloc branch26 = (S - P) >> 2
+inst adrp(rd: def gpr, to: symbol)                        = 1 to[1:0] 10000 to[20:2] rd   reloc page21 = (page(S) - page(P)) >> 12
+inst add-symbol(rd: def gpr, rn: use gpr, to: symbol)     = 1 0 0 100010 0 to:12 rn rd    reloc pageoff12 = S & 4095
+inst adrp-got(rd: def gpr, to: symbol)                    = 1 to[1:0] 10000 to[20:2] rd   reloc got-page21 = (page(G) - page(P)) >> 12
+inst ldr-got(rt: def gpr, rn: use gpr, to: symbol)        = 1111100101 to:12 rn rt        reloc got-pageoff12 = (G & 4095) >> 3
 inst blr(rn: use gpr)                                     = 1101011000111111000000 rn 00000
 
 # Memory at a base plus an offset counted in units of the access's width.

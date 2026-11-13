@@ -7,6 +7,8 @@ emit backend.mach
 # A constant is built again in each block that needs it in a register.
 local CONST
 local SLOT
+local SYMBOL
+local EXTERN
 
 # What the allocator and the emitter ask for by name.
 template move(d, s)        = orr(1, d, zr, s)
@@ -19,6 +21,7 @@ template shrink-stack(n)   = add-imm(1, sp, sp, n)
 template grow-pages(n)     = sub-imm-hi(1, sp, sp, n)
 template shrink-pages(n)   = add-imm-hi(1, sp, sp, n)
 template call-register(f)  = blr(f)
+template call-symbol(s)    = bl(s)
 
 # A value narrower than 32 bits has no promise about the bits above it. These
 # make a copy with those bits filled, for the instructions that read them.
@@ -42,6 +45,11 @@ rule PARAM   => nothing
 
 # A frame object's address: so far below the frame record.
 rule SLOT when object < 4096     => sub-imm(1, out, x29, object)
+
+# The address of something in this image, and of something outside it, which
+# is read from the table of addresses.
+rule SYMBOL s                    => adrp(out, s) ; add-symbol(out, out, s)
+rule EXTERN s                    => adrp-got(out, s) ; ldr-got(out, out, s)
 rule RETURN(_, v)                => orr(1, x0, zr, ex(v)) ; ret(x30)
 
 # Constants, by how many sixteen-bit pieces they need.

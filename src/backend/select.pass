@@ -46,7 +46,9 @@ fn call(n: Node) {
       out-slots = max(out-slots, k - abi.INT-ARGS + 1)
     }
   }
-  lower.call-register(lower.operand(n.in(1)))
+  # Something in the same image is called where it is; anything else through a register.
+  if n.in(1) is SYMBOL { lower.call-symbol(int(n.in(1).payload)) }
+  else { lower.call-register(lower.operand(n.in(1))) }
   mach.implicit(passed, set-bit(isa.CALLER-SAVED, abi.LINK))
   calls = true
   let result = first u in users(n): u is RESULT and u.needed
