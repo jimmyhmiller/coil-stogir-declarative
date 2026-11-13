@@ -28,7 +28,7 @@
     (st/begin! (mut cx))
     (plans/default (mut cx))
     (image/add-function! (mut im) (image/symbol! (mut im) name) (.code cx) (.reloc-at cx)
-                         (.reloc-symbol cx) (.reloc-op cx))))
+                         (.reloc-symbol cx) (.reloc-op cx) isa/ALIGN)))
 
 (defn triple [] (-> graph/Graph)
   (let [(mut g) (graph/create (malloc-allocator))

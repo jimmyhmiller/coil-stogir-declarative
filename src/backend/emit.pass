@@ -17,7 +17,9 @@ state frame: Int                      # bytes of frame, a multiple of 16
 state saved: Word                     # the registers the caller expects back unchanged
 state move-to: [Int]                  # moves to make together: the registers written
 state move-from: [Int]                # and read; -(slot + 1) for a value in the frame
-state code: [Word]
+column offset: Inst -> Int             # a final instruction's place in the code, in bytes
+state code: [Byte]
+state code-bytes: Int
 state reloc-at: [Int]                  # the words that depend on a symbol's address,
 state reloc-symbol: [Int]              # the symbol,
 state reloc-op: [Int]                  # and the instruction there
@@ -157,21 +159,50 @@ fn rewrite(i: Inst, next: Int) {
   for k in 0..5 { finish(i, k) }
 }
 
-fn encoded(i: Inst, k: Int) -> Int {
+# Where a block's code starts, in bytes.
+fn block-offset(b: Block) -> Int =
+  if b.final-first > Inst.count then code-bytes else id(b.final-first).offset
+
+# Operand `k` of a final instruction as its encoding wants it. A register is
+# its number; a label the distance from the instruction, known once every
+# instruction has its place; a symbol nothing yet.
+fn encoded(i: Inst, k: Int, placed: Bool) -> Int {
   let op = i.inst-op
   if k >= isa.operand-count(op) { return 0 }
   let kind = isa.operand-kind(op, k)
   let a = mach.arg(i, k)
   if alloc.reg-kind?(kind) { return 0 - a - 1 }
-  if kind == isa.K-LABEL { return id(a).final-first - int(i) }
-  # A symbol's bits are filled in when the code is given addresses.
-  if kind == isa.K-SYMBOL {
-    reloc-at.push(int(i) - final-start - 1)
-    reloc-symbol.push(a)
-    reloc-op.push(op)
-    return 0
-  }
+  if kind == isa.K-LABEL { return if placed then block-offset(id(a)) - i.offset else 0 }
+  if kind == isa.K-SYMBOL { return 0 }
   a
+}
+
+# The symbol a final instruction names, if any operand is one.
+fn symbol-of(i: Inst) -> Int {
+  let op = i.inst-op
+  for k in 0..isa.operand-count(op) {
+    if isa.operand-kind(op, k) == isa.K-SYMBOL { return mach.arg(i, k) }
+  }
+  0
+}
+
+# Every final instruction gets its place, then its bytes.
+fn encode() {
+  for at in final-start + 1..Inst.count + 1 {
+    let i = id(at)
+    i.offset = code-bytes
+    code-bytes = code-bytes + isa.size(i.inst-op, encoded(i, 0, false), encoded(i, 1, false), encoded(i, 2, false), encoded(i, 3, false), encoded(i, 4, false))
+  }
+  for at in final-start + 1..Inst.count + 1 {
+    let i = id(at)
+    let field = isa.encode!(mut code, i.inst-op, encoded(i, 0, true), encoded(i, 1, true), encoded(i, 2, true), encoded(i, 3, true), encoded(i, 4, true))
+    # A symbol's bits are filled in when the code is given addresses.
+    if field >= 0 {
+      reloc-at.push(i.offset + field)
+      reloc-symbol.push(symbol-of(i))
+      reloc-op.push(i.inst-op)
+    }
+  }
 }
 
 # The frame, from the stack pointer up: arguments for calls, values that have
@@ -249,8 +280,5 @@ fn run() {
   }
   # The entry block's code starts at the frame's opening.
   order[0].final-first = final-start + 1
-  for at in final-start + 1..Inst.count + 1 {
-    let i = id(at)
-    code.push(word(isa.encode(i.inst-op, encoded(i, 0), encoded(i, 1), encoded(i, 2), encoded(i, 3), encoded(i, 4))))
-  }
+  encode()
 }

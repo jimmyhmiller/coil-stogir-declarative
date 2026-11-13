@@ -106,13 +106,13 @@
                     (= what "undefined") "(- (len (.names im)) defined-count)"
                     (= what "relocs") "(len (.reloc-at im))"
                     :else (t/die (mut (.c y)) tok "count takes symbols, defined, undefined or relocs"))))
-      (= name "words") "(len (.words im))"
+      (= name "bytes") "(len (.code im))"
       ; A symbol in a repetition: `s.defined`, `s.value`, `s.number`, `s.strx`.
       (>= (t/index-of (.symbol-vars y) name) 0)
         (do (t/expect! (mut (.c y)) ".")
             (let [field (t/name! (mut (.c y)) "a symbol's field")]
               (cond (= field "defined") (t/cat3 "(>= (get (.defined im) " name ") 0)")
-                    (= field "value") (t/cat3 "(* 4 (get (.defined im) " name "))")
+                    (= field "value") (t/cat3 "(get (.defined im) " name ")")
                     (= field "number") (t/cat3 "(get numbers " name ")")
                     (= field "strx") (t/cat3 "(get strx " name ")")
                     :else (t/die (mut (.c y)) tok "a symbol has defined, value, number and strx"))))
@@ -170,7 +170,7 @@
               ; A symbol's name is written with the file's prefix.
               (when (!= (.kind what) t/T-STR) (t/emit! (mut o) " (bytes/text! (mut out) PREFIX 0)"))
               (t/emit! (mut o) (t/cat4 " (bytes/text! (mut out) " source " " (t/cat2 pad ")"))))
-          (= name "code") (t/emit! (mut o) " (for w (.words im) (bytes/u32! (mut out) (cast i64 w)))")
+          (= name "code") (t/emit! (mut o) " (for b (.code im) (push! (mut out) b))")
           (= name "align")
             (t/emit! (mut o) (t/cat3 " (bytes/align! (mut out) " (expr (mut y) 0) ")"))
           (= name "each")

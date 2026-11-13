@@ -96,6 +96,7 @@
   (cond (= type "Int") "i64"
         (= type "Bool") "bool"
         (= type "Word") "u64"
+        (= type "Byte") "u8"
         (= type "Void") "void"
         (entity? d type) "i32"
         (list-type? type) (t/cat3 "(ArrayList " (coil-type d (element-type type) prefix) ")")
@@ -114,7 +115,7 @@
 ;;; A type names something declared: checked once every declaration is read.
 (defn check-type! [(d Decls) (type (slice u8)) (path (slice u8)) (what (slice u8))] (-> void)
   (let [base (if (list-type? type) (element-type type) type)]
-    (unless (or (= base "Int") (= base "Bool") (= base "Word") (= base "Void")
+    (unless (or (= base "Int") (= base "Bool") (= base "Word") (= base "Byte") (= base "Void")
                 (entity? d base) (record? d base))
       (t/fail-at path 1 1 (t/cat4 what ": no type named " base "")))))
 
@@ -296,6 +297,7 @@
   (cond (= type "Int") "0"
         (= type "Bool") "false"
         (= type "Word") "(: 0 u64)"
+        (= type "Byte") "(: 0 u8)"
         (entity? d type) "(: 0 i32)"
         (list-type? type)
           (t/cat3 "(ArrayList::new [" (coil-type d (element-type type) "") "] a)")
@@ -473,11 +475,17 @@
       (t/die (mut (.c k)) at (t/cat2 "too few arguments to " (.name f))))
     (t/text-of (mut o))))
 
+;;; One argument to a function outside the passes: `mut xs` lends the list itself.
+(defn plain-arg [(k (mut K))] (-> (slice u8))
+  (if (t/accept! (mut (.c k)) "mut")
+      (t/cat3 "(mut " (.code (expr (mut k) 0)) ")")
+      (.code (expr (mut k) 0))))
+
 (defn plain-args [(k (mut K))] (-> (ArrayList (slice u8)))
   (let [(mut args) (ArrayList::new [(slice u8)] (malloc-allocator))]
     (unless (t/at? (mut (.c k)) ")")
-      (push! (mut args) (.code (expr (mut k) 0)))
-      (while (t/accept! (mut (.c k)) ",") (push! (mut args) (.code (expr (mut k) 0)))))
+      (push! (mut args) (plain-arg (mut k)))
+      (while (t/accept! (mut (.c k)) ",") (push! (mut args) (plain-arg (mut k)))))
     (t/expect! (mut (.c k)) ")")
     args))
 

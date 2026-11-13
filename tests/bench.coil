@@ -49,7 +49,7 @@
         (st/begin! (mut cx))
         (plans/default (mut cx))
         (set! nodes (+ nodes (graph/size (.g cx))))
-        (set! words (+ words (len (.code cx))))
+        (set! words (+ words (/ (len (.code cx)) 4)))
         (when (> (cast i64 argc) 4)
           (for at (range (+ (.final-start cx) 1) (+ (cast i64 (.inst-count cx)) 1))
             (let [op (get (.inst-op cx) at)]

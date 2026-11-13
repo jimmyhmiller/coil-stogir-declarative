@@ -1,14 +1,14 @@
-;;; Compiled code before it has addresses: instruction words, symbols by name,
-;;; and the places whose words depend on where a symbol ends up. A JIT gives it
-;;; addresses in memory; an object file writes it down for a linker.
+;;; Compiled code before it has addresses: its bytes, symbols by name, and the
+;;; places whose bits depend on where a symbol ends up. A JIT gives it addresses
+;;; in memory; an object file writes it down for a linker.
 (module rt.image)
 (import "coil.alloc" :use [Allocator])
 (import "coil.arraylist" :use [ArrayList])
 
-;;; defined: the word a symbol's code starts at, or -1 for one from outside.
-;;; A relocation is the word it changes, the symbol, and the instruction there.
+;;; defined: the byte a symbol's code starts at, or -1 for one from outside.
+;;; A relocation is the byte it changes from, the symbol, and the instruction there.
 (defstruct Image
-  [(words (ArrayList u32))
+  [(code (ArrayList u8))
    (names (ArrayList (slice u8)))
    (defined (ArrayList i64))
    (reloc-at (ArrayList i64))
@@ -17,7 +17,7 @@
 
 (defn create [(a (dyn Allocator))] (-> Image)
   (Image
-    :words (ArrayList::new [u32] a)
+    :code (ArrayList::new [u8] a)
     :names (ArrayList::new [(slice u8)] a)
     :defined (ArrayList::new [i64] a)
     :reloc-at (ArrayList::new [i64] a)
@@ -35,13 +35,15 @@
       (set! found (- (len (.names im)) 1)))
     found))
 
-;;; A function's code, as the symbol `symbol`: `at`, `symbols` and `ops` are its
-;;; relocations, counted in words from its start.
-(defn add-function! [(im (mut Image)) (symbol i64) (code (ArrayList u64)) (at (ArrayList i64))
-                     (symbols (ArrayList i64)) (ops (ArrayList i64))] (-> void)
-  (let [base (len (.words im))]
+;;; A function's code, as the symbol `symbol`, starting at a multiple of
+;;; `align` bytes: `at`, `symbols` and `ops` are its relocations, counted in
+;;; bytes from its start.
+(defn add-function! [(im (mut Image)) (symbol i64) (code (ArrayList u8)) (at (ArrayList i64))
+                     (symbols (ArrayList i64)) (ops (ArrayList i64)) (align i64)] (-> void)
+  (while (!= (% (len (.code im)) align) 0) (push! (mut (.code im)) (: 0 u8)))
+  (let [base (len (.code im))]
     (set! (mut (.defined im)) symbol base)
-    (for w code (push! (mut (.words im)) (cast u32 (& w (: 0xFFFFFFFF u64)))))
+    (for b code (push! (mut (.code im)) b))
     (for i (range 0 (len at))
       (push! (mut (.reloc-at im)) (+ base (get at i)))
       (push! (mut (.reloc-symbol im)) (get symbols i))

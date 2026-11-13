@@ -46,7 +46,7 @@ block code { code }
 # to the instruction, four bytes wide, by symbol, and which kind.
 block relocs {
   each r in relocs {
-    u32 r.at * 4
+    u32 r.at
     u32 r.symbol.number | r.kind(branch26: 1, page21: 1, got-page21: 1, else 0) << 24 | 2 << 25 | 1 << 27 | r.kind(branch26: 2, page21: 3, pageoff12: 4, got-page21: 5, got-pageoff12: 6) << 28
   }
 }

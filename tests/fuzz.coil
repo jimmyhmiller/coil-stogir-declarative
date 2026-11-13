@@ -57,12 +57,14 @@
       (plans/default (mut cx))
       (when show
         (ir/dump (.g cx))
-        (for w (.code cx) (println "{:08x}" w)))
+        (for i (range 0 (/ (len (.code cx)) 4))
+          (println "{:02x}{:02x}{:02x}{:02x}" (get (.code cx) (+ (* i 4) 3)) (get (.code cx) (+ (* i 4) 2))
+                   (get (.code cx) (+ (* i 4) 1)) (get (.code cx) (* i 4)))))
       (when (> (.slots cx) 0) (set! (.spilled stats) (+ (.spilled stats) 1)))
       (set! (.slots stats) (+ (.slots stats) (.slots cx)))
-      (set! (.words stats) (+ (.words stats) (len (.code cx))))
+      (set! (.words stats) (+ (.words stats) (/ (len (.code cx)) 4)))
       (set! (.nodes stats) (+ (.nodes stats) (graph/size (.g cx))))
-      (let [code (jit/map-words (.code cx))
+      (let [code (jit/map-bytes (.code cx))
             f (primitive/cast (fnptr (cc/C) [u64 u64 u64 u64 u64 u64 u64 u64 u64 u64] u64) (.base code))
             mask (if (>= bits 64) (: 0xFFFFFFFFFFFFFFFF u64) (- (<< (: 1 u64) (cast u64 bits)) 1))]
         (for round (range 0 3)

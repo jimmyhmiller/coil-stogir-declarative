@@ -86,11 +86,12 @@ inst movz(sf: u1, rd: def gpr, imm: u16, hw: u2)          = sf 10 100101 hw imm 
 inst movn(sf: u1, rd: def gpr, imm: u16, hw: u2)          = sf 00 100101 hw imm rd
 inst movk(sf: u1, rd: mod gpr, imm: u16, hw: u2)          = sf 11 100101 hw imm rd
 
-# Control. A label field holds the distance in instructions.
-inst b(to: label)                                         = 000101 to:26
-inst b-cond(cond: u4, to: label)                          = 01010100 to:19 0 cond
-inst cbz(sf: u1, rt: use gpr, to: label)                  = sf 0110100 to:19 rt
-inst cbnz(sf: u1, rt: use gpr, to: label)                 = sf 0110101 to:19 rt
+# Control. A label is a distance in bytes, of which a field holds all but the
+# two low bits, which are always zero.
+inst b(to: label)                                         = 000101 to[27:2]
+inst b-cond(cond: u4, to: label)                          = 01010100 to[20:2] 0 cond
+inst cbz(sf: u1, rt: use gpr, to: label)                  = sf 0110100 to[20:2] rt
+inst cbnz(sf: u1, rt: use gpr, to: label)                 = sf 0110101 to[20:2] rt
 inst ret(rn: use gpr)                                     = 1101011001011111000000 rn 00000
 # Symbols. S is the symbol's address, G the address of its slot in the table of
 # addresses, P the instruction's own.
