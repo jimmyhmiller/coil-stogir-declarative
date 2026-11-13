@@ -23,6 +23,9 @@ template to-frame-float(s, slot)  = storef(1, s, rsp, slot * 8)
 template grow-stack(n)            = sub-imm(1, rsp, n)
 template shrink-stack(n)          = add-imm(1, rsp, n)
 template frame-record(n)          = lea(rbp, rsp, n)
+# Go to `to` if register v holds k; `w` is 1 to compare all 64 bits.
+template branch-if-equal(w, v, k, to) when s32(k) = cmp-imm(w, v, k) ; jcc(equal, to)
+template branch-if-equal(w, v, k, to)             = mov-imm64($t, k) ; cmp(w, v, $t) ; jcc(equal, to)
 template call-register(f)         = call-reg(f)
 template call-symbol(s)           = call(s)
 
@@ -41,6 +44,10 @@ rule LOOP    => nothing
 rule TRUE    => nothing
 rule FALSE   => nothing
 rule PHI     => nothing
+rule SWITCH  => nothing
+rule CASE    => nothing
+rule DEFAULT => nothing
+rule TRAP    => ud2()
 rule CALL    => nothing
 rule RESULT  => nothing
 rule PARAM   => nothing

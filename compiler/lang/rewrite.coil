@@ -85,6 +85,11 @@
     :else
       (do (unless root
             (t/emit! (mut tests) (t/cat4 " (= (graph/op (.g cx) " at ") ir/" (t/cat2 (.node p) ")"))))
+          ; A node with any number of operands matches only with as many as the pattern has.
+          (when (and (> (len (.kids p)) 0)
+                     (ir/variadic? (get (.nodes (.nodes r)) (- (ir/node-number (.nodes r) (.node p)) 1))))
+            (t/emit! (mut tests)
+                     (t/cat4 " (= (graph/arity (.g cx) " at ") " (t/cat2 (t/int-text (len (.kids p))) ")"))))
           (when (.literal p)
             (t/emit! (mut tests) (t/cat4 " (= (payload-value (mut cx) " at ") " (t/cat2 (t/int-text (.value p)) ")"))))
           (when (!= (.payload p) "")

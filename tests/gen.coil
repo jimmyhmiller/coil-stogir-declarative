@@ -305,7 +305,7 @@
 (defn statements! [(r (mut Gen)) (depth i64)] (-> void)
   (let [count (+ 1 (below! (mut r) 6))]
     (for _ (range 0 count)
-      (let [choice (below! (mut r) (if (.rich r) 16 10))]
+      (let [choice (below! (mut r) (if (.rich r) 18 10))]
         (set! (.budget r) (- (.budget r) 1))
         (cond
           (or (< choice (if (.rich r) 5 6)) (>= depth 3) (< (.budget r) 0))
@@ -316,6 +316,8 @@
           (< choice 12) (push! (mut (.env r)) (narrow! (mut r)))
           (= choice 12) (write! (mut r))
           (= choice 13) (push! (mut (.env r)) (read! (mut r)))
+          (= choice 16) (if (< depth 2) (switch! (mut r) depth) (trap! (mut r)))
+          (= choice 17) (trap! (mut r))
           :else (push! (mut (.env r)) (float! (mut r))))
         ; With a window, old values fall out of scope, as locals do in real code.
         (when (and (> (.window r) 0) (= depth 0))
@@ -354,6 +356,36 @@
         (push! (mut (.env r)) pa)
         (push! (mut (.env r)) pb)
         (set! (.control r) region)))))
+
+;;; switch (v & 7) { case 0: … case 3: … case 5: … default: … }, then a phi.
+(defn switch! [(r (mut Gen)) (depth i64)] (-> void)
+  (let [t (.type r)
+        selector (ir/and! (mut (.g r)) t (pick! (mut r)) (ir/const! (mut (.g r)) t 7))
+        node (ir/switch! (mut (.g r)) (.control r) selector)
+        base (len (.env r))
+        region (ir/region! (mut (.g r)) 4)
+        merged (ir/phi! (mut (.g r)) t region 4)]
+    (for arm (range 0 4)
+      (set! (.control r)
+            (cond (= arm 0) (ir/case! (mut (.g r)) 0 node)
+                  (= arm 1) (ir/case! (mut (.g r)) 3 node)
+                  (= arm 2) (ir/case! (mut (.g r)) 5 node)
+                  :else (ir/default! (mut (.g r)) node)))
+      (statements! (mut r) (+ depth 1))
+      (graph/set-input! (mut (.g r)) region arm (.control r))
+      (graph/set-input! (mut (.g r)) merged (+ arm 1) (pick! (mut r)))
+      (while (> (len (.env r)) base) (pop! (mut (.env r)))))
+    (push! (mut (.env r)) merged)
+    (set! (.control r) region)))
+
+;;; A trap on a path that is never taken: a value's low bit is never 2.
+(defn trap! [(r (mut Gen))] (-> void)
+  (let [t (.type r)
+        never (ir/eq! (mut (.g r)) (ir/and! (mut (.g r)) t (pick! (mut r)) (ir/const! (mut (.g r)) t 1))
+                      (ir/const! (mut (.g r)) t 2))
+        branch (ir/if! (mut (.g r)) (.control r) never)]
+    (ir/trap! (mut (.g r)) (ir/true! (mut (.g r)) branch))
+    (set! (.control r) (ir/false! (mut (.g r)) branch))))
 
 ;;; for (i = 0; i < small; i++) { … }, with two values carried round.
 (defn counted-loop! [(r (mut Gen)) (depth i64)] (-> void)

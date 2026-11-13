@@ -34,6 +34,10 @@
 (const ROLE-OBJECT 15)
 (const ROLE-SYMBOL 16)
 (const ROLE-EXTERN 17)
+(const ROLE-TRAP 18)
+(const ROLE-SWITCH 19)
+(const ROLE-CASE 20)
+(const ROLE-DEFAULT 21)
 
 (defstruct Graph
   [(ops (ArrayList u16))

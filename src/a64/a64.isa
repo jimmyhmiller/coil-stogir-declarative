@@ -92,6 +92,7 @@ inst b(to: label)                                         = 000101 to[27:2]
 inst b-cond(cond: u4, to: label)                          = 01010100 to[20:2] 0 cond
 inst cbz(sf: u1, rt: use gpr, to: label)                  = sf 0110100 to[20:2] rt
 inst cbnz(sf: u1, rt: use gpr, to: label)                 = sf 0110101 to[20:2] rt
+inst brk(imm: u16)                                        = 11010100001 imm 00000
 inst ret(rn: use gpr)                                     = 1101011001011111000000 rn 00000
 # Symbols. S is the symbol's address, G the address of its slot in the table of
 # addresses, P the instruction's own.

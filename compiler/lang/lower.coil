@@ -369,9 +369,14 @@
                                    (= kind "return") " (mach/mark-return (mut cx))"
                                    (= kind "") ""
                                    :else (t/die (mut (.c l)) tok "a template is copy, jump or return"))]
-                    (set! (mut template-cases) index
-                          (t/cat4 (get template-cases index) "    " guard
-                                  (t/cat4 " (do" body mark " (do))\n"))))))
+                    ; A template's `$t` is a new virtual register each time it is used.
+                    (let [(mut fresh) (t/out-new)]
+                      (for temp (.temps l)
+                        (t/emit! (mut fresh) (t/cat3 "t*" temp " (mach/fresh (mut cx)) ")))
+                      (set! (mut template-cases) index
+                            (t/cat4 (get template-cases index) "    " guard
+                                    (t/cat4 " (let [" (t/text-of (mut fresh)) "] (do"
+                                            (t/cat3 body mark " (do)))\n"))))))))
             (t/tok-is? tok "rule")
               (let [pattern (parse-pattern (mut l))
                     commutative (and (!= (.node pattern) "")

@@ -66,6 +66,10 @@
         (= role "object") 15
         (= role "symbol") 16
         (= role "extern") 17
+        (= role "trap") 18
+        (= role "switch") 19
+        (= role "case") 20
+        (= role "default") 21
         :else -1))
 
 ;;; A type's number; 0 is "no type". Numbers follow declaration order from 1.
@@ -96,7 +100,8 @@
 ;;; A node in the flow of control: one whose type is control, a load, which
 ;;; sits in the control chain and is also its value, and a return, which ends it.
 (defn control-node? [(spec Spec) (node Node)] (-> bool)
-  (or (control-type? spec (.result node)) (= (.role node) "load") (= (.role node) "return")))
+  (or (control-type? spec (.result node)) (= (.role node) "load") (= (.role node) "return")
+      (= (.role node) "trap")))
 
 (defn fixed-count [(node Node)] (-> i64)
   (let [(mut k) 0]
@@ -735,6 +740,19 @@
   (t/line! (mut o) "                      (type-bits (graph/ty g (graph/input g n 2)))")
   (t/line! (mut o) "                      (value g (mut it) args (graph/input g n 2)))")
   (t/line! (mut o) "      :else (do))))")
+  (t/line! (mut o) ";;; The control node that follows `c` inside its block: a branch, a switch, a")
+  (t/line! (mut o) ";;; return, a trap, a call, a load or a store.")
+  (t/line! (mut o) "(defn next-in-chain [(g graph/Graph) (c i32)] (-> i32)")
+  (t/line! (mut o) "  (let [(mut found) (: 0 i32)")
+  (t/line! (mut o) "        (mut e) (graph/first-use g c)]")
+  (t/line! (mut o) "    (while (>= e 0)")
+  (t/line! (mut o) "      (let [u (graph/user g e)")
+  (t/line! (mut o) "            r (get ROLES (cast i64 (graph/op g u)))]")
+  (t/line! (mut o) "        (when (and (= (graph/input g u 0) c)")
+  (t/line! (mut o) "                   (or (= r 5) (= r 2) (= r 11) (= r 13) (= r 14) (= r 18) (= r 19)))")
+  (t/line! (mut o) "          (set! found u)))")
+  (t/line! (mut o) "      (set! e (graph/next-use g e)))")
+  (t/line! (mut o) "    found))")
   (t/line! (mut o) ";;; The graph's result for these arguments, or None if it has not returned")
   (t/line! (mut o) ";;; within `limit` control steps.")
   (t/line! (mut o) "(defn interpret [(g graph/Graph) (args (slice u64)) (limit i64)] (-> (Option u64))")
@@ -760,12 +778,25 @@
   (t/line! (mut o) "          (= r 2)")
   (t/line! (mut o) "            (do (set! result (Some (value g (mut it) args (graph/input g c 1))))")
   (t/line! (mut o) "                (set! running false))")
+  (t/line! (mut o) "          ; A trap ends the run with no result.")
+  (t/line! (mut o) "          (= r 18) (set! running false)")
+  (t/line! (mut o) "          ; A switch goes to the case with its value, or to its default.")
+  (t/line! (mut o) "          (= r 19)")
+  (t/line! (mut o) "            (let [v (value g (mut it) args (graph/input g c 1))")
+  (t/line! (mut o) "                  (mut to) (: 0 i32)")
+  (t/line! (mut o) "                  (mut otherwise) (: 0 i32)")
+  (t/line! (mut o) "                  (mut e) (graph/first-use g c)]")
+  (t/line! (mut o) "              (while (>= e 0)")
+  (t/line! (mut o) "                (let [u (graph/user g e)")
+  (t/line! (mut o) "                      ur (get ROLES (cast i64 (graph/op g u)))]")
+  (t/line! (mut o) "                  (when (and (= ur 20) (= (graph/payload g u) v)) (set! to u))")
+  (t/line! (mut o) "                  (when (= ur 21) (set! otherwise u)))")
+  (t/line! (mut o) "                (set! e (graph/next-use g e)))")
+  (t/line! (mut o) "              (set! c (if (!= to 0) to otherwise)))")
   (t/line! (mut o) "          (= r 5)")
   (t/line! (mut o) "            (set! c (follower g c (if (!= (value g (mut it) args (graph/input g c 1)) 0) 6 7)))")
   (t/line! (mut o) "          :else")
-  (t/line! (mut o) "            (let [next (let [a (follower g c 5) b (follower g c 2) d (follower g c 11)")
-  (t/line! (mut o) "                             e (follower g c 13) f (follower g c 14)]")
-  (t/line! (mut o) "                         (cond (!= a 0) a (!= b 0) b (!= d 0) d (!= e 0) e :else f))]")
+  (t/line! (mut o) "            (let [next (next-in-chain g c)]")
   (t/line! (mut o) "              (if (!= next 0)")
   (t/line! (mut o) "                  (do (set! c next)")
   (t/line! (mut o) "                      (effect! g (mut it) args next))")

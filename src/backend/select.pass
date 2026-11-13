@@ -15,7 +15,7 @@ fn choose(n: Node) {
   }
   n.tile = rule
   lower.mark(n, rule)
-  if n is PHI or n is CALL { for i in 1..n.arity { mach.need(n.in(i)) } }
+  if n is PHI or n is CALL or n is SWITCH { for i in 1..n.arity { mach.need(n.in(i)) } }
 }
 
 # An argument's value into register `d`. The convention wants an integer
@@ -63,6 +63,17 @@ fn call(n: Node) {
   calls = true
   let result = first u in users(n): u is RESULT and u.needed
   if result != none { arrive(result, 0 - (if result.float then abi.FLOAT-RESULT else abi.RESULT) - 1) }
+}
+
+# A switch: its value against each case in turn, then the default.
+fn switch(n: Node) {
+  let v = n.in(1)
+  let w = if v.bits == 64 then 1 else 0
+  for u in users(n) {
+    if u is CASE { lower.branch-if-equal(w, lower.extended(v, 0), int(u.payload), int(u.block-of)) }
+  }
+  let otherwise = first u in users(n): u is DEFAULT
+  lower.jump(int(otherwise.block-of))
 }
 
 # A parameter: out of its register, or out of the caller's frame. Where it
@@ -149,10 +160,11 @@ fn run() {
     emitting = b
     for n in b.seq {
       if n is CALL { call(n) }
+      else if n is SWITCH { switch(n) }
       else if n is PARAM { if n.tile != 0 { param(n) } }
       else if n.tile != 0 and not lower.local?(n) { lower.emit(n, n.tile, int(n)) }
     }
-    if not (b.last is IF) and not (b.last is RETURN) {
+    if not cfg.end?(b.last) {
       for s in b.succs {
         phi-moves(b, s)
         lower.jump(int(s))

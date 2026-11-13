@@ -30,6 +30,12 @@ node LOOP(c...: ctrl) : ctrl                    role loop
 node IF(c: ctrl, cond: bool) : ctrl             role if
 node TRUE(branch: ctrl) : ctrl                  role true
 node FALSE(branch: ctrl) : ctrl                 role false
+# A switch goes to the case whose value its operand has, or to its default.
+node SWITCH(c: ctrl, value) : ctrl              role switch
+node CASE(switch: ctrl) : ctrl                  role case     payload value
+node DEFAULT(switch: ctrl) : ctrl               role default
+# Control that reaches a trap stops the program.
+node TRAP(c: ctrl)                              role trap
 # A call follows the C convention; RESULT is the value it returned.
 node CALL(c: ctrl, target: ptr, args...) : ctrl role call
 node RESULT(call: ctrl) : T                     role result

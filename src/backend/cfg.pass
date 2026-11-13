@@ -21,15 +21,19 @@ state order: [Block]                  # reverse postorder from the entry
 state stamp: Int
 state root: Block                     # where control starts
 
-fn head?(n: Node) -> Bool = n is START or n is REGION or n is LOOP or n is TRUE or n is FALSE
+fn head?(n: Node) -> Bool =
+  n is START or n is REGION or n is LOOP or n is TRUE or n is FALSE or n is CASE or n is DEFAULT
+
+# What a block ends with, when it does not just go on to a region.
+fn end?(n: Node) -> Bool = n is IF or n is SWITCH or n is RETURN or n is TRAP
 
 # In the control chain inside a block: it happens where it stands.
 fn chain?(n: Node) -> Bool = n is CALL or n is LOAD or n is STORE
 
-fn control?(n: Node) -> Bool = head?(n) or n is IF or n is RETURN or chain?(n)
+fn control?(n: Node) -> Bool = head?(n) or end?(n) or chain?(n)
 
 # The control node that follows `c` inside its block, if any.
-fn follower(c: Node) -> Node = first u in users(c): (chain?(u) or u is IF or u is RETURN) and u.in(0) == c
+fn follower(c: Node) -> Node = first u in users(c): (chain?(u) or end?(u)) and u.in(0) == c
 
 fn blocks() {
   for n in Node {
@@ -56,7 +60,7 @@ fn blocks() {
         b.preds.push(c.block-of)
         c.block-of.succs.push(b)
       }
-    } else if h is TRUE or h is FALSE {
+    } else if h is TRUE or h is FALSE or h is CASE or h is DEFAULT {
       b.preds.push(h.in(0).block-of)
       h.in(0).block-of.succs.push(b)
     }
