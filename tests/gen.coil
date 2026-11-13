@@ -435,7 +435,19 @@
 ;;; switch (v & 7) { case 0: … case 3: … case 5: … default: … }, then a phi.
 (defn switch! [(r (mut Gen)) (depth i64)] (-> void)
   (let [t (.type r)
-        selector (ir/and! (mut (.g r)) t (pick! (mut r)) (ir/const! (mut (.g r)) t 7))
+        ; One switch in three is on a constant chosen by a branch just before
+        ; it, as a match on a value just made is: each way in knows its case.
+        selector (if (= (below! (mut r) 3) 0)
+                     (let [branch (ir/if! (mut (.g r)) (.control r) (comparison! (mut r)))
+                           meet (ir/region! (mut (.g r)) 2)
+                           chosen (ir/phi! (mut (.g r)) t meet 2)]
+                       (graph/set-input! (mut (.g r)) meet 0 (ir/true! (mut (.g r)) branch))
+                       (graph/set-input! (mut (.g r)) meet 1 (ir/false! (mut (.g r)) branch))
+                       (graph/set-input! (mut (.g r)) chosen 1 (ir/const! (mut (.g r)) t (cast u64 (below! (mut r) 7))))
+                       (graph/set-input! (mut (.g r)) chosen 2 (ir/const! (mut (.g r)) t (cast u64 (below! (mut r) 7))))
+                       (set! (.control r) meet)
+                       chosen)
+                     (ir/and! (mut (.g r)) t (pick! (mut r)) (ir/const! (mut (.g r)) t 7)))
         node (ir/switch! (mut (.g r)) (.control r) selector)
         base (len (.env r))
         region (ir/region! (mut (.g r)) 4)
