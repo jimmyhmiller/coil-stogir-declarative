@@ -2,6 +2,7 @@
 rewrite in unit
 nodes backend.nodes
 facts facts
+masking AND
 
 # A mask that keeps every bit the value can have keeps the value.
 rule and-keeps-all   : AND(x, CONST m) when (m & ones(width(x))) == ones(width(x))   => x

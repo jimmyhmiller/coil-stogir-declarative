@@ -8,6 +8,9 @@ mkdir -p out
 python3 tools/lines.py
 coil build tests/rules.coil -O1 -o out/rules | grep -v '^wrote' || true
 out/rules
+# The second client: a calculator built by the same language implementations.
+coil build tests/toy.coil -O1 -o out/toy | grep -v '^wrote' || true
+out/toy
 # Linking: in memory, and as an object file through the system's linker.
 coil build tests/link.coil -O1 -o out/link | grep -v '^wrote' || true
 out/link

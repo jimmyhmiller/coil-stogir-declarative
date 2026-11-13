@@ -34,7 +34,7 @@
 (defstruct Binding [(name (slice u8)) (code (slice u8)) (is-node bool)])
 
 (defstruct R
-  [(c t/Cur) (nodes ir/Spec) (bindings (ArrayList Binding)) (facts bool)])
+  [(c t/Cur) (nodes ir/Spec) (bindings (ArrayList Binding)) (facts bool) (masking (slice u8))])
 
 (defn parse-pattern [(r (mut R))] (-> Pat)
   (let [tok (t/peek (mut (.c r)))
@@ -258,7 +258,7 @@
             typed (and (!= (.result node) "") (= (ir/type-number (.nodes r) (.result node)) 0))
             (mut o) (t/out-new)]
         (if (= (.role node) "const")
-            (t/cat3 "(let [t* (deviate! (mut rnd) main)] (ir/const! (mut (.g cx)) t* (bv/cut "
+            (t/cat3 "(let [t* (deviate! (mut rnd) main)] (ir/make-const! (mut (.g cx)) t* (bv/cut "
                     (if (.literal p)
                         (t/cat3 "(primitive/cast u64 " (t/int-text (.value p)) ")")
                         "(interesting! (mut rnd))")
@@ -281,13 +281,13 @@
           (t/emit! (mut o) "  (let [")
           (for i (range 0 (len vars))
             (t/emit! (mut o)
-                     (t/cat4 "v*" (t/int-text i) " (narrowed! (mut cx) (mut rnd) (ir/param! (mut (.g cx)) (deviate! (mut rnd) main) "
+                     (t/cat4 "v*" (t/int-text i) " (narrowed! (mut cx) (mut rnd) (ir/make-param! (mut (.g cx)) (deviate! (mut rnd) main) "
                              (t/cat2 (t/int-text i) ")) "))))
           (t/line! (mut o) (t/cat3 "] " body "))"))))
     (t/text-of (mut o))))
 
 ;;; The checker, the same for every rule set but for the dispatch to instances.
-(defn emit-checker! [(o (mut t/Out)) (rules i64) (facts bool)] (-> void)
+(defn emit-checker! [(o (mut t/Out)) (rules i64) (facts bool) (masking (slice u8))] (-> void)
   (t/line! (mut o) "(defstruct Rnd [(state u64)])")
   (t/line! (mut o) "(defn roll! [(rnd (mut Rnd))] (-> u64)")
   (t/line! (mut o) "  (let [(mut x) (.state rnd)]")
@@ -315,12 +315,15 @@
   (t/line! (mut o) ";;; A parameter, or one time in three its low few bits, so that rules which ask")
   (t/line! (mut o) ";;; what is known of a value meet values of which something is known.")
   (t/line! (mut o) "(defn narrowed! [(cx (mut st/State)) (rnd (mut Rnd)) (p i32)] (-> i32)")
-  (t/line! (mut o) "  (let [type (graph/ty (.g cx) p)]")
-  (t/line! (mut o) "    (if (and (= (% (roll! (mut rnd)) 3) 0) (> (ir/type-bits type) 1) (not (ir/type-float? type)))")
-  (t/line! (mut o) "        (ir/and! (mut (.g cx)) type p")
-  (t/line! (mut o) "                 (ir/const! (mut (.g cx)) type")
-  (t/line! (mut o) "                            (bv/mask (cast i64 (% (roll! (mut rnd)) (cast u64 (ir/type-bits type)))))))")
-  (t/line! (mut o) "        p)))")
+  (if (= masking "")
+      (t/line! (mut o) "  p)")
+      (do
+        (t/line! (mut o) "  (let [type (graph/ty (.g cx) p)]")
+        (t/line! (mut o) "    (if (and (= (% (roll! (mut rnd)) 3) 0) (> (ir/type-bits type) 1) (not (ir/type-float? type)))")
+        (t/line! (mut o) (t/cat3 "        (ir/" (ir/builder-name masking) " (mut (.g cx)) type p"))
+        (t/line! (mut o) "                 (ir/make-const! (mut (.g cx)) type")
+        (t/line! (mut o) "                            (bv/mask (cast i64 (% (roll! (mut rnd)) (cast u64 (ir/type-bits type)))))))")
+        (t/line! (mut o) "        p)))")))
   (t/line! (mut o) "(defn instance [(cx (mut st/State)) (rnd (mut Rnd)) (rule i64) (main i32)] (-> i32)")
   (t/line! (mut o) "  (match rule")
   (for k (range 1 (+ rules 1))
@@ -407,11 +410,15 @@
           nodes-module (do (t/expect! (mut c) "nodes") (module-name! (mut c)))
           nodes-file (project/file-of p nodes-module (.line at) (.col at))
           facts-module (if (t/accept! (mut c) "facts") (project/resolve p (module-name! (mut c)) (.line at) (.col at)) "")
+          ; `masking AND`: the node that keeps the bits two values share, which
+          ; the rule checker uses to make values of which something is known.
+          masking (if (t/accept! (mut c) "masking") (t/name! (mut c) "a node name") "")
           (mut r) (R
                     :c c
                     :nodes (ir/parse (project/read-file nodes-file path) nodes-file)
                     :bindings (ArrayList::new [Binding] (malloc-allocator))
-                    :facts (!= facts-module ""))
+                    :facts (!= facts-module "")
+                    :masking masking)
           (mut groups) (ArrayList::new [(slice u8)] (malloc-allocator))
           (mut texts) (ArrayList::new [(slice u8)] (malloc-allocator))
           (mut names) (t/out-new)
@@ -474,7 +481,7 @@
       (t/line! (mut o) "      (bv/signed (graph/payload (.g cx) n) (ir/type-bits (graph/ty (.g cx) n)))")
       (t/line! (mut o) "      (primitive/cast i64 (graph/payload (.g cx) n))))")
       (t/line! (mut o) "(defn make-const [(cx (mut st/State)) (type i32) (v i64)] (-> i32)")
-      (t/line! (mut o) "  (ir/const! (mut (.g cx)) type (bv/cut (primitive/cast u64 v) (ir/type-bits type))))")
+      (t/line! (mut o) "  (ir/make-const! (mut (.g cx)) type (bv/cut (primitive/cast u64 v) (ir/type-bits type))))")
       (t/line! (mut o) ";;; What `n` may be replaced by, or 0. `(.fired cx)` is the rule that said so.")
       (t/line! (mut o) "(defn simplify [(cx (mut st/State)) (n i32)] (-> i32)")
       (t/line! (mut o) "  (match (graph/op (.g cx) n)")
@@ -485,7 +492,7 @@
       (t/line! (mut o) "    (_ 0)))")
       (emit-engine! (mut o) (.nodes r))
       (t/emit! (mut o) (t/text-of (mut instances)))
-      (emit-checker! (mut o) rule (.facts r))
+      (emit-checker! (mut o) rule (.facts r) (.masking r))
       (t/text-of (mut o)))))
 
 (defn const-name [(spec ir/Spec)] (-> (slice u8))
@@ -509,7 +516,7 @@
     (t/line! (mut o) (t/cat3 "                   (= (graph/op (.g cx) b) ir/" k ")"))
     (t/line! (mut o) (t/cat3 "                   (= (graph/op (.g cx) c) ir/" k "))"))
     (t/line! (mut o) "              (do (set! (.fired cx) 0)")
-    (t/line! (mut o) "                  (ir/const! (mut (.g cx)) (graph/ty (.g cx) n)")
+    (t/line! (mut o) "                  (ir/make-const! (mut (.g cx)) (graph/ty (.g cx) n)")
     (t/line! (mut o) "                             (ir/eval operation (ir/type-bits (graph/ty (.g cx) n))")
     (t/line! (mut o) "                                      (ir/type-bits (graph/ty (.g cx) a))")
     (t/line! (mut o) "                                      (graph/payload (.g cx) a) (graph/payload (.g cx) b)")

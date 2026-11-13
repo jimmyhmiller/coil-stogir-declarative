@@ -860,6 +860,14 @@
     (emit-numbers! (mut o) spec)
     (emit-tables! (mut o) spec)
     (for node (.nodes spec) (emit-builder! (mut o) spec node))
+    ; The constant and the parameter by role, for code that works on any node set.
+    (for node (.nodes spec)
+      (when (= (.role node) "const")
+        (t/line! (mut o) (t/cat3 "(defn make-const! [(g (mut graph/Graph)) (type i32) (value u64)] (-> i32) ("
+                                 (builder-name (.name node)) " (mut g) type value))")))
+      (when (= (.role node) "param")
+        (t/line! (mut o) (t/cat3 "(defn make-param! [(g (mut graph/Graph)) (type i32) (index u64)] (-> i32) ("
+                                 (builder-name (.name node)) " (mut g) type index))"))))
     (emit-verify! (mut o) spec)
     (emit-eval! (mut o) spec)
     (emit-interpreter! (mut o))
