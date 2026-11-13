@@ -19,6 +19,7 @@ set word = bool i8 i16 i32 i64 u8 u16 u32 u64 ptr
 set float = f32 f64
 set value = bool i8 i16 i32 i64 u8 u16 u32 u64 ptr f32 f64
 set signed-wide = i32 i64
+set wide = i32 i64 u32 u64 ptr
 set unsigned-wide = u32 u64
 
 # Control. A control node's first operand is the control it follows.
@@ -68,6 +69,30 @@ node UDIV(a: T, b: T) : T in int                = udiv(a, b)
 node SDIV(a: T, b: T) : T in int                = sdiv(a, b)
 node UREM(a: T, b: T) : T in int                = urem(a, b)
 node SREM(a: T, b: T) : T in int                = srem(a, b)
+
+# Bits.
+node CLZ(a: T) : T in int                       = clz(a)
+node CTZ(a: T) : T in int                       = ctz(a)
+node POPCNT(a: T) : T in int                    = popcount(a)
+node BSWAP(a: T) : T in wide                    = bswap(a)
+node ROL(a: T, n: T) : T in wide                = rol(a, n)
+node ROR(a: T, n: T) : T in wide                = ror(a, n)
+
+# The larger and the smaller, and the high half of a product.
+node SMIN(a: T, b: T) : T in int   commutative  = smin(a, b)
+node SMAX(a: T, b: T) : T in int   commutative  = smax(a, b)
+node UMIN(a: T, b: T) : T in int   commutative  = umin(a, b)
+node UMAX(a: T, b: T) : T in int   commutative  = umax(a, b)
+node UMULH(a: T, b: T) : T in wide commutative  = umulh(a, b)
+node SMULH(a: T, b: T) : T in wide commutative  = smulh(a, b)
+
+# Whether the true result does not fit: the sum or product itself is ADD or MUL.
+node SADDO(a: S, b: S) : bool, S in wide  commutative = sadd-overflows(a, b)
+node UADDO(a: S, b: S) : bool, S in wide  commutative = uadd-overflows(a, b)
+node SSUBO(a: S, b: S) : bool, S in wide        = ssub-overflows(a, b)
+node USUBO(a: S, b: S) : bool, S in wide        = usub-overflows(a, b)
+node SMULO(a: S, b: S) : bool, S in wide  commutative = smul-overflows(a, b)
+node UMULO(a: S, b: S) : bool, S in wide  commutative = umul-overflows(a, b)
 
 # Between widths. TRUNC keeps the low bits; ZEXT and SEXT fill the new ones.
 node ZEXT(a: S) : T in int, S in word, bits(S) < bits(T)   = a

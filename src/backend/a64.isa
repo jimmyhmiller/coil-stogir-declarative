@@ -25,6 +25,8 @@ const eq = 0
 const ne = 1
 const hs = 2
 const lo = 3
+const vs = 6
+const vc = 7
 const mi = 4
 const pl = 5
 const hi = 8
@@ -50,6 +52,21 @@ inst msub(sf: u1, rd: def gpr, rn: use gpr, rm: use gpr, ra: use gpr) = sf 00 11
 inst udiv(sf: u1, rd: def gpr, rn: use gpr, rm: use gpr)  = sf 0 0 11010110 rm 00001 0 rn rd
 inst sdiv(sf: u1, rd: def gpr, rn: use gpr, rm: use gpr)  = sf 0 0 11010110 rm 00001 1 rn rd
 inst csel(sf: u1, rd: def gpr, rn: use gpr, rm: use gpr, cond: u4) = sf 0 0 11010100 rm cond 0 0 rn rd
+inst adds(sf: u1, rd: def gpr, rn: use gpr, rm: use gpr)  = sf 0 1 01011 00 0 rm 000000 rn rd
+inst rorv(sf: u1, rd: def gpr, rn: use gpr, rm: use gpr)  = sf 0 0 11010110 rm 0010 11 rn rd
+inst clz(sf: u1, rd: def gpr, rn: use gpr)                = sf 1 0 11010110 00000 00010 0 rn rd
+inst rbit(sf: u1, rd: def gpr, rn: use gpr)               = sf 1 0 11010110 00000 00000 0 rn rd
+inst rev32(rd: def gpr, rn: use gpr)                      = 0 1 0 11010110 00000 00001 0 rn rd
+inst rev64(rd: def gpr, rn: use gpr)                      = 1 1 0 11010110 00000 00001 1 rn rd
+inst umulh(rd: def gpr, rn: use gpr, rm: use gpr)         = 1 00 11011 110 rm 0 11111 rn rd
+inst smulh(rd: def gpr, rn: use gpr, rm: use gpr)         = 1 00 11011 010 rm 0 11111 rn rd
+inst umull(rd: def gpr, rn: use gpr, rm: use gpr)         = 1 00 11011 101 rm 0 11111 rn rd
+inst smull(rd: def gpr, rn: use gpr, rm: use gpr)         = 1 00 11011 001 rm 0 11111 rn rd
+# Compare with the second operand shifted right, keeping its sign, by `amount`.
+inst cmp-asr(sf: u1, rn: use gpr, rm: use gpr, amount: u6) = sf 1 1 01011 10 0 rm amount rn 11111
+# Count the set bits of each byte of a vector register, and add the bytes up.
+inst cnt-bytes(rd: def simd, rn: use simd)                = 0 0 0 01110 00 10000 00101 10 rn rd
+inst add-bytes(rd: def simd, rn: use simd)                = 0 0 0 01110 00 11000 11011 10 rn rd
 inst csinc(sf: u1, rd: def gpr, rn: use gpr, rm: use gpr, cond: u4) = sf 0 0 11010100 rm cond 0 1 rn rd
 
 # Arithmetic with a 12-bit immediate.

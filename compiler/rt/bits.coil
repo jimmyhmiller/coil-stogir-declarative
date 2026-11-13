@@ -175,3 +175,96 @@
 
 (defn ftrunc [(a u64)] (-> u64)
   (of-f32 (cast f32 (f64-of a))))
+
+;; ---------------------------------------------------------------- bits
+
+;;; Leading zeros of a `bits`-wide value; all of them for zero.
+(defn clz [(v u64) (bits i64)] (-> u64)
+  (let [(mut n) 0
+        (mut probe) (<< (: 1 u64) (cast u64 (- bits 1)))]
+    (while (and (< n bits) (= (& v probe) 0))
+      (set! n (+ n 1))
+      (set! probe (>> probe 1)))
+    (cast u64 n)))
+
+(defn ctz [(v u64) (bits i64)] (-> u64)
+  (let [x (cut v bits)]
+    (if (= x 0) (cast u64 bits) (cast u64 (lowest x)))))
+
+(defn popcount [(v u64) (bits i64)] (-> u64)
+  (cast u64 (count (cut v bits))))
+
+;;; The bytes of a `bits`-wide value in the opposite order.
+(defn bswap [(v u64) (bits i64)] (-> u64)
+  (let [bytes (/ bits 8)
+        (mut out) (: 0 u64)]
+    (for i (range 0 bytes)
+      (set! out (| out (<< (& (>> v (cast u64 (* i 8))) 255) (cast u64 (* (- (- bytes 1) i) 8))))))
+    out))
+
+(defn rol [(v u64) (n u64) (bits i64)] (-> u64)
+  (let [k (% n (cast u64 bits))
+        x (cut v bits)]
+    (if (= k 0) x (cut (| (<< x k) (>> x (- (cast u64 bits) k))) bits))))
+
+(defn ror [(v u64) (n u64) (bits i64)] (-> u64)
+  (let [k (% n (cast u64 bits))
+        x (cut v bits)]
+    (if (= k 0) x (cut (| (>> x k) (<< x (- (cast u64 bits) k))) bits))))
+
+;;; The high half of a product of two `bits`-wide values, 32 or 64 wide.
+(defn umulh [(a u64) (b u64) (bits i64)] (-> u64)
+  (if (<= bits 32)
+      (>> (primitive/imul (cut a bits) (cut b bits)) (cast u64 bits))
+      (let [al (& a (: 0xFFFFFFFF u64))
+            ah (>> a 32)
+            bl (& b (: 0xFFFFFFFF u64))
+            bh (>> b 32)
+            ll (primitive/imul al bl)
+            lh (primitive/imul al bh)
+            hl (primitive/imul ah bl)
+            hh (primitive/imul ah bh)
+            mid (primitive/iadd (primitive/iadd (>> ll 32) (& lh (: 0xFFFFFFFF u64))) (& hl (: 0xFFFFFFFF u64)))]
+        (primitive/iadd (primitive/iadd hh (>> lh 32)) (primitive/iadd (>> hl 32) (>> mid 32))))))
+
+(defn smulh [(a u64) (b u64) (bits i64)] (-> u64)
+  (if (<= bits 32)
+      (>> (primitive/imul (sext a bits) (sext b bits)) (cast u64 bits))
+      (let [x (sext a bits)
+            y (sext b bits)
+            high (umulh x y 64)
+            fix-a (if (< (primitive/cast i64 x) 0) y (: 0 u64))
+            fix-b (if (< (primitive/cast i64 y) 0) x (: 0 u64))]
+        (primitive/isub (primitive/isub high fix-a) fix-b))))
+
+;;; Whether the true sum, difference or product does not fit the width.
+(defn sadd-overflows [(a u64) (b u64) (bits i64)] (-> bool)
+  (let [x (sext a bits)
+        y (sext b bits)
+        r (sext (primitive/iadd x y) bits)]
+    (and (= (>> (^ x y) 63) 0) (!= (>> (^ x r) 63) 0))))
+
+(defn ssub-overflows [(a u64) (b u64) (bits i64)] (-> bool)
+  (let [x (sext a bits)
+        y (sext b bits)
+        r (sext (primitive/isub x y) bits)]
+    (and (!= (>> (^ x y) 63) 0) (!= (>> (^ x r) 63) 0))))
+
+(defn uadd-overflows [(a u64) (b u64) (bits i64)] (-> bool)
+  (< (cut (primitive/iadd a b) bits) (cut a bits)))
+
+(defn usub-overflows [(a u64) (b u64) (bits i64)] (-> bool)
+  (< (cut a bits) (cut b bits)))
+
+(defn umul-overflows [(a u64) (b u64) (bits i64)] (-> bool)
+  (if (<= bits 32)
+      (!= (>> (primitive/imul (cut a bits) (cut b bits)) (cast u64 bits)) 0)
+      (!= (umulh a b 64) 0)))
+
+(defn smul-overflows [(a u64) (b u64) (bits i64)] (-> bool)
+  (if (<= bits 32)
+      (let [p (primitive/imul (sext a bits) (sext b bits))]
+        (!= p (sext p bits)))
+      (let [low (primitive/imul a b)
+            high (smulh a b 64)]
+        (!= high (if (< (primitive/cast i64 low) 0) (: 0xFFFFFFFFFFFFFFFF u64) (: 0 u64))))))

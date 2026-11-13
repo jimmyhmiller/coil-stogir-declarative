@@ -84,7 +84,23 @@
         (= op 11) (ir/urem! (mut (.g r)) t a b)
         (= op 12) (ir/srem! (mut (.g r)) t a b)
         (= op 13) (ir/neg! (mut (.g r)) t a)
-        :else (ir/not! (mut (.g r)) t a)))
+        (= op 14) (ir/not! (mut (.g r)) t a)
+        (= op 15) (ir/clz! (mut (.g r)) t a)
+        (= op 16) (ir/ctz! (mut (.g r)) t a)
+        (= op 17) (ir/popcnt! (mut (.g r)) t a)
+        (= op 18) (ir/smin! (mut (.g r)) t a b)
+        (= op 19) (ir/smax! (mut (.g r)) t a b)
+        (= op 20) (ir/umin! (mut (.g r)) t a b)
+        (= op 21) (ir/umax! (mut (.g r)) t a b)
+        (= op 22) (ir/bswap! (mut (.g r)) t a)
+        (= op 23) (ir/rol! (mut (.g r)) t a b)
+        (= op 24) (ir/ror! (mut (.g r)) t a b)
+        (= op 25) (ir/umulh! (mut (.g r)) t a b)
+        :else (ir/smulh! (mut (.g r)) t a b)))
+
+;;; How many of `binary!`'s operations a type has: the last five need 32 bits.
+(defn operations [(t i32)] (-> i64)
+  (if (>= (ir/type-bits t) 32) 27 22))
 
 (defn compare! [(r (mut Gen)) (op i64) (a i32) (b i32)] (-> i32)
   (cond (= op 0) (ir/eq! (mut (.g r)) a b)
@@ -92,13 +108,24 @@
         (= op 2) (ir/lt! (mut (.g r)) a b)
         (= op 3) (ir/le! (mut (.g r)) a b)
         (= op 4) (ir/ult! (mut (.g r)) a b)
-        :else (ir/ule! (mut (.g r)) a b)))
+        (= op 5) (ir/ule! (mut (.g r)) a b)
+        (= op 6) (ir/saddo! (mut (.g r)) a b)
+        (= op 7) (ir/uaddo! (mut (.g r)) a b)
+        (= op 8) (ir/ssubo! (mut (.g r)) a b)
+        (= op 9) (ir/usubo! (mut (.g r)) a b)
+        (= op 10) (ir/smulo! (mut (.g r)) a b)
+        :else (ir/umulo! (mut (.g r)) a b)))
+
+;;; How many of `compare!`'s tests a type has: overflow needs 32 bits.
+(defn tests [(r (mut Gen)) (t i32)] (-> i64)
+  (if (and (.rich r) (>= (ir/type-bits t) 32)) 12 6))
 
 (defn arithmetic! [(r (mut Gen))] (-> i32)
   (let [a (pick! (mut r))
         b (operand! (mut r))
-        op (below! (mut r) (if (.rich r) 16 9))]
-    (if (= op 15)
+        count (if (.rich r) (operations (.type r)) 9)
+        op (below! (mut r) (if (.rich r) (+ count 1) 9))]
+    (if (= op count)
         (ir/cond! (mut (.g r)) (.type r) (comparison! (mut r)) a b)
         (binary! (mut r) (.type r) op a b))))
 
@@ -120,8 +147,8 @@
         (mut a) (ir/trunc! (mut (.g r)) t (pick! (mut r)))
         b (ir/trunc! (mut (.g r)) t (pick! (mut r)))
         steps (+ 1 (below! (mut r) 3))]
-    (for _ (range 0 steps) (set! a (binary! (mut r) t (below! (mut r) 15) a b)))
-    (let [flag (compare! (mut r) (below! (mut r) 6) a b)
+    (for _ (range 0 steps) (set! a (binary! (mut r) t (below! (mut r) (operations t)) a b)))
+    (let [flag (compare! (mut r) (below! (mut r) (tests (mut r) t)) a b)
           kind (below! (mut r) 4)]
       (cond
         (= kind 0) (widen! (mut r) a)
@@ -131,7 +158,7 @@
                     (ir/xor! (mut (.g r)) ir/T-BOOL (ir/not! (mut (.g r)) ir/T-BOOL flag)
                              (ir/trunc! (mut (.g r)) ir/T-BOOL (pick! (mut r)))))
         :else (ir/cond! (mut (.g r)) (.type r)
-                        (ir/and! (mut (.g r)) ir/T-BOOL flag (compare! (mut r) (below! (mut r) 6) b a))
+                        (ir/and! (mut (.g r)) ir/T-BOOL flag (compare! (mut r) (below! (mut r) (tests (mut r) t)) b a))
                         (pick! (mut r)) (pick! (mut r)))))))
 
 ;;; A floating constant: ordinary values, the ends, and what is not a number.
@@ -246,7 +273,7 @@
 (defn comparison! [(r (mut Gen))] (-> i32)
   (let [a (pick! (mut r))
         b (operand! (mut r))]
-    (compare! (mut r) (below! (mut r) 6) a b)))
+    (compare! (mut r) (below! (mut r) (tests (mut r) (.type r))) a b)))
 
 ;;; A call to one of the helpers, with one, three or ten arguments.
 (defn call! [(r (mut Gen))] (-> i32)
