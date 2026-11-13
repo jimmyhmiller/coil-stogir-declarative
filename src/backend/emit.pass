@@ -285,6 +285,11 @@ fn rewrite(i: Inst, next: Int) {
     let at = i.copy-from + frame + abi.RETURN-SLOTS * 8
     if floating?(0 - d - 1) { lower.from-stack-float(d, base(), at, i.caller-bytes) }
     else { lower.from-stack(d, base(), at, i.caller-bytes) }
+  } else if i.kind == 12 {
+    let r = placed(i.copy-to, 2 * int(i))
+    let at = i.copy-from + frame + abi.RETURN-SLOTS * 8
+    if floating?(0 - r - 1) { lower.to-object-float(r, base(), at, i.caller-bytes) }
+    else { lower.to-object(r, base(), at, i.caller-bytes) }
   } else if i.kind == 11 {
     lower.frame-address(placed(i.copy-to, 2 * int(i) + 1), base(), i.copy-from + frame + abi.RETURN-SLOTS * 8)
   } else if i.kind == 8 {

@@ -164,7 +164,7 @@ fn copy-out(a: Node, at: Int, bytes: Int) {
 
 # The arguments of call `n` to where its shape and the convention want them;
 # the registers that took any.
-fn pass-arguments(n: Node, on-stack: Bool) -> Word {
+fn pass-arguments(n: Node, staying: Bool) -> Word {
   var passed = word(0)
   let shape = int(n.payload)
   begin-placing()
@@ -175,13 +175,20 @@ fn pass-arguments(n: Node, on-stack: Bool) -> Word {
       widened(0 - at - 1, a)
       passed = set-bit(passed, at)
     } else {
-      if not on-stack { panic("a tail call's arguments must all fit in registers") }
-      if placed-copy { copy-out(a, 0 - at - 1, placed-bytes) }
+      if not staying {
+        # Leaving for good: the argument goes where this function's own
+        # arguments on the stack came, which is known when the frame is.
+        if placed-copy { panic("a tail call copies an argument onto the stack") }
+        let r = if a.float then lower.operand(a) else lower.extended(a, 2)
+        if a.float { lower.to-stack-float(r, 0, 8) } else { lower.to-stack(r, 0, 8) }
+        mach.to-caller(r, 0 - at - 1, placed-bytes)
+      }
+      else if placed-copy { copy-out(a, 0 - at - 1, placed-bytes) }
       else if a.float { lower.to-stack-float(lower.operand(a), 0 - at - 1, placed-bytes) }
       else { lower.to-stack(lower.extended(a, 2), 0 - at - 1, placed-bytes) }
     }
   }
-  out-slots = max(out-slots, (stack-bytes + 7) / 8)
+  if staying { out-slots = max(out-slots, (stack-bytes + 7) / 8) }
   # Where the convention wants it, the number of floating registers used.
   if shape-variadic(shape) and abi.VARIADIC-COUNT >= 0 {
     lower.count-into(0 - abi.VARIADIC-COUNT - 1, min(floats, abi.FLOAT-ARGS))
@@ -281,6 +288,29 @@ fn returns(n: Node) {
 # function straight into the other. The target waits in a register the
 # function's exit does not touch.
 fn tail-call(n: Node) {
+  # The arguments on the stack go where this function's own came: if they
+  # need more room than that, or bytes are copied there, it is a call after
+  # all, and what the call returns, where it returns it, is returned.
+  let shape = int(n.payload)
+  begin-placing()
+  var copies = false
+  for i in 2..n.arity {
+    place(int(n.in(i).type), shape-passing(shape, i - 2))
+    if placed-copy { copies = true }
+  }
+  let wanted = stack-bytes
+  begin-placing()
+  for j in 0..param-count() { place(int(param-type(j)), param-passing(j)) }
+  if copies or wanted > stack-bytes {
+    let given = pass-arguments(n, true)
+    if n.in(1) is SYMBOL { lower.call-symbol(int(n.in(1).payload)) }
+    else { lower.call-register(lower.operand(n.in(1))) }
+    mach.mark-call()
+    mach.implicit(given, if abi.LINK >= 0 then set-bit(isa.CALLER-SAVED, abi.LINK) else isa.CALLER-SAVED)
+    calls = true
+    lower.leave()
+    return
+  }
   let passed = pass-arguments(n, false)
   if n.in(1) is SYMBOL {
     lower.tail-symbol(int(n.in(1).payload))

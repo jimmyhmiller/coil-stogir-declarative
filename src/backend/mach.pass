@@ -121,6 +121,17 @@ fn caller-address(d: Int, at: Int) {
   i.copy-from = at
 }
 
+# The instruction just emitted writes register `r` to `bytes` bytes at `at` in
+# the caller's frame: an argument, on the stack, of a call that leaves this
+# function for good, which goes where this function's own such parameters came.
+fn to-caller(r: Int, at: Int, bytes: Int) {
+  let i = id(Inst.count)
+  i.kind = 12
+  i.copy-to = r
+  i.copy-from = at
+  i.caller-bytes = bytes
+}
+
 # The instruction just emitted gives register `d` the address just above the
 # arguments for calls, which is known only when every call has been seen.
 fn above-arguments(d: Int) {
