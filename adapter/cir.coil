@@ -90,6 +90,16 @@
             :threads (tuned c"DECLARATIVE_THREADS" 0)
             :once (tuned c"DECLARATIVE_ONCE" ONCE-SIZE)))
 
+;;; The settings that change the code, as text: for whoever keeps code under a
+;;; key (Coil's units). How much is put in place, and what is left out or only
+;;; tried; what is shown or checked, and on how many threads, change nothing.
+(defn settings-key [(a (dyn Allocator))] (-> (slice u8))
+  (let [s (settings-read)
+        (mut sb) (str/StrBuf::new a)]
+    (str/format! (mut sb) "only={} trial={} off={} off-at={} small={} growth={} once={}"
+                 (.only s) (.trial s) (.off s) (.off-at s) (.small s) (.growth s) (.once s))
+    (finish! (mut sb))))
+
 ;;; A function's code, and each word of it that depends on a symbol's address:
 ;;; where, which symbol, and the assembler's kind of relocation.
 (defstruct Compiled

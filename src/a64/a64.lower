@@ -31,6 +31,9 @@ template to-frame(s, base, slot)   = add-imm-hi(1, x17, base, slot / 512) ; str(
 # and written from two registers.
 template load-pair(a, b, base, at)  = ldp(a, b, base, at / 8)
 template store-pair(a, b, base, at) = stp(a, b, base, at / 8)
+# Two words of a frame object `below` bytes below the frame record, from the frame register.
+template load-pair-object(a, b, below)  = ldp(a, b, x29, (128 - below / 8) & 127)
+template store-pair-object(a, b, below) = stp(a, b, x29, (128 - below / 8) & 127)
 # Two registers to and from two slots next to each other.
 template to-frame-pair(a, b, base, slot) when slot < 63 = stp(a, b, base, slot)
 template to-frame-pair(a, b, base, slot)                = to-frame(a, base, slot) ; to-frame(b, base, slot + 1)

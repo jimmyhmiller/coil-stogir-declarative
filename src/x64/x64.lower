@@ -39,6 +39,9 @@ template table-entry(to) = ud2()
 # Two words next to each other in memory: one after the other.
 template load-pair(a, b, base, at)  = load(1, a, base, at) ; load(1, b, base, at + 8)
 template store-pair(a, b, base, at) = store(1, a, base, at) ; store(1, b, base, at + 8)
+# Two words of a frame object `below` bytes below the frame record.
+template load-pair-object(a, b, below)  = load(1, a, rbp, 0 - below) ; load(1, b, rbp, 8 - below)
+template store-pair-object(a, b, below) = store(1, a, rbp, 0 - below) ; store(1, b, rbp, 8 - below)
 # Two registers to and from two slots next to each other: one after the other.
 template to-frame-pair(a, b, base, slot)         = to-frame(a, base, slot) ; to-frame(b, base, slot + 1)
 template from-frame-pair(a, b, base, slot)       = from-frame(a, base, slot) ; from-frame(b, base, slot + 1)
