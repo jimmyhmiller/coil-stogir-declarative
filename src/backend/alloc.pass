@@ -32,6 +32,8 @@ column writes: Vreg -> [Int]           # the instructions that write it
 column open-from: Vreg -> Int          # while building: where its range in this block began
 column last-touch: Vreg -> Int         # and the position after its last use so far
 column out-mark: Vreg -> Int           # the block it was last seen live out of
+column cost-asked: Vreg -> Block       # the loop `cost-is` was last worked out for,
+column cost-is: Vreg -> Int            # and what it was
 column weight: Vreg -> Int             # how much it is read and written: each time counts
                                        # eight times as much for every loop it is in
 
@@ -65,6 +67,7 @@ column last-fixed: Phys -> Range
 column free-until: Phys -> Int
 column needed-at: Phys -> Int
 column blocked-at: Phys -> Int
+column giving-up: Phys -> Int          # what it costs to make whoever holds it wait
 
 column home: Inst -> Block
 column starts-even: Inst -> [Piece]    # pieces whose life starts as it reads
@@ -482,25 +485,87 @@ fn try-free(p: Piece, whole: Bool) -> Bool {
   true
 }
 
+# Whether block `b` is in the loop whose head is `h`.
+fn inside?(b: Block, h: Block) -> Bool {
+  var x = b.loop-head
+  while x != none and x != h { x = x.loop-parent }
+  x == h
+}
+
+# What it costs to make `v` wait in the frame from position `pos`, where
+# nothing of it is needed for a while: it is brought back once each time
+# round the innermost loop about `pos` that reads or writes it anywhere, so
+# eight times as much for every loop that loop is in; once, if there is none.
+fn waiting-cost(v: Vreg, pos: Int) -> Int {
+  let i: Inst = id(pos / 2)
+  var h = i.home.loop-head
+  if h == none { return 1 }
+  if v.cost-asked == h { return v.cost-is }
+  let asked = h
+  var cost = 1
+  while h != none and cost == 1 {
+    var here = false
+    for r in v.reads { if not here and inside?(id(r).home, h) { here = true } }
+    for w in v.writes { if not here and inside?(id(w).home, h) { here = true } }
+    if here { cost = 1 << (3 * min(h.loop-depth, 6)) } else { h = h.loop-parent }
+  }
+  v.cost-asked = asked
+  v.cost-is = cost
+  cost
+}
+
+# Whether `v` is read or written anywhere in the loop whose head is `h`.
+fn used-in?(v: Vreg, h: Block) -> Bool =
+  (any r in v.reads: inside?(id(r).home, h)) or (any w in v.writes: inside?(id(w).home, h))
+
+# Where piece `a`, made to wait at `pos`, should wait from: the start of the
+# outermost loop about `pos` that neither reads nor writes its value, so that
+# it waits for the whole of that loop and is not brought back every time
+# round; `pos` itself if there is no such loop, or the piece begins inside it,
+# or its value is touched between the loop's start and `pos`.
+fn wait-from(a: Piece, pos: Int) -> Int {
+  let v = a.owner
+  let i: Inst = id(pos / 2)
+  var h = i.home.loop-head
+  var around: Block = none
+  while h != none and not used-in?(v, h) {
+    around = h
+    h = h.loop-parent
+  }
+  if around == none { return pos }
+  var from = far()
+  for b in around.loop-blocks { from = min(from, 2 * b.first-inst) }
+  if from >= pos or from <= a.pstart { return pos }
+  for r in v.reads { if 2 * r >= from and 2 * r < pos { return pos } }
+  for w in v.writes { if 2 * w + 1 >= from and 2 * w + 1 < pos { return pos } }
+  from
+}
+
 # Take the register whose holder is needed furthest away; the holder waits in
-# the frame. With `far`, only if that holder is not needed for the whole of the
-# piece's life and is read and written less than the piece's value is, so that
-# the piece has the register throughout: better that a value wanted after a
-# loop waits than that one wanted every time round is fetched every time round.
+# the frame. With `far`, only a holder not needed for the whole of the piece's
+# life, so that the piece has the register throughout, and the one it costs
+# least to make wait, if that is less than the piece's value is read and
+# written: better that a value wanted after a loop waits than that one wanted
+# every time round is fetched every time round.
 fn take-blocked(p: Piece, far-only: Bool) -> Bool {
   let pos = p.pstart
   for r in Phys {
     r.needed-at = if fits?(p.owner, int(r) - 1) then far() else 0
     r.blocked-at = far()
+    r.giving-up = 0
   }
   for a in active {
-    let x = if far-only and a.owner.weight >= p.owner.weight then pos else next-need(a, pos)
+    let cost = if far-only then waiting-cost(a.owner, pos) else 0
+    let x = if far-only and cost >= p.owner.weight then pos else next-need(a, pos)
     if x < id(a.reg).needed-at { id(a.reg).needed-at = x }
+    id(a.reg).giving-up = id(a.reg).giving-up + cost
   }
   for a in inactive {
     if meeting(a.ranges, p.ranges) != 0 {
-      let x = if far-only and a.owner.weight >= p.owner.weight then pos else next-need(a, pos)
+      let cost = if far-only then waiting-cost(a.owner, pos) else 0
+      let x = if far-only and cost >= p.owner.weight then pos else next-need(a, pos)
       if x < id(a.reg).needed-at { id(a.reg).needed-at = x }
+      id(a.reg).giving-up = id(a.reg).giving-up + cost
     }
   }
   for r in Phys {
@@ -514,18 +579,28 @@ fn take-blocked(p: Piece, far-only: Bool) -> Bool {
   }
   var best = -1
   var needed = 0
-  for r in Phys {
-    if r.needed-at > needed {
-      best = int(r) - 1
-      needed = r.needed-at
+  if far-only {
+    # Of the registers the piece could have throughout, the cheapest to give up.
+    for r in Phys {
+      if r.needed-at >= p.pend and r.blocked-at >= p.pend and (best < 0 or r.giving-up < id(best + 1).giving-up or (r.giving-up == id(best + 1).giving-up and r.needed-at > needed)) {
+        best = int(r) - 1
+        needed = r.needed-at
+      }
+    }
+    if best < 0 { return false }
+  } else {
+    for r in Phys {
+      if r.needed-at > needed {
+        best = int(r) - 1
+        needed = r.needed-at
+      }
     }
   }
-  if far-only and (needed < p.pend or id(best + 1).blocked-at < p.pend) { return false }
   if needed <= pos { panic("register allocation: every register is needed at once") }
   var kept = 0
   for j in 0..active.len {
     let a = active[j]
-    if a.reg == best + 1 { to-frame-from(a, pos) } else {
+    if a.reg == best + 1 { to-frame-from(a, wait-from(a, pos)) } else {
       active[kept] = a
       kept = kept + 1
     }
@@ -534,7 +609,7 @@ fn take-blocked(p: Piece, far-only: Bool) -> Bool {
   kept = 0
   for j in 0..inactive.len {
     let a = inactive[j]
-    if a.reg == best + 1 and meeting(a.ranges, p.ranges) != 0 { to-frame-from(a, pos) } else {
+    if a.reg == best + 1 and meeting(a.ranges, p.ranges) != 0 { to-frame-from(a, wait-from(a, pos)) } else {
       inactive[kept] = a
       kept = kept + 1
     }

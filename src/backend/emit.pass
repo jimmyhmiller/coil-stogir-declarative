@@ -433,10 +433,11 @@ fn block-code(b: Block, next: Int) {
     if at + 1 == b.last-inst and turns?(i) and goes(i) == next and next != 0 and last.kind == 2 and goes(last) != next and (at == b.first-inst or label-of(id(at - 1)) == 0) {
       turned(i, goes(last))
       dropped = b.last-inst
-    } else if at + 1 == b.last-inst and turns?(i) and last.kind == 2 and goes(i) != next and goes(last) != next and goes(last) != 0 and goes(i) != 0 and id(goes(last)).rpo <= b.rpo and id(goes(i)).rpo > b.rpo and (at == b.first-inst or label-of(id(at - 1)) == 0) {
+    } else if at + 1 == b.last-inst and turns?(i) and last.kind == 2 and goes(i) != next and goes(last) != next and goes(last) != 0 and goes(i) != 0 and id(goes(last)).rpo <= b.rpo and (id(goes(i)).rpo > b.rpo or id(goes(last)).loop-depth > id(goes(i)).loop-depth) and (at == b.first-inst or label-of(id(at - 1)) == 0) {
       # Neither way is the next block, and the jump goes back while the branch
-      # goes on: the branch is turned to go back, so that going round a loop
-      # is one branch taken, and the jump is what leaves.
+      # goes on, or back to a loop further out: the branch is turned to go
+      # where the jump went, so that going round the inner loop is one branch
+      # taken, and the jump is what leaves.
       let onward-to = goes(i)
       turned(i, goes(last))
       lower.jump(onward-to)
