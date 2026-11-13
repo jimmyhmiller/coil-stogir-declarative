@@ -319,3 +319,18 @@
 
 (defn param-type [(g Graph) (index i64)] (-> i32)
   (get (.signature g) index))
+
+;;; Take input `i` out of `n`: the inputs after it move down one and `n` has
+;;; one input fewer.
+(defn remove-input! [(g (mut Graph)) (n i32) (i i64)] (-> void)
+  (let [count (arity g n)]
+    (for j (range i (- count 1)) (set-input! (mut g) n j (input g n (+ j 1))))
+    (set-input! (mut g) n (- count 1) 0)
+    (set! (mut (.n-in g)) (cast i64 n) (cast i32 (- count 1)))))
+
+;;; Detach `n` from everything it reads and mark it gone. What used it must
+;;; already have let go, or be about to go the same way.
+(defn drop! [(g (mut Graph)) (n i32)] (-> void)
+  (let [first (cast i64 (get (.first-in g) (cast i64 n)))]
+    (for i (range 0 (arity g n)) (unlink! (mut g) (+ first i)))
+    (set! (mut (.ops g)) (cast i64 n) 0)))

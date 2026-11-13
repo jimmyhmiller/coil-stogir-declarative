@@ -70,3 +70,7 @@ rule sext-zext     : SEXT(ZEXT(x))                     => ZEXT(x)
 # A phi whose inputs are all one value, or that value and itself.
 rule phi-same      : PHI(_, x, x)                      => x
 rule phi-loop      : PHI(_, x, self)                   => x
+
+# A branch on a constant goes one way; what the other way led to is gone.
+rule if-true       : IF(_, CONST 1)                    => always true
+rule if-false      : IF(_, CONST 0)                    => always false

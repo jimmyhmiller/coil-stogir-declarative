@@ -93,10 +93,10 @@
     (for ty (.types spec) (when (and (= (.name ty) name) (= (.kind ty) KIND-CONTROL)) (set! found true)))
     found))
 
-;;; A node control can follow: one whose type is control, or a load, which sits
-;;; in the control chain and is also its value.
+;;; A node in the flow of control: one whose type is control, a load, which
+;;; sits in the control chain and is also its value, and a return, which ends it.
 (defn control-node? [(spec Spec) (node Node)] (-> bool)
-  (or (control-type? spec (.result node)) (= (.role node) "load")))
+  (or (control-type? spec (.result node)) (= (.role node) "load") (= (.role node) "return")))
 
 (defn fixed-count [(node Node)] (-> i64)
   (let [(mut k) 0]
@@ -603,6 +603,15 @@
 ;;; The reference interpreter, the same text for every node set: it reads only
 ;;; roles, the type table and `eval`.
 (defn emit-interpreter! [(o (mut t/Out))] (-> void)
+  (t/line! (mut o) ";;; Every node, one to a line: its number, name, type, payload and inputs.")
+  (t/line! (mut o) "(defn dump [(g graph/Graph)] (-> void)")
+  (t/line! (mut o) "  (for i (range 1 (graph/size g))")
+  (t/line! (mut o) "    (let [n (cast i32 i)]")
+  (t/line! (mut o) "      (unless (graph/dead? g n)")
+  (t/line! (mut o) "        (print \"{:>5} {} {}\" i (name (graph/op g n)) (type-name (graph/ty g n)))")
+  (t/line! (mut o) "        (when (!= (graph/payload g n) 0) (print \" #{:x}\" (graph/payload g n)))")
+  (t/line! (mut o) "        (for k (range 0 (graph/arity g n)) (print \" {}\" (graph/input g n k)))")
+  (t/line! (mut o) "        (println \"\")))))")
   (t/line! (mut o) ";;; The value of a node that depends only on parameters and constants.")
   (t/line! (mut o) "(defn eval-node [(g graph/Graph) (args (slice u64)) (n i32)] (-> u64)")
   (t/line! (mut o) "  (let [operation (graph/op g n)")

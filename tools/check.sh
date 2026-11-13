@@ -14,4 +14,8 @@ out/link
 clang tests/link-main.c out/link.o -o out/link-aot
 out/link-aot
 coil build tests/fuzz.coil -O1 -o out/fuzz | grep -v '^wrote' || true
-out/fuzz ${1:-2000}
+# In chunks under a time limit, so that generated code that never returns fails the check.
+count=${1:-2000}
+for first in $(seq 1 250 $count); do
+  /usr/bin/perl -e 'alarm 300; exec @ARGV' out/fuzz 250 $first | tail -2 | head -1
+done

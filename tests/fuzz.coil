@@ -51,10 +51,13 @@
         (Some [v] (push! (mut want) v))
         (None [] (do (println "seed {}: the interpreter did not finish" seed) (set! ok false) (push! (mut want) 0))))
       (push! (mut sums) (memory-sum memory)))
+    (when show (println "before:") (ir/dump g))
     (let [(mut cx) (st/create g (malloc-allocator))]
       (st/begin! (mut cx))
       (driver/compile (mut cx))
-      (when show (for w (.code cx) (println "{:08x}" w)))
+      (when show
+        (ir/dump (.g cx))
+        (for w (.code cx) (println "{:08x}" w)))
       (when (> (.slots cx) 0) (set! (.spilled stats) (+ (.spilled stats) 1)))
       (set! (.slots stats) (+ (.slots stats) (.slots cx)))
       (set! (.words stats) (+ (.words stats) (len (.code cx))))
