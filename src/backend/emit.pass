@@ -285,6 +285,8 @@ fn rewrite(i: Inst, next: Int) {
     let at = i.copy-from + frame + abi.RETURN-SLOTS * 8
     if floating?(0 - d - 1) { lower.from-stack-float(d, base(), at, i.caller-bytes) }
     else { lower.from-stack(d, base(), at, i.caller-bytes) }
+  } else if i.kind == 11 {
+    lower.frame-address(placed(i.copy-to, 2 * int(i) + 1), base(), i.copy-from + frame + abi.RETURN-SLOTS * 8)
   } else if i.kind == 8 {
     # A frame object, now that it is known how far above the base it is.
     let d = placed(i.copy-to, 2 * int(i) + 1)

@@ -93,6 +93,7 @@ state floats: Int
 state stack-bytes: Int
 state following: Int
 state placed-bytes: Int               # how many bytes the last argument takes on the stack
+state placed-copy: Bool               # and whether it is bytes copied there, the argument being their address
 
 fn begin-placing() {
   ints = 0
@@ -105,6 +106,17 @@ fn begin-placing() {
 # stack pointer as the call is made. `how` is what its shape says of it.
 fn place(type: Int, how: Word) -> Int {
   let with = int(how & word(255))
+  placed-copy = false
+  # Bytes copied onto the stack, in whole words: at a multiple of 16 if asked.
+  if has-bit(how, 12) {
+    let bytes = int(how >> word(32))
+    let align = if has-bit(how, 10) then 16 else 8
+    let at = (stack-bytes + align - 1) / align * align
+    stack-bytes = at + (bytes + 7) / 8 * 8
+    placed-bytes = bytes
+    placed-copy = true
+    return 0 - at - 1
+  }
   # Pinned: the register is said outright.
   if has-bit(how, 11) { return with }
   if has-bit(how, 8) and abi.INDIRECT-RESULT >= 0 { return abi.INDIRECT-RESULT }
@@ -133,6 +145,23 @@ fn place(type: Int, how: Word) -> Int {
   0 - at - 1
 }
 
+# `bytes` bytes from the address `a` holds to `at` bytes above the stack
+# pointer, a word at a time and then what is left.
+fn copy-out(a: Node, at: Int, bytes: Int) {
+  let from = lower.operand(a)
+  let t = mach.fresh()
+  var done = 0
+  var width = 8
+  while width > 0 {
+    while done + width <= bytes {
+      lower.from-stack(t, from, done, width)
+      lower.to-stack(t, at + done, width)
+      done = done + width
+    }
+    width = width / 2
+  }
+}
+
 # The arguments of call `n` to where its shape and the convention want them;
 # the registers that took any.
 fn pass-arguments(n: Node, on-stack: Bool) -> Word {
@@ -147,7 +176,8 @@ fn pass-arguments(n: Node, on-stack: Bool) -> Word {
       passed = set-bit(passed, at)
     } else {
       if not on-stack { panic("a tail call's arguments must all fit in registers") }
-      if a.float { lower.to-stack-float(lower.operand(a), 0 - at - 1, placed-bytes) }
+      if placed-copy { copy-out(a, 0 - at - 1, placed-bytes) }
+      else if a.float { lower.to-stack-float(lower.operand(a), 0 - at - 1, placed-bytes) }
       else { lower.to-stack(lower.extended(a, 2), 0 - at - 1, placed-bytes) }
     }
   }
@@ -323,6 +353,10 @@ fn param(n: Node) {
   let at = place(int(n.type), param-passing(k))
   if at >= 0 {
     arrive(n, 0 - at - 1)
+  } else if placed-copy {
+    # The parameter is the address of the bytes the caller copied.
+    lower.frame-address(int(n), 0 - abi.STACK - 1, 0 - at - 1)
+    mach.caller-address(int(n), 0 - at - 1)
   } else {
     if n.float { lower.from-stack-float(int(n), 0 - abi.STACK - 1, 0 - at - 1, placed-bytes) }
     else { lower.from-stack(int(n), 0 - abi.STACK - 1, 0 - at - 1, placed-bytes) }

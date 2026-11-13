@@ -111,6 +111,16 @@ fn from-caller(d: Int, at: Int, bytes: Int) {
   i.caller-bytes = bytes
 }
 
+# The instruction just emitted gives register `d` the address `at` bytes into
+# the caller's frame, which is as far above this function's own as the frame
+# is large.
+fn caller-address(d: Int, at: Int) {
+  let i = id(Inst.count)
+  i.kind = 11
+  i.copy-to = d
+  i.copy-from = at
+}
+
 # The instruction just emitted gives register `d` the address just above the
 # arguments for calls, which is known only when every call has been seen.
 fn above-arguments(d: Int) {

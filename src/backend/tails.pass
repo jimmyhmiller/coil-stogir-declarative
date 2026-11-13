@@ -26,7 +26,8 @@ fn private?(a: Node) -> Bool {
 fn itself?(c: Node) -> Bool {
   if not (c is CALL) or self-symbol == 0 or not (c.in(1) is SYMBOL) or int(c.in(1).payload) + 1 != self-symbol { return false }
   if c.arity - 2 != param-count() or shape-pinned(int(c.payload)) or shape-variadic(int(c.payload)) { return false }
-  all k in 0..param-count(): int(c.in(k + 2).type) == int(param-type(k))
+  # A parameter that is the address of the caller's copy is not the argument.
+  all k in 0..param-count(): int(c.in(k + 2).type) == int(param-type(k)) and not has-bit(param-passing(k), 12)
 }
 
 # Whether `v`, the `n`th value of its kind a return gives back, is what call
