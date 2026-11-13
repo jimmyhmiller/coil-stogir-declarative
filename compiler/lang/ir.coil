@@ -79,6 +79,10 @@
         ; In the control chain: memory of its own, as many bytes as its operand
         ; says, and the node is its address.
         (= role "reserve") 25
+        ; In the control chain: as many bytes as the payload says, copied from
+        ; the second address to the first, or each set to the operand.
+        (= role "copy") 26
+        (= role "fill") 27
         :else -1))
 
 ;;; A type's number; 0 is "no type". Numbers follow declaration order from 1.
@@ -786,6 +790,11 @@
   (t/line! (mut o) "      (= r 25)")
   (t/line! (mut o) "        (do (set! (mut (.phi it)) (cast i64 n) (memory/allocate (value g (mut it) args (graph/input g n 1))))")
   (t/line! (mut o) "            (set! (.epoch it) (+ (.epoch it) 1)))")
+  (t/line! (mut o) "      (or (= r 26) (= r 27))")
+  (t/line! (mut o) "        (let [to (value g (mut it) args (graph/input g n 1))")
+  (t/line! (mut o) "              from (value g (mut it) args (graph/input g n 2))]")
+  (t/line! (mut o) "          (for i (range 0 (cast i64 (graph/payload g n)))")
+  (t/line! (mut o) "            (memory/write (+ to (cast u64 i)) 8 (if (= r 26) (memory/read (+ from (cast u64 i)) 8) from))))")
   (t/line! (mut o) "      ; An update: what was there is its value, and its meaning goes back.")
   (t/line! (mut o) "      (= r 23)")
   (t/line! (mut o) "        (let [address (value g (mut it) args (graph/input g n 1))")
@@ -806,7 +815,7 @@
   (t/line! (mut o) "      (let [u (graph/user g e)")
   (t/line! (mut o) "            r (get ROLES (cast i64 (graph/op g u)))]")
   (t/line! (mut o) "        (when (and (= (graph/input g u 0) c)")
-  (t/line! (mut o) "                   (or (= r 5) (= r 2) (= r 11) (= r 13) (= r 14) (= r 18) (= r 19) (= r 22) (= r 23) (= r 24) (= r 25)))")
+  (t/line! (mut o) "                   (or (= r 5) (= r 2) (= r 11) (= r 13) (= r 14) (= r 18) (= r 19) (= r 22) (= r 23) (= r 24) (= r 25) (= r 26) (= r 27)))")
   (t/line! (mut o) "          (set! found u)))")
   (t/line! (mut o) "      (set! e (graph/next-use g e)))")
   (t/line! (mut o) "    found))")

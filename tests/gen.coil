@@ -278,12 +278,12 @@
         fitted (cond (< bits (ir/type-bits (.type r))) (ir/trunc! (mut (.g r)) t v)
                      (> bits (ir/type-bits (.type r))) (ir/zext! (mut (.g r)) t v)
                      :else v)]
-    (set! (.control r) (ir/store-node! (mut (.g r)) (.control r) (address! (mut r) bits) fitted))))
+    (set! (.control r) (ir/store-node! (mut (.g r)) 0 (.control r) (address! (mut r) bits) fitted))))
 
 (defn read! [(r (mut Gen))] (-> i32)
   (let [t (memory-type! (mut r))
         bits (ir/type-bits t)
-        v (ir/load-node! (mut (.g r)) t (.control r) (address! (mut r) bits))]
+        v (ir/load-node! (mut (.g r)) t 0 (.control r) (address! (mut r) bits))]
     (set! (.control r) v)
     ; TRUNC to a type as wide is how a value changes between signed and unsigned.
     (if (< bits (ir/type-bits (.type r)))
@@ -361,7 +361,7 @@
 (defn statements! [(r (mut Gen)) (depth i64)] (-> void)
   (let [count (+ 1 (below! (mut r) 6))]
     (for _ (range 0 count)
-      (let [choice (below! (mut r) (if (.rich r) 26 10))]
+      (let [choice (below! (mut r) (if (.rich r) 27 10))]
         (set! (.budget r) (- (.budget r) 1))
         (cond
           (or (< choice (if (.rich r) 5 6)) (>= depth 3) (< (.budget r) 0))
@@ -376,12 +376,13 @@
           (= choice 17) (trap! (mut r))
           (or (= choice 21) (= choice 22)) (shared! (mut r))
           (= choice 23) (push! (mut (.env r)) (reserve! (mut r)))
+          (= choice 26) (block! (mut r))
           (or (= choice 24) (= choice 25)) (bottom-loop! (mut r) depth)
           (= choice 18)
             (set! (.control r)
-                  (ir/store-node! (mut (.g r)) (.control r) (get (.vars r) (below! (mut r) 3)) (pick! (mut r))))
+                  (ir/store-node! (mut (.g r)) 0 (.control r) (get (.vars r) (below! (mut r) 3)) (pick! (mut r))))
           (or (= choice 19) (= choice 20))
-            (let [v (ir/load-node! (mut (.g r)) (.type r) (.control r) (get (.vars r) (below! (mut r) 3)))]
+            (let [v (ir/load-node! (mut (.g r)) (.type r) 0 (.control r) (get (.vars r) (below! (mut r) 3)))]
               (set! (.control r) v)
               (push! (mut (.env r)) v))
           :else (push! (mut (.env r)) (float! (mut r))))
@@ -518,17 +519,35 @@
       (push! (mut (.env r)) x2)
       (set! (.control r) (ir/false! (mut (.g r)) branch)))))
 
+;;; A copy or a fill of a few bytes inside the scratch memory. A copy's two
+;;; ends are apart: one in the low half, the other in the high half.
+(defn block! [(r (mut Gen))] (-> void)
+  (let [bytes (+ 1 (below! (mut r) 40))
+        low (below! (mut r) (- 128 bytes))
+        high (+ 128 (below! (mut r) (- 128 bytes)))
+        swap (= (below! (mut r) 2) 0)
+        base (ir/const! (mut (.g r)) ir/T-PTR (.memory r))
+        a (ir/add! (mut (.g r)) ir/T-PTR base (ir/const! (mut (.g r)) ir/T-PTR (cast u64 (if swap high low))))
+        b (ir/add! (mut (.g r)) ir/T-PTR base (ir/const! (mut (.g r)) ir/T-PTR (cast u64 (if swap low high))))]
+    (set! (.control r)
+          (if (= (below! (mut r) 3) 0)
+              (ir/fill! (mut (.g r)) (cast u64 bytes) (.control r) a
+                        (if (= (ir/type-bits (.type r)) 8)
+                            (pick! (mut r))
+                            (ir/trunc! (mut (.g r)) ir/T-U8 (pick! (mut r)))))
+              (ir/copy! (mut (.g r)) (cast u64 bytes) (.control r) a b)))))
+
 ;;; Memory reserved as the program runs, a value written to it and read back.
 (defn reserve! [(r (mut Gen))] (-> i32)
   (let [words (+ 1 (below! (mut r) 6))
         room (ir/reserve! (mut (.g r)) (.control r) (ir/const! (mut (.g r)) ir/T-U64 (cast u64 (* words 8))))
         at (ir/add! (mut (.g r)) ir/T-PTR room
                     (ir/const! (mut (.g r)) ir/T-PTR (cast u64 (* 8 (below! (mut r) words)))))
-        kept (ir/store-node! (mut (.g r)) room at (pick! (mut r)))]
+        kept (ir/store-node! (mut (.g r)) 0 room at (pick! (mut r)))]
     (set! (.control r) kept)
     ; Something between the write and the read, so the value waits there.
     (push! (mut (.env r)) (arithmetic! (mut r)))
-    (let [back (ir/load-node! (mut (.g r)) (.type r) (.control r) at)]
+    (let [back (ir/load-node! (mut (.g r)) (.type r) 0 (.control r) at)]
       (set! (.control r) back)
       back)))
 
@@ -558,7 +577,7 @@
       (set! (.object r) (ir/slot! (mut (.g r)) 64))
       (for i (range 0 8)
         (set! (.control r)
-              (ir/store-node! (mut (.g r)) (.control r)
+              (ir/store-node! (mut (.g r)) 0 (.control r)
                               (ir/add! (mut (.g r)) ir/T-PTR (.object r)
                                        (ir/const! (mut (.g r)) ir/T-PTR (cast u64 (* i 8))))
                               (ir/const! (mut (.g r)) ir/T-U64 (cast u64 (* (+ i 1) 1000003)))))))
@@ -569,7 +588,7 @@
       (for i (range 0 3)
         (let [v (ir/slot! (mut (.g r)) 8)]
           (push! (mut (.vars r)) v)
-          (set! (.control r) (ir/store-node! (mut (.g r)) (.control r) v (get (.env r) i))))))
+          (set! (.control r) (ir/store-node! (mut (.g r)) 0 (.control r) v (get (.env r) i))))))
     (statements! (mut r) 0)
     (statements! (mut r) 0)
     (while (> (.budget r) 0) (statements! (mut r) 0))

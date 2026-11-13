@@ -50,9 +50,15 @@ node RESULT(call: ctrl) : T                     role result  payload index
 node TAILCALL(c: ctrl, target: ptr, args...) : T  role tailcall  payload shape
 
 # Memory. A load and a store sit in the control chain, in the order they happen;
-# a load is also the value it read. The width is the type's.
-node LOAD(c: ctrl, addr: ptr) : T in value      role load
-node STORE(c: ctrl, addr: ptr, value) : ctrl    role store
+# a load is also the value it read. The width is the type's. One that is
+# `volatile` (not 0) happens exactly once, where it stands, whatever is known
+# of the memory.
+node LOAD(c: ctrl, addr: ptr) : T in value      role load   payload volatile
+node STORE(c: ctrl, addr: ptr, value) : ctrl    role store  payload volatile
+# `bytes` bytes from src to dst, which are apart or the same place; and `bytes`
+# bytes at dst each set to `value`.
+node COPY(c: ctrl, dst: ptr, src: ptr) : ctrl   role copy   payload bytes
+node FILL(c: ctrl, dst: ptr, value: u8) : ctrl  role fill   payload bytes
 
 # Memory that other threads share. ATOMIC-LOAD and ATOMIC-STORE are a load and
 # a store that every thread sees in one order. An update happens whole: nothing

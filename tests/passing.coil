@@ -72,10 +72,10 @@
         out (ir/param! (mut g) ir/T-PTR 0)
         a (ir/param! (mut g) ir/T-U64 1)
         b (ir/param! (mut g) ir/T-U64 2)
-        first (ir/store-node! (mut g) s out (ir/add! (mut g) ir/T-U64 a b))
-        second (ir/store-node! (mut g) first (ir/add! (mut g) ir/T-PTR out (ir/const! (mut g) ir/T-PTR 8))
+        first (ir/store-node! (mut g) 0 s out (ir/add! (mut g) ir/T-U64 a b))
+        second (ir/store-node! (mut g) 0 first (ir/add! (mut g) ir/T-PTR out (ir/const! (mut g) ir/T-PTR 8))
                                (ir/mul! (mut g) ir/T-U64 a b))
-        third (ir/store-node! (mut g) second (ir/add! (mut g) ir/T-PTR out (ir/const! (mut g) ir/T-PTR 16))
+        third (ir/store-node! (mut g) 0 second (ir/add! (mut g) ir/T-PTR out (ir/const! (mut g) ir/T-PTR 16))
                               (ir/sub! (mut g) ir/T-U64 a b))]
     (graph/declare-passing! (mut g) 0 graph/PASS-INDIRECT)
     (graph/set-input! (mut g) (ir/return! (mut g) third 1) 1 out)
@@ -90,9 +90,9 @@
         room (ir/slot! (mut g) 24)
         shape (graph/shape! (mut g) false)
         call (ir/call-node! (mut g) shape s (ir/const! (mut g) ir/T-PTR target) 3)
-        first (ir/load-node! (mut g) ir/T-U64 call room)
-        second (ir/load-node! (mut g) ir/T-U64 first (ir/add! (mut g) ir/T-PTR room (ir/const! (mut g) ir/T-PTR 8)))
-        third (ir/load-node! (mut g) ir/T-U64 second (ir/add! (mut g) ir/T-PTR room (ir/const! (mut g) ir/T-PTR 16)))]
+        first (ir/load-node! (mut g) ir/T-U64 0 call room)
+        second (ir/load-node! (mut g) ir/T-U64 0 first (ir/add! (mut g) ir/T-PTR room (ir/const! (mut g) ir/T-PTR 8)))
+        third (ir/load-node! (mut g) ir/T-U64 0 second (ir/add! (mut g) ir/T-PTR room (ir/const! (mut g) ir/T-PTR 16)))]
     (graph/shape-arg! (mut g) shape graph/PASS-INDIRECT)
     (graph/set-input! (mut g) call 2 room)
     (graph/set-input! (mut g) call 3 a)
@@ -149,8 +149,8 @@
         call (ir/call-node! (mut g) 0 room (ir/const! (mut g) ir/T-PTR target) 10)
         got (ir/result! (mut g) ir/T-U64 0 call)
         last (ir/add! (mut g) ir/T-PTR room (ir/trunc! (mut g) ir/T-PTR (ir/sub! (mut g) ir/T-U64 bytes (ir/const! (mut g) ir/T-U64 8))))
-        kept (ir/store-node! (mut g) call last got)
-        read (ir/load-node! (mut g) ir/T-U64 kept last)
+        kept (ir/store-node! (mut g) 0 call last got)
+        read (ir/load-node! (mut g) ir/T-U64 0 kept last)
         total (ir/add! (mut g) ir/T-U64 sum read)
         next (ir/add! (mut g) ir/T-U64 round (ir/const! (mut g) ir/T-U64 1))
         again (ir/if! (mut g) read (ir/ult! (mut g) next (ir/const! (mut g) ir/T-U64 3)))]

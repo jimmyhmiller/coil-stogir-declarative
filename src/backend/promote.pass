@@ -28,8 +28,8 @@ fn number-chains() {
 # What `u` reads or writes of object `s` as a whole: the type, or 0 if `u` does
 # anything else with it.
 fn access-type(u: Node, s: Node) -> Int =
-  if u is LOAD and u.in(1) == s then int(u.type)
-  else if u is STORE and u.in(1) == s and u.in(2) != s then int(u.in(2).type)
+  if u is LOAD and u.in(1) == s and u.payload == 0 then int(u.type)
+  else if u is STORE and u.in(1) == s and u.in(2) != s and u.payload == 0 then int(u.in(2).type)
   else 0
 
 # The one type an object is read and written as, or 0 if it cannot be a value.

@@ -42,6 +42,8 @@
 (const ROLE-UPDATE 23)
 (const ROLE-BARRIER 24)
 (const ROLE-RESERVE 25)
+(const ROLE-COPY 26)
+(const ROLE-FILL 27)
 
 (defstruct Graph
   [(ops (ArrayList u16))

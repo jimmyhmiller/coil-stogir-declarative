@@ -1,0 +1,75 @@
+# Copies and fills of many bytes at once. A few bytes are loads and stores of
+# the widest pieces that fit, the last one reaching back over bytes already
+# done when the count is not a multiple of its width. More than that is a call
+# of the routine the unit was told of.
+pass in unit
+
+state copy-routine: Int               # the symbols of routines outside the image that copy
+state fill-routine: Int               # and fill any number of bytes; 0 if there is none
+state inline-bytes: Int               # the most bytes done by loads and stores
+
+fn at(p: Node, offset: Int) -> Node =
+  if offset == 0 then p else ir.add!(mut graph, ir.T-PTR, p, ir.make-const!(mut graph, ir.T-PTR, word(offset)))
+
+# The type of a piece `bytes` wide.
+fn piece(bytes: Int) -> Int =
+  if bytes == 8 then int(ir.T-U64) else if bytes == 4 then int(ir.T-U32) else if bytes == 2 then int(ir.T-U16) else int(ir.T-U8)
+
+# One piece `width` wide at `offset`: copied, or written from `value`, a whole
+# word of what a fill writes. Returns the control after its store.
+fn one(c: Node, dst: Node, src: Node, value: Node, offset: Int, width: Int) -> Node {
+  let t = id(piece(width))
+  if value != none {
+    return ir.store-node!(mut graph, word(0), c, at(dst, offset), if width < 8 then ir.trunc!(mut graph, t, value) else value)
+  }
+  let v = ir.load-node!(mut graph, t, word(0), c, at(src, offset))
+  ir.store-node!(mut graph, word(0), v, at(dst, offset), v)
+}
+
+# `total` bytes in pieces of the widest width that fits, one after another,
+# and a last one that ends where the bytes do.
+fn pieces(c: Node, dst: Node, src: Node, value: Node, total: Int) -> Node {
+  var width = 8
+  while width > total { width = width / 2 }
+  var control = c
+  var done = 0
+  while done + width <= total {
+    control = one(control, dst, src, value, done, width)
+    done = done + width
+  }
+  if done < total { control = one(control, dst, src, value, total - width, width) }
+  control
+}
+
+fn call(c: Node, routine: Int, a: Node, b: Node, bytes: Int) -> Node {
+  if routine == 0 { panic("a copy or fill of this many bytes needs a routine, and the unit was told of none") }
+  let n = ir.call-node!(mut graph, word(0), c, ir.extern!(mut graph, word(routine)), 3)
+  set-input(n, 2, a)
+  set-input(n, 3, b)
+  set-input(n, 4, ir.make-const!(mut graph, ir.T-U64, word(bytes)))
+  n
+}
+
+fn expand(n: Node) {
+  let bytes = int(n.payload)
+  var control = n.in(0)
+  if n is COPY {
+    if bytes > inline-bytes { control = call(control, copy-routine, n.in(1), n.in(2), bytes) }
+    else if n.in(1) != n.in(2) { control = pieces(control, n.in(1), n.in(2), none, bytes) }
+  } else {
+    let wide = ir.zext!(mut graph, ir.T-U64, n.in(2))
+    if bytes > inline-bytes { control = call(control, fill-routine, n.in(1), wide, bytes) }
+    else {
+      let every = ir.mul!(mut graph, ir.T-U64, wide, ir.make-const!(mut graph, ir.T-U64, word(72340172838076673)))
+      control = pieces(control, n.in(1), none, every, bytes)
+    }
+  }
+  grow-nodes()
+  replace-uses(n, control)
+  drop(n)
+}
+
+fn run() {
+  if inline-bytes == 0 { inline-bytes = 128 }
+  for n in Node { if not n.dead and (n is COPY or n is FILL) { expand(n) } }
+}
