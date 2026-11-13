@@ -217,6 +217,8 @@ rule SREM(x, y)                    => sdiv(sf, $q, sx(x), sx(y)) ; msub(sf, out,
 
 # A boolean in a register is exactly 0 or 1, so as a wider number it is itself.
 rule ZEXT(x) when bits(x) == 1     => x
+# A load of fewer than 64 bits leaves zeros above them.
+rule ZEXT(x) when loaded(x) and bits(x) >= 8 => x
 rule ZEXT(x)                       => ubfm(1, out, x, 0, bits(x) - 1)
 rule SEXT(x)                       => sbfm(1, out, x, 0, bits(x) - 1)
 rule TRUNC(x) when width == 1      => ubfm(0, out, x, 0, 0)

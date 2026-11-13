@@ -110,3 +110,20 @@ fn walk(b: Block) {
 fn run() {
   for b in order { walk(b) }
 }
+
+# Whether nothing reads what load `l` reads: all that uses it is what follows it.
+fn unread?(l: Node) -> Bool =
+  all e in edges(l): edge-user(e) is REGION or edge-user(e) is LOOP or (edge-slot(e) == 0 and cfg.control?(edge-user(e)))
+
+# A load nothing reads is not made. (A whole record is read to get at one
+# field of it.) Returns how many went, since one going may leave another unread.
+fn prune() -> Int {
+  var gone = 0
+  for n in Node {
+    if not n.dead and n is LOAD and n.payload == 0 and unread?(n) {
+      replace(n, none)
+      gone = gone + 1
+    }
+  }
+  gone
+}

@@ -201,6 +201,12 @@
             (let [x (value-expr (mut l) 0 false)]
               (t/expect! (mut (.c l)) ")")
               (t/cat3 "(= (graph/op (.g cx) (primitive/cast i32 " x ")) ir/SLOT)")))
+      ; `loaded(x)`: whether node x is what a load read, which has zeros above it.
+      (and call (= name "loaded"))
+        (do (t/advance! (mut (.c l)))
+            (let [x (value-expr (mut l) 0 false)]
+              (t/expect! (mut (.c l)) ")")
+              (t/cat3 "(= (graph/op (.g cx) (primitive/cast i32 " x ")) ir/LOAD)")))
       (and call (= name "object"))
         (do (t/advance! (mut (.c l)))
             (let [x (value-expr (mut l) 0 false)]

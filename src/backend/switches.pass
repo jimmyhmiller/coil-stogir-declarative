@@ -1,0 +1,45 @@
+# A switch with many cases is taken apart by the middle of its values: first
+# whether the value is below the middle, then a switch of the cases on that
+# side, and so on down, so that finding one case of a hundred is seven
+# comparisons and not a hundred.
+pass in unit
+use loops as loops
+
+state halved: Int
+
+# How many cases a switch may have and still be compared with each in turn.
+fn few() -> Int = 4
+
+fn halve(s: Node) {
+  var cases: [Node] = []
+  for u in users(s) { if u is CASE { cases.push(u) } }
+  if cases.len <= few() { return }
+  let otherwise = first u in users(s): u is DEFAULT
+  if otherwise == none { return }
+  # The middle: a case's value that half the cases are below.
+  var middle: Node = none
+  for c in cases {
+    if middle == none and (count d in cases: d.payload < c.payload) == cases.len / 2 { middle = c }
+  }
+  if middle == none { return }
+  let v = s.in(1)
+  let test = ir.if!(mut graph, s.in(0), ir.ult!(mut graph, v, ir.make-const!(mut graph, v.type, middle.payload)))
+  let below = ir.switch!(mut graph, ir.true!(mut graph, test), v)
+  let above = ir.switch!(mut graph, ir.false!(mut graph, test), v)
+  let at = middle.payload
+  for c in cases { set-input(c, 0, if c.payload < at then below else above) }
+  let both = ir.region!(mut graph, 2)
+  set-input(both, 0, ir.default!(mut graph, below))
+  set-input(both, 1, ir.default!(mut graph, above))
+  grow-nodes()
+  loops.follow(otherwise, both)
+  drop(otherwise)
+  drop(s)
+  halved = halved + 1
+  halve(below)
+  halve(above)
+}
+
+fn run() {
+  for n in Node { if not n.dead and n is SWITCH { halve(n) } }
+}

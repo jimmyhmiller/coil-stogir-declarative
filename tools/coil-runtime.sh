@@ -7,17 +7,19 @@
 set -uo pipefail
 tree=${COIL_TREE:-$HOME/Documents/Code/projects/coil/.worktrees/declarative}
 cd "$tree"
-# The least of three runs: other work on the machine only ever adds.
-m() {
-  for run in 1 2 3; do /usr/bin/time -l "$@" 2>&1 >/dev/null | awk '/instructions retired/{i=$1} /cycles elapsed/{c=$1} / real /{r=$1} END{print r, i/1e9, c/1e9}'; done |
-    awk 'NR==1||$1<r{r=$1} NR==1||$2<i{i=$2} NR==1||$3<c{c=$3} END{printf "%.2f s  %.1f G instructions  %.1f G cycles\n", r, i, c; print i, c > "/dev/stderr"}'
-}
+# The least of several runs, the two compilers taking turns: other work on the
+# machine only ever adds, and should add to both alike.
+one() { /usr/bin/time -l "$@" 2>&1 >/dev/null | awk '/instructions retired/{i=$1} /cycles elapsed/{c=$1} / real /{r=$1} END{print r, i/1e9, c/1e9}'; }
+least() { awk 'NR==1||$1<r{r=$1} NR==1||$2<i{i=$2} NR==1||$3<c{c=$3} END{print r, i, c}' $1; }
 if [[ "${1:-}" != profile-only ]]; then
-  ours=$(m build/bin/coil-self check src/compiler/main.coil 2>build/runtime-ours.txt)
-  theirs=$(m build/bin/cmp-llvm-O3 check src/compiler/main.coil 2>build/runtime-llvm.txt)
-  echo "declarative: $ours"
-  echo "llvm:        $theirs"
-  paste build/runtime-ours.txt build/runtime-llvm.txt | awk '{printf "against LLVM (goal 1.10): %.2fx cycles, %.2fx instructions\n", $2/$4, $1/$3}'
+  : > build/runtime-ours.txt; : > build/runtime-llvm.txt
+  for run in $(seq 1 ${RUNS:-4}); do
+    one build/bin/coil-self check src/compiler/main.coil >> build/runtime-ours.txt
+    one build/bin/cmp-llvm-O3 check src/compiler/main.coil >> build/runtime-llvm.txt
+  done
+  least build/runtime-ours.txt | awk '{printf "declarative: %.2f s  %.1f G instructions  %.1f G cycles\n", $1, $2, $3}'
+  least build/runtime-llvm.txt | awk '{printf "llvm:        %.2f s  %.1f G instructions  %.1f G cycles\n", $1, $2, $3}'
+  paste <(least build/runtime-ours.txt) <(least build/runtime-llvm.txt) | awk '{printf "against LLVM (goal 1.10): %.2fx cycles, %.2fx instructions\n", $3/$6, $2/$5}'
 fi
 size build/bin/coil-self build/bin/cmp-llvm-O3 | awk 'NR>1{print "text", $1, $NF}'
 if [[ "${1:-}" == profile* ]]; then
