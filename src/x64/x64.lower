@@ -121,6 +121,10 @@ rule CONST k                                => mov-imm64(out, k)
 
 # Arithmetic: the result starts as a copy of the first operand.
 rule ADD(x, CONST k) when s32(k) and width == 64 => lea(out, x, k)
+# A sum of two registers, the second perhaps times 2, 4 or 8, is an address the
+# machine computes in one instruction, into any register.
+rule ADD(x, once SHL(y, CONST s)) when width == 64 and s >= 1 and s <= 3 => lea-indexed(out, x, y, s, 0)
+rule ADD(x, y) when width == 64    => lea-indexed(out, x, y, 0, 0)
 rule ADD(x, CONST k) when s32(k)   => move(out, x) ; add-imm(sf, out, k)
 rule ADD(x, y)                     => move(out, x) ; add(sf, out, y)
 rule SUB(x, CONST k) when s32(k)   => move(out, x) ; sub-imm(sf, out, k)
@@ -295,6 +299,13 @@ rule STORE(_, ADD(p, CONST k), v) when not float(v) and bits(v) == 32 and slot(p
 rule STORE(_, ADD(p, CONST k), v) when not float(v) and bits(v) == 16 and slot(p) and k >= 0 and k < object(p) => store16(v, rbp, k - object(p))
 rule STORE(_, ADD(p, CONST k), v) when not float(v) and bits(v) <= 8 and slot(p) and k >= 0 and k < object(p)  => store8(v, rbp, k - object(p))
 rule LOAD(_, ADD(p, CONST k)) when not float and width == 64 and s32(k) => load(1, out, p, k)
+# A base plus an index, the index perhaps times 2, 4 or 8, is an address as it is.
+rule LOAD(_, ADD(p, once SHL(i, CONST s))) when not float and width == 64 and s >= 1 and s <= 3 => load-indexed(1, out, p, i, s)
+rule LOAD(_, ADD(p, once SHL(i, CONST s))) when not float and width == 32 and s >= 1 and s <= 3 => load-indexed(0, out, p, i, s)
+rule LOAD(_, once ADD(p, i)) when not float and width == 64 => load-indexed(1, out, p, i, 0)
+rule LOAD(_, once ADD(p, i)) when not float and width == 32 => load-indexed(0, out, p, i, 0)
+rule STORE(_, ADD(p, once SHL(i, CONST s)), v) when not float(v) and bits(v) == 64 and s >= 1 and s <= 3 => store-indexed(1, v, p, i, s)
+rule STORE(_, ADD(p, once SHL(i, CONST s)), v) when not float(v) and bits(v) == 32 and s >= 1 and s <= 3 => store-indexed(0, v, p, i, s)
 rule LOAD(_, ADD(p, CONST k)) when not float and width == 32 and s32(k) => load(0, out, p, k)
 rule LOAD(_, ADD(p, CONST k)) when not float and width == 16 and s32(k) => load16(out, p, k)
 rule LOAD(_, ADD(p, CONST k)) when not float and s32(k)                 => load8(out, p, k)

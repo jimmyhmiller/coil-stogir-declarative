@@ -57,6 +57,14 @@ form mem(reg, base, disp) when disp == 0 and base & 7 != 5       = byte((reg & 7
 form mem(reg, base, disp) when s8(disp)                          = byte(0x40 | (reg & 7) << 3 | base & 7) byte(disp)
 form mem(reg, base, disp)                                        = byte(0x80 | (reg & 7) << 3 | base & 7) le32(disp)
 
+# The same with an index register besides: the prefix names all three, and
+# the memory is at base + (index << scale) + disp, which takes a second byte.
+form rexx(w, reg, index, base) when w == 1 or (reg >> 3) & 1 == 1 or (index >> 3) & 1 == 1 or (base >> 3) & 1 == 1 = byte(0x40 | w << 3 | ((reg >> 3) & 1) << 2 | ((index >> 3) & 1) << 1 | (base >> 3) & 1)
+form rexx(w, reg, index, base) = nothing
+form memx(reg, base, index, scale, disp) when disp == 0 and base & 7 != 5 = byte((reg & 7) << 3 | 4) byte(scale << 6 | (index & 7) << 3 | base & 7)
+form memx(reg, base, index, scale, disp) when s8(disp)                    = byte(0x40 | (reg & 7) << 3 | 4) byte(scale << 6 | (index & 7) << 3 | base & 7) byte(disp)
+form memx(reg, base, index, scale, disp)                                  = byte(0x80 | (reg & 7) << 3 | 4) byte(scale << 6 | (index & 7) << 3 | base & 7) le32(disp)
+
 # Copies and constants. `w` picks 64-bit (1) or 32-bit (0) registers; a 32-bit
 # write clears the upper half.
 inst mov(w: u1, dst: def gpr, src: use gpr)          = rex(w, src, dst) byte(0x89) modrm(src, dst)
@@ -181,6 +189,11 @@ inst storef(ty: u1, src: use simd, base: use gpr, disp: s32)  = scalar(ty) rex(0
 
 # Memory at base + disp.
 inst lea(dst: def gpr, base: use gpr, disp: s32)     = rex(1, dst, base) byte(0x8D) mem(dst, base, disp)
+# The address base + (index << scale) + disp; and 64- or 32-bit loads and
+# stores at base + (index << scale).
+inst lea-indexed(dst: def gpr, base: use gpr, index: use gpr, scale: u2, disp: s32) = rexx(1, dst, index, base) byte(0x8D) memx(dst, base, index, scale, disp)
+inst load-indexed(w: u1, dst: def gpr, base: use gpr, index: use gpr, scale: u2)    = rexx(w, dst, index, base) byte(0x8B) memx(dst, base, index, scale, 0)
+inst store-indexed(w: u1, src: use gpr, base: use gpr, index: use gpr, scale: u2)   = rexx(w, src, index, base) byte(0x89) memx(src, base, index, scale, 0)
 inst load(w: u1, dst: def gpr, base: use gpr, disp: s32)   = rex(w, dst, base) byte(0x8B) mem(dst, base, disp)
 inst load16(dst: def gpr, base: use gpr, disp: s32)  = rex(0, dst, base) byte(0x0F) byte(0xB7) mem(dst, base, disp)
 inst load8(dst: def gpr, base: use gpr, disp: s32)   = rex(0, dst, base) byte(0x0F) byte(0xB6) mem(dst, base, disp)
