@@ -16,11 +16,13 @@ column mark: Block -> Int
 column loop-blocks: Block -> [Block]  # for a loop's head: the head and its body
 column loop-head: Block -> Block      # the head of the innermost loop a block is in
 column loop-parent: Block -> Block    # for a loop's head: the head of the loop around it
+column laid: Block -> Bool            # given its place in the code
 # For finding which function something new goes wrong in: whoever compiles
 # sets this for some functions only, and what is being tried asks it.
 setting trial: Bool
 state post: [Block]
-state order: [Block]                  # reverse postorder from the entry
+state order: [Block]                  # the blocks as the code has them: reverse postorder from the
+                                      # entry while dominators and loops are found, then as laid out
 state stamp: Int
 state root: Block                     # where control starts
 
@@ -182,9 +184,61 @@ fn loops() {
   }
 }
 
+# The way a block more often goes on, guessed from its shape: not the way
+# that only stops the program, nor the way out of the loop it is in, nor the
+# way taken when two values are equal.
+fn likely(b: Block) -> Block {
+  if b.succs.len == 0 { return none }
+  if b.last is IF and b.succs.len == 2 {
+    let x = b.succs[0]
+    let y = b.succs[1]
+    if x.last is TRAP and not (y.last is TRAP) { return y }
+    if y.last is TRAP and not (x.last is TRAP) { return x }
+    if x.loop-depth < b.loop-depth and y.loop-depth >= b.loop-depth { return y }
+    if y.loop-depth < b.loop-depth and x.loop-depth >= b.loop-depth { return x }
+    let c = b.last.in(1)
+    if c is EQ or c is NE {
+      let yes = if x.head is TRUE then x else y
+      let no = if x.head is TRUE then y else x
+      return if c is EQ then no else yes
+    }
+  }
+  b.succs[b.succs.len - 1]
+}
+
+# The order the code has its blocks in. After a block comes the way it more
+# often goes on, so that going on is no jump; failing that another way it
+# goes; failing that the earliest block not yet placed. A block is always
+# after every block that dominates it.
+fn layout() {
+  var out: [Block] = []
+  var next = 0
+  var b: Block = order[0]
+  while out.len < order.len {
+    if b == none {
+      while order[next].laid { next = next + 1 }
+      b = order[next]
+    }
+    b.laid = true
+    out.push(b)
+    var to = likely(b)
+    if to != none and to.laid {
+      to = none
+      for s in b.succs { if not s.laid { to = s } }
+    }
+    b = to
+  }
+  order.clear()
+  for x in out {
+    x.rpo = order.len
+    order.push(x)
+  }
+}
+
 fn build() {
   blocks()
   ordering()
   dominators()
   loops()
+  layout()
 }
