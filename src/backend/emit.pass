@@ -299,7 +299,7 @@ fn leave() {
 }
 
 fn run() {
-  saved = used & isa.CALLEE-SAVED
+  saved = (used | pinned-writes) & isa.CALLEE-SAVED
   if dynamic { saved = set-bit(saved, abi.BASE) }
   if calls or object-bytes > 0 or dynamic {
     saved = set-bit(saved, abi.FRAME)

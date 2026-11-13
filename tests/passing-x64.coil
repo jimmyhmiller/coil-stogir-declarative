@@ -8,6 +8,7 @@
 (import "coil.arraylist" :use [ArrayList])
 (import "coil.primitive" :as primitive)
 (import "coil.cc" :as cc)
+(import "coil.os" :as os)
 (import "coil.var" :use [var-static])
 (import "rt.graph" :as graph)
 (import "rt.jit" :as jit)
@@ -166,6 +167,58 @@
     (graph/set-input! (mut g) (ir/return! (mut g) (ir/false! (mut g) again) 1) 1 total)
     g))
 
+;;; A frame too large for one instruction to reach across: two objects of
+;;; 40,000 bytes, a word written at each end of each, a call with arguments on
+;;; the stack, and the four words' sum with what the call gave.
+(defn large-frame [(target u64)] (-> graph/Graph)
+  (let [(mut g) (graph/create (malloc-allocator))
+        s (ir/start! (mut g))
+        x (ir/param! (mut g) ir/T-U64 0)
+        first (ir/slot! (mut g) 40000)
+        second (ir/slot! (mut g) 40000)
+        far (ir/const! (mut g) ir/T-PTR 39992)
+        a (ir/store-node! (mut g) 0 s first x)
+        b (ir/store-node! (mut g) 0 a (ir/add! (mut g) ir/T-PTR first far) (ir/add! (mut g) ir/T-U64 x (ir/const! (mut g) ir/T-U64 1)))
+        c (ir/store-node! (mut g) 0 b second (ir/add! (mut g) ir/T-U64 x (ir/const! (mut g) ir/T-U64 2)))
+        d (ir/store-node! (mut g) 0 c (ir/add! (mut g) ir/T-PTR second far) (ir/add! (mut g) ir/T-U64 x (ir/const! (mut g) ir/T-U64 3)))
+        call (ir/call-node! (mut g) 0 d (ir/const! (mut g) ir/T-PTR target) 10)
+        got (ir/result! (mut g) ir/T-U64 0 call)
+        r1 (ir/load-node! (mut g) ir/T-U64 0 call first)
+        r2 (ir/load-node! (mut g) ir/T-U64 0 r1 (ir/add! (mut g) ir/T-PTR first far))
+        r3 (ir/load-node! (mut g) ir/T-U64 0 r2 second)
+        r4 (ir/load-node! (mut g) ir/T-U64 0 r3 (ir/add! (mut g) ir/T-PTR second far))]
+    (for i (range 0 10) (graph/set-input! (mut g) call (+ i 2) (ir/const! (mut g) ir/T-U64 (cast u64 (+ i 1)))))
+    (graph/set-input! (mut g) (ir/return! (mut g) r4 1) 1
+                      (ir/add! (mut g) ir/T-U64 got
+                               (ir/add! (mut g) ir/T-U64 (ir/add! (mut g) ir/T-U64 r1 r2) (ir/add! (mut g) ir/T-U64 r3 r4))))
+    g))
+
+;;; A call that follows no convention: machine code where the call stands,
+;;; which adds registers 10 and 11 into register 9 and touches nothing else.
+;;; pinned(a, b) = that code on (a * 3, b), plus a.
+(defn pinned [] (-> graph/Graph)
+  (let [(mut g) (graph/create (malloc-allocator))
+        s (ir/start! (mut g))
+        a (ir/param! (mut g) ir/T-U64 0)
+        b (ir/param! (mut g) ir/T-U64 1)
+        shape (graph/shape! (mut g) false)
+        (mut code) (ArrayList::new [u8] (malloc-allocator))
+        call (ir/call-node! (mut g) shape s (ir/const! (mut g) ir/T-PTR 0) 2)]
+    ; add x9, x10, x11 on one machine; lea r9, [r10 + r11] on the other.
+    ; The tests run on Linux for x86-64 and on macOS for AArch64.
+    (for b (os/os-pick [(: 0x4F u8) (: 0x8D u8) (: 0x0C u8) (: 0x1A u8)]
+                       [(: 0x49 u8) (: 0x01 u8) (: 0x0B u8) (: 0x8B u8)]
+                       [(: 0x49 u8) (: 0x01 u8) (: 0x0B u8) (: 0x8B u8)])
+      (push! (mut code) b))
+    (graph/shape-arg! (mut g) shape (| graph/PASS-PINNED 10))
+    (graph/shape-arg! (mut g) shape (| graph/PASS-PINNED 11))
+    (graph/shape-pin! (mut g) shape (: 512 u64) 9 (slice code))
+    (graph/set-input! (mut g) call 2 (ir/mul! (mut g) ir/T-U64 a (ir/const! (mut g) ir/T-U64 3)))
+    (graph/set-input! (mut g) call 3 b)
+    (graph/set-input! (mut g) (ir/return! (mut g) call 1) 1
+                      (ir/add! (mut g) ir/T-U64 (ir/result! (mut g) ir/T-U64 0 call) a))
+    g))
+
 ;;; Whether to print each function's code, for `tools/disasm.py`.
 (def showing (var-static bool false))
 
@@ -199,6 +252,9 @@
                                    (compile (grouped-call (primitive/cast u64 (compile (grouped-sum))))))
         reserving-fn (primitive/cast (fnptr (cc/C) [u64] u64)
                                      (compile (reserving (address-of (primitive/cast (ptr i8) (fnptr-of ten))))))
+        large-fn (primitive/cast (fnptr (cc/C) [u64] u64)
+                                 (compile (large-frame (address-of (primitive/cast (ptr i8) (fnptr-of ten))))))
+        pinned-fn (primitive/cast (fnptr (cc/C) [u64 u64] u64) (compile (pinned)))
         written (out-fn 9 4)
         (mut failures) 0]
     (set! failures (+ failures (check "narrow parameters" (sum-fn 1 2 3 4 5 6 7 8 -9 -10 -11 12)
@@ -214,5 +270,8 @@
     ; each round: 36 + round * 100 + n * 10000
     (set! failures (+ failures (check "memory reserved as it runs" (cast i64 (reserving-fn 5))
                                       (+ (* 3 36) (+ 300 150000)))))
+    ; ten(1..10) = 36 + 900 + 100000, and 4 * 1000 + 6
+    (set! failures (+ failures (check "a large frame" (cast i64 (large-fn 1000)) (+ 100936 4006))))
+    (set! failures (+ failures (check "a call that follows no convention" (cast i64 (pinned-fn 100 7)) 407)))
     (println "passing arguments: {} failures" failures)
     failures))

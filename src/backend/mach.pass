@@ -31,6 +31,7 @@ state object-bytes: Int               # bytes of frame objects, a multiple of 16
 state out-slots: Int                  # frame slots for arguments passed on the stack
 state calls: Bool                     # the function calls another
 state dynamic: Bool                   # the function moves the stack pointer as it runs
+state pinned-writes: Word             # registers that calls following no convention may write
 state worklist: [Node]
 state wide-temps: [Int]               # the fresh registers that hold sixteen bytes
 

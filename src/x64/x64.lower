@@ -58,6 +58,7 @@ template tail-symbol(s) is return   = jmp-symbol(s)
 template count-into(d, k)         = mov-imm32(d, k)
 template call-register(f)         = call-reg(f)
 template call-symbol(s)           = call(s)
+template machine-code(bits) = raw(bits)
 
 # A value narrower than 32 bits has no promise about the bits above it. These
 # make a copy with those bits filled, for the instructions that read them.

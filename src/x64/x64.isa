@@ -16,6 +16,8 @@ set callee-saved = rbx r12..r15
 # Registers the emitter may use to open a ring of copies.
 const scratch0 = 11
 const fscratch = 47
+# Machine code is bytes.
+const code-unit = 1
 
 # Condition codes.
 const overflow = 0
@@ -108,6 +110,8 @@ inst cmov(w: u1, cond: u4, dst: mod gpr, src: use gpr) = rex(w, dst, src) byte(0
 inst jmp(to: label)                                  = byte(0xE9) rel32(to)
 inst jcc(cond: u4, to: label)                        = byte(0x0F) byte(0x80 | cond) rel32(to)
 inst ret()                                           = byte(0xC3)
+# Machine code given as it is.
+inst raw(bits: u8)                                   = byte(bits)
 inst ud2()                                           = byte(0x0F) byte(0x0B)
 inst jmp-reg(f: use gpr)                             = rex(0, 0, f) byte(0xFF) modrm(4, f)
 inst jmp-symbol(to: symbol)                          = byte(0xE9) sym32(to)                                        reloc plt32 = S - P - 4

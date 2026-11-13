@@ -54,6 +54,8 @@ fn begin-placing() {
 # stack pointer as the call is made. `how` is what its shape says of it.
 fn place(type: Int, how: Word) -> Int {
   let with = int(how & word(255))
+  # Pinned: the register is said outright.
+  if has-bit(how, 11) { return with }
   if has-bit(how, 8) and abi.INDIRECT-RESULT >= 0 { return abi.INDIRECT-RESULT }
   let float = float-type?(id(type))
   let unnamed = has-bit(how, 9)
@@ -111,6 +113,10 @@ fn pass-arguments(n: Node, on-stack: Bool) -> Word {
 # out of their registers. The call reads the argument registers and may write
 # every register the convention does not preserve.
 fn call(n: Node) {
+  if shape-pinned(int(n.payload)) {
+    pinned-call(n)
+    return
+  }
   let passed = pass-arguments(n, true)
   # Something in the same image is called where it is; anything else through a register.
   if n.in(1) is SYMBOL { lower.call-symbol(int(n.in(1).payload)) }
@@ -122,6 +128,41 @@ fn call(n: Node) {
       let r = if u.float then abi.float-result(int(u.payload)) else abi.int-result(int(u.payload))
       if r < 0 { panic("a call's result is numbered past the convention's result registers") }
       arrive(u, 0 - r - 1)
+    }
+  }
+}
+
+# A call that follows no convention: its arguments in the registers its shape
+# pins them to, then the call, or the machine code the shape carries in its
+# place. It writes the registers its shape says, and its result is where the
+# shape says.
+fn pinned-call(n: Node) {
+  let shape = int(n.payload)
+  let passed = pass-arguments(n, true)
+  let bytes = shape-code-bytes(shape)
+  var writes = shape-clobbers(shape)
+  if bytes > 0 {
+    var at = 0
+    while at < bytes {
+      var piece = 0
+      for k in 0..isa.CODE-UNIT { piece = piece | (shape-code-byte(shape, at + k) << (8 * k)) }
+      lower.machine-code(piece)
+      at = at + isa.CODE-UNIT
+    }
+  } else {
+    if n.in(1) is SYMBOL { lower.call-symbol(int(n.in(1).payload)) }
+    else { lower.call-register(lower.operand(n.in(1))) }
+    if abi.LINK >= 0 { writes = set-bit(writes, abi.LINK) }
+  }
+  let to = shape-result(shape)
+  if to >= 0 { writes = set-bit(writes, to) }
+  mach.implicit(passed, writes)
+  pinned-writes = pinned-writes | writes
+  calls = true
+  for u in users(n) {
+    if u is RESULT and u.needed {
+      if to < 0 { panic("a call that gives no result is asked for one") }
+      arrive(u, 0 - to - 1)
     }
   }
 }

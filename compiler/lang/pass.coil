@@ -731,6 +731,13 @@
         (and (= name "param-passing") (= n 1)) (t/cat3 "(graph/param-passing (.g cx) " a ")")
         (and (= name "shape-passing") (= n 2)) (cat5 "(graph/shape-passing (.g cx) " a " " b ")")
         (and (= name "shape-variadic") (= n 1)) (t/cat3 "(graph/shape-variadic? (.g cx) " a ")")
+        ; A call that follows no convention: what it may write, where its
+        ; result is, and the machine code it is, if it is code and not a call.
+        (and (= name "shape-pinned") (= n 1)) (t/cat3 "(graph/shape-pinned? (.g cx) " a ")")
+        (and (= name "shape-clobbers") (= n 1)) (t/cat3 "(graph/shape-clobbers (.g cx) " a ")")
+        (and (= name "shape-result") (= n 1)) (t/cat3 "(graph/shape-result (.g cx) " a ")")
+        (and (= name "shape-code-bytes") (= n 1)) (t/cat3 "(graph/shape-code-bytes (.g cx) " a ")")
+        (and (= name "shape-code-byte") (= n 2)) (cat5 "(graph/shape-code-byte (.g cx) " a " " b ")")
         (and (= name "panic") (= n 1)) (t/cat3 "(panic " a ")")
         ; Sets of small numbers, as the bits of a Word.
         (and (= name "bit") (= n 1)) (t/cat3 "(<< (: 1 u64) (cast u64 " a "))")

@@ -241,10 +241,16 @@
                   (= op cir/OP-ALLOCA)
                     ; An object's size is a whole number of its alignment, so
                     ; one aligned to 16 is larger than 8 bytes and is put at 16.
+                    ; An object that asks for more is made that much larger,
+                    ; and its address is the first place in it that will do.
                     (let [align (.imm2 x)
                           size (* (/ (+ (.imm x) (- align 1)) align) align)]
-                      (when (> align 16) (fail f "a frame object aligned to more than 16 bytes"))
-                      (ir/slot! (mut (.g s)) (cast u64 size)))
+                      (if (<= align 16)
+                          (ir/slot! (mut (.g s)) (cast u64 size))
+                          (ir/and! (mut (.g s)) W
+                                   (ir/add! (mut (.g s)) W (ir/slot! (mut (.g s)) (cast u64 (+ size align)))
+                                            (word (mut s) (cast u64 (- align 1))))
+                                   (word (mut s) (cast u64 (- 0 align))))))
                   :else (fail f "a value is used before the instruction that makes it"))]
           (set! (mut (.node s)) (i64-of v) made)
           made))))
@@ -458,6 +464,30 @@
     (for i (range 1 count)
       (let [r (+ v (cast u32 i))]
         (result! (mut s) call r (cast i64 (.ty (cir/val f r))))))))
+
+;;; A call under a convention of its own: each argument in the register the
+;;; flags name, the registers it may write, and the register of its result.
+;;; It is a call of a symbol, or machine code from the function's bytes.
+(defn pinned-call! [(s (mut Adapter)) (v u32)] (-> void)
+  (let [f (.f s)
+        x (cir/val f v)
+        count (i64-of (.nops x))
+        shape (graph/shape! (mut (.g s)) false)
+        inline (= (.imm x) -1)
+        target (if inline (word (mut s) 0) (ir/symbol! (mut (.g s)) (cast u64 (.imm x))))
+        call (ir/call-node! (mut (.g s)) shape (.c s) target count)
+        result (if (= (cast i64 (.aux x)) 255) -1 (cast i64 (.aux x)))
+        (mut code) (ArrayList::new [u8] (.a s))]
+    (for i (range 0 count)
+      (graph/shape-arg! (mut (.g s)) shape
+                        (| graph/PASS-PINNED (cast u64 (get (.argflags f) (+ (i64-of (.opb x)) i)))))
+      (graph/set-input! (mut (.g s)) call (+ i 2) (value (mut s) (cir/operand f x (cast u32 i)))))
+    (when inline
+      (for i (range (i64-of (.block x)) (+ (i64-of (.block x)) (i64-of (.next x))))
+        (push! (mut code) (get (.bytes f) i))))
+    (graph/shape-pin! (mut (.g s)) shape (cast u64 (.imm2 x)) result (slice code))
+    (set! (.c s) call)
+    (when (>= result 0) (define! (mut s) v (ir/result! (mut (.g s)) W 0 call)))))
 
 (defn call-out! [(s (mut Adapter)) (v u32)] (-> void)
   (let [(mut values) (ArrayList::new [i32] (.a s))
@@ -997,7 +1027,7 @@
       (or (= op cir/OP-ATOMIC-RMW) (= op cir/OP-CMPXCHG) (= op cir/OP-ATOMIC-LOAD) (= op cir/OP-ATOMIC-STORE))
         (shared! (mut s) v)
       (= op cir/OP-FENCE) (set! (.c s) (ir/fence! (mut (.g s)) (.c s)))
-      (= op cir/OP-SHIMCALL) (fail f "a call with registers pinned by the caller, which the backend does not have yet")
+      (= op cir/OP-SHIMCALL) (pinned-call! (mut s) v)
       :else (fail f "an operation the backend does not know"))))
 
 

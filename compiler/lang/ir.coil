@@ -707,6 +707,8 @@
   (t/line! (mut o) ";;; Integers alone go as up to twelve integers. With floating point, up to eight")
   (t/line! (mut o) ";;; integers and eight floating values go in their own registers.")
   (t/line! (mut o) "(defn call-out! [(g graph/Graph) (it (mut Interp)) (args (slice u64)) (n i32)] (-> void)")
+  (t/line! (mut o) "  (when (graph/shape-pinned? g (cast i64 (graph/payload g n)))")
+  (t/line! (mut o) "    (panic \"the interpreter cannot make a call that follows no convention\"))")
   (t/line! (mut o) "  (let [target (primitive/cast (ptr u8) (value g (mut it) args (graph/input g n 1)))")
   (t/line! (mut o) "        (mut floating) (and (!= (graph/ty g n) 0) (value-type? (graph/ty g n)) (type-float? (graph/ty g n)))")
   (t/line! (mut o) "        (mut float-result) (and (!= (graph/ty g n) 0) (value-type? (graph/ty g n)) (type-float? (graph/ty g n)))")

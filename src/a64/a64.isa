@@ -19,6 +19,8 @@ const scratch0 = 16
 const scratch1 = 17
 const scratch2 = 15
 const fscratch = 63
+# Machine code is whole instructions of this many bytes.
+const code-unit = 4
 
 # Condition codes.
 const eq = 0
@@ -102,6 +104,8 @@ inst cbz(sf: u1, rt: use gpr, to: label)                  = sf 0110100 to[20:2] 
 inst cbnz(sf: u1, rt: use gpr, to: label)                 = sf 0110101 to[20:2] rt
 inst brk(imm: u16)                                        = 11010100001 imm 00000
 inst ret(rn: use gpr)                                     = 1101011001011111000000 rn 00000
+# Machine code given as it is.
+inst raw(bits: u32)                                       = bits
 # Symbols. S is the symbol's address, G the address of its slot in the table of
 # addresses, P the instruction's own.
 inst bl(to: symbol)                                       = 100101 to:26                  reloc branch26 = (S - P) >> 2

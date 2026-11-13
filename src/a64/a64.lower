@@ -15,14 +15,22 @@ template move(d, s) is copy       = orr(1, d, zr, s)
 template jump(to) is jump         = b(to)
 template leave() is return        = ret(x30)
 template move-float(d, s) is copy = mov-vector(d, s)
-# A register to and from a slot of the frame, which is found from `base`.
-template from-frame-float(d, base, slot) = ldr-d(d, base, slot)
-template to-frame-float(s, base, slot)   = str-d(s, base, slot)
-template from-frame(d, base, slot) = ldr(d, base, slot)
-template to-frame(s, base, slot)   = str(s, base, slot)
+# A register to and from a slot of the frame, which is found from `base`. An
+# instruction reaches 4095 times the size of what it moves; further than that,
+# x17 is first given the address 4096 bytes at a time.
+template from-frame-float(d, base, slot) when slot < 4096 = ldr-d(d, base, slot)
+template from-frame-float(d, base, slot) = add-imm-hi(1, x17, base, slot / 512) ; ldr-d(d, x17, slot % 512)
+template to-frame-float(s, base, slot) when slot < 4096   = str-d(s, base, slot)
+template to-frame-float(s, base, slot)   = add-imm-hi(1, x17, base, slot / 512) ; str-d(s, x17, slot % 512)
+template from-frame(d, base, slot) when slot < 4096 = ldr(d, base, slot)
+template from-frame(d, base, slot) = add-imm-hi(1, x17, base, slot / 512) ; ldr(d, x17, slot % 512)
+template to-frame(s, base, slot) when slot < 4096   = str(s, base, slot)
+template to-frame(s, base, slot)   = add-imm-hi(1, x17, base, slot / 512) ; str(s, x17, slot % 512)
 # Sixteen bytes, in two slots of which the first is at a multiple of sixteen.
-template from-frame-wide(d, base, slot) = ldr-q(d, base, slot / 2)
-template to-frame-wide(s, base, slot)   = str-q(s, base, slot / 2)
+template from-frame-wide(d, base, slot) when slot < 8192 = ldr-q(d, base, slot / 2)
+template from-frame-wide(d, base, slot) = add-imm-hi(1, x17, base, slot / 512) ; ldr-q(d, x17, (slot % 512) / 2)
+template to-frame-wide(s, base, slot) when slot < 8192   = str-q(s, base, slot / 2)
+template to-frame-wide(s, base, slot)   = add-imm-hi(1, x17, base, slot / 512) ; str-q(s, x17, (slot % 512) / 2)
 # An argument of `bytes` bytes to its place above the stack pointer, and a
 # parameter from its place above `base`.
 template to-stack(s, at, bytes) when bytes == 8 = str(s, sp, at / 8)
@@ -32,10 +40,12 @@ template to-stack(s, at, bytes)                 = strb(s, sp, at)
 template to-stack-float(s, at, bytes) when bytes == 16 = str-q(s, sp, at / 16)
 template to-stack-float(s, at, bytes) when bytes == 8 = str-d(s, sp, at / 8)
 template to-stack-float(s, at, bytes)                 = str-s(s, sp, at / 4)
+template from-stack(d, base, at, bytes) when at >= 4096 = add-imm-hi(1, x17, base, at / 4096) ; from-stack(d, x17, at % 4096, bytes)
 template from-stack(d, base, at, bytes) when bytes == 8 = ldr(d, base, at / 8)
 template from-stack(d, base, at, bytes) when bytes == 4 = ldrw(d, base, at / 4)
 template from-stack(d, base, at, bytes) when bytes == 2 = ldrh(d, base, at / 2)
 template from-stack(d, base, at, bytes)                 = ldrb(d, base, at)
+template from-stack-float(d, base, at, bytes) when at >= 4096 = add-imm-hi(1, x17, base, at / 4096) ; from-stack-float(d, x17, at % 4096, bytes)
 template from-stack-float(d, base, at, bytes) when bytes == 16 = ldr-q(d, base, at / 16)
 template from-stack-float(d, base, at, bytes) when bytes == 8 = ldr-d(d, base, at / 8)
 template from-stack-float(d, base, at, bytes)                 = ldr-s(d, base, at / 4)
@@ -62,6 +72,7 @@ template tail-symbol(s) is return   = b-symbol(s)
 template count-into(d, k)  = movz(1, d, k, 0)
 template call-register(f)  = blr(f)
 template call-symbol(s)    = bl(s)
+template machine-code(bits) = raw(bits)
 
 # A value narrower than 32 bits has no promise about the bits above it. These
 # make a copy with those bits filled, for the instructions that read them.
@@ -89,6 +100,7 @@ rule PARAM   => nothing
 
 # A frame object's address: so far below the frame record.
 rule SLOT when object < 4096     => sub-imm(1, out, x29, object)
+rule SLOT                        => sub-imm-hi(1, out, x29, object / 4096) ; sub-imm(1, out, out, object % 4096)
 
 # The address of something in this image, and of something outside it, which
 # is read from the table of addresses.
