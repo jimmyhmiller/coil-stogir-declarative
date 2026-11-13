@@ -46,12 +46,25 @@ fn access(u: Node, address: Node, at: Int) -> Bool {
   true
 }
 
-# The constant an address adds to object `s`, or -1 if `a` is not that.
-fn offset-of(a: Node, s: Node) -> Int {
+# The constant that address `a` adds to address `base`, or -1 if `a` is not that.
+fn offset-of(a: Node, base: Node) -> Int {
   if not (a is ADD) { return -1 }
-  if a.in(0) == s and a.in(1) is CONST { return int(a.in(1).payload) }
-  if a.in(1) == s and a.in(0) is CONST { return int(a.in(0).payload) }
+  if a.in(0) == base and a.in(1) is CONST { return int(a.in(1).payload) }
+  if a.in(1) == base and a.in(0) is CONST { return int(a.in(0).payload) }
   -1
+}
+
+# Every use of `address`, which is `at` bytes into an object of `size` bytes,
+# is an access there or a further address inside the object, used the same
+# way: note the accesses. False if anything else is done with it.
+fn uses(address: Node, at: Int, size: Int) -> Bool {
+  for u in users(address) {
+    let more = offset-of(u, address)
+    if more >= 0 and at + more < size {
+      if not uses(u, at + more, size) { return false }
+    } else if not access(u, address, at) { return false }
+  }
+  true
 }
 
 fn consider(s: Node) {
@@ -61,14 +74,7 @@ fn consider(s: Node) {
   accesses.clear()
   access-at.clear()
   access-bytes.clear()
-  let size = int(s.payload)
-  for u in users(s) {
-    let at = offset-of(u, s)
-    if at >= 0 and at < size {
-      # An address inside the object: every use of it must be an access there.
-      for w in users(u) { if not access(w, u, at) { return } }
-    } else if not access(u, s, 0) { return }
-  }
+  if not uses(s, 0, int(s.payload)) { return }
   # What is written says what the parts are; a load reads one of them, whole
   # or its low bytes, or is a part of its own that nothing writes.
   for i in 0..accesses.len {
