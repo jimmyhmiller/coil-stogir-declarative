@@ -67,6 +67,8 @@
                 (= name "min") (t/cat4 "(let [x* " a " y* " (t/cat2 b "] (if (< x* y*) x* y*))"))
                 (= name "max") (t/cat4 "(let [x* " a " y* " (t/cat2 b "] (if (> x* y*) x* y*))"))
                 (= name "bit-length") (t/cat3 "(bv/bit-length (primitive/cast u64 " a "))")
+                ; `mod(a, b)`: the remainder, taking both as unsigned.
+                (= name "mod") (t/cat4 "(primitive/cast i64 (bv/urem (primitive/cast u64 " a ") (primitive/cast u64 " (t/cat2 b ")))"))
                 (= name "bits") (t/cat3 "(ir/type-bits (graph/ty (.g cx) (primitive/cast i32 " a ")))")
                 ; Another node's fact, as far as the solver has raised it.
                 (>= (t/index-of (.facts f) name) 0)
