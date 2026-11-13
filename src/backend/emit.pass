@@ -219,28 +219,34 @@ fn encode() {
 }
 
 # The frame, from the stack pointer up: arguments for calls, values that have
-# no register, frame objects, then the frame record (the caller's frame register and,
-# on machines with a link register, the return address, with the frame
-# register pointing at it) and the other registers the
-# caller expects back. Frame objects end at the frame record, so each is a
-# fixed distance below the frame register.
-fn record-slot() -> Int = out-slots + slots + object-bytes / 8
-
+# no register, the other registers the caller expects back, frame objects, and
+# at the very top the frame record: the caller's frame register and, on
+# machines with a link register, the return address, with the frame register
+# pointing at it. On machines whose calls leave the return address on the
+# stack, that is the word just above, so the record is the pair every unwinder
+# expects either way. Frame objects end at the record, so each is a fixed
+# distance below the frame register.
 fn keeps-record?() -> Bool = has-bit(saved, abi.FRAME)
+
+fn record-slots() -> Int = if not keeps-record?() then 0 else if abi.LINK >= 0 then 2 else 1
+
+fn record-slot() -> Int = frame / 8 - record-slots()
+
+# The saved registers that are not part of the frame record, and where they start.
+fn others-saved() -> Word =
+  if abi.LINK >= 0 then clear-bit(clear-bit(saved, abi.FRAME), abi.LINK) else clear-bit(saved, abi.FRAME)
+
+fn others-slot() -> Int = record-slot() - object-bytes / 8 - bit-count(others-saved())
 
 fn enter() {
   lower.grow-stack(frame)
-  var at = record-slot()
   if keeps-record?() {
-    lower.to-frame(marker(abi.FRAME), at)
-    at = at + 1
-    if abi.LINK >= 0 {
-      lower.to-frame(marker(abi.LINK), at)
-      at = at + 1
-    }
+    lower.to-frame(marker(abi.FRAME), record-slot())
+    if abi.LINK >= 0 { lower.to-frame(marker(abi.LINK), record-slot() + 1) }
     lower.frame-record(record-slot() * 8)
   }
   var rest = others-saved()
+  var at = others-slot()
   while rest != word(0) {
     let r = lowest-bit(rest)
     keep(r, at)
@@ -250,28 +256,20 @@ fn enter() {
 }
 
 fn leave() {
-  var at = record-slot()
-  if keeps-record?() {
-    lower.from-frame(marker(abi.FRAME), at)
-    at = at + 1
-    if abi.LINK >= 0 {
-      lower.from-frame(marker(abi.LINK), at)
-      at = at + 1
-    }
-  }
   var rest = others-saved()
+  var at = others-slot()
   while rest != word(0) {
     let r = lowest-bit(rest)
     fetch(r, at)
     at = at + 1
     rest = clear-bit(rest, r)
   }
+  if keeps-record?() {
+    if abi.LINK >= 0 { lower.from-frame(marker(abi.LINK), record-slot() + 1) }
+    lower.from-frame(marker(abi.FRAME), record-slot())
+  }
   lower.shrink-stack(frame)
 }
-
-# The saved registers that are not part of the frame record.
-fn others-saved() -> Word =
-  if abi.LINK >= 0 then clear-bit(clear-bit(saved, abi.FRAME), abi.LINK) else clear-bit(saved, abi.FRAME)
 
 fn run() {
   saved = used & isa.CALLEE-SAVED
@@ -279,10 +277,8 @@ fn run() {
     saved = set-bit(saved, abi.FRAME)
     if abi.LINK >= 0 { saved = set-bit(saved, abi.LINK) }
   }
-  # The frame record sits a multiple of 16 above the stack pointer, so that
-  # objects aligned below it are aligned in memory.
-  if (out-slots + slots) % 2 == 1 { slots = slots + 1 }
-  # With the return address a call left there, the stack is a multiple of 16.
+  # With the return address a call left there, the stack is a multiple of 16,
+  # and so is the frame record's place, below which frame objects are aligned.
   frame = ((out-slots + slots + bit-count(saved) + abi.RETURN-SLOTS) * 8 + object-bytes + 15) / 16 * 16 - abi.RETURN-SLOTS * 8
   final-start = Inst.count
   if frame > 0 { enter() }
