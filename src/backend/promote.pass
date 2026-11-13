@@ -32,15 +32,34 @@ fn access-type(u: Node, s: Node) -> Int =
   else if u is STORE and u.in(1) == s and u.in(2) != s and u.payload == 0 then int(u.in(2).type)
   else 0
 
-# The one type an object is read and written as, or 0 if it cannot be a value.
+# Whether a value of type `have` read as type `want` is its low bits: the same
+# type, or integers and `want` no wider.
+fn low-bits?(want: Int, have: Int) -> Bool =
+  want == have or (not float-type?(id(want)) and not float-type?(id(have)) and type-bytes(id(want)) <= type-bytes(id(have)))
+
+# The one type an object is written as, every load being that or the low bits
+# of it, or 0 if it cannot be a value. An object nothing writes is what it is
+# read as, if that is one type.
 fn object-type(s: Node) -> Int {
   var t = 0
   for u in users(s) {
     let a = access-type(u, s)
-    if a == 0 or (t != 0 and a != t) { return 0 }
-    t = a
+    if a == 0 { return 0 }
+    if u is STORE {
+      if t != 0 and a != t { return 0 }
+      t = a
+    }
   }
-  t
+  var read = 0
+  for u in users(s) {
+    if u is LOAD {
+      let a = int(u.type)
+      if t != 0 and not low-bits?(a, t) { return 0 }
+      if t == 0 and read != 0 and a != read { return 0 }
+      read = a
+    }
+  }
+  if t != 0 then t else read
 }
 
 # The object's value on entry to `b`: what leaves the one block before it, a
@@ -82,6 +101,14 @@ fn settled(v: Node, s: Node) -> Node {
   x
 }
 
+# What load `l` reads of value `v`: `v`, or its low bits if the load is narrower.
+fn as-read(l: Node, v: Node) -> Node {
+  if l.type == v.type { return v }
+  let low = ir.trunc!(mut graph, l.type, v)
+  grow-nodes()
+  low
+}
+
 fn promote(s: Node) {
   let t = object-type(s)
   if t == 0 { return }
@@ -116,7 +143,7 @@ fn promote(s: Node) {
       let u = edge-user(e)
       let k = edge-slot(e)
       if u is REGION or u is LOOP or (k == 0 and cfg.control?(u)) { set-input(u, k, a.in(0)) }
-      else { set-input(u, k, settled(a.reaching, s)) }
+      else { set-input(u, k, as-read(a, settled(a.reaching, s))) }
     }
   }
   for a in accesses { drop(a) }

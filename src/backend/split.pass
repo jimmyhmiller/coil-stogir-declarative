@@ -6,8 +6,9 @@ pass in unit
 state part-at: [Int]                  # the parts of the object in hand: where each starts,
 state part-bytes: [Int]               # how many bytes it is,
 state part-object: [Node]             # and the object it becomes
-state accesses: [Node]                # the loads and stores of the object in hand
-state access-part: [Int]
+state accesses: [Node]                # the loads and stores of the object in hand,
+state access-at: [Int]                # where each is,
+state access-bytes: [Int]             # and how many bytes
 state split: Int                      # how many objects were taken apart
 
 # The part at `at` of `bytes` bytes, made if it is new; -1 if it overlaps
@@ -23,17 +24,25 @@ fn part(at: Int, bytes: Int) -> Int {
   part-at.len - 1
 }
 
-# `u` reads or writes `bytes` bytes at `at` through address `address`, and
-# does nothing else with it: note the access. False if it does anything else.
+# The part a load of `bytes` bytes at `at` reads: one that starts there and is
+# at least as long, of which the load then reads the low bytes; -1 if none.
+fn part-read(at: Int, bytes: Int) -> Int {
+  for i in 0..part-at.len {
+    if part-at[i] == at and part-bytes[i] >= bytes { return i }
+  }
+  -1
+}
+
+# `u` reads or writes some bytes at `at` through address `address`, and does
+# nothing else with it: note the access. False if it does anything else.
 fn access(u: Node, address: Node, at: Int) -> Bool {
   var bytes = 0
   if u is LOAD and u.in(1) == address and u.payload == 0 { bytes = type-bytes(u.type) }
   else if u is STORE and u.in(1) == address and u.in(2) != address and u.payload == 0 { bytes = type-bytes(u.in(2).type) }
   else { return false }
-  let p = part(at, bytes)
-  if p < 0 { return false }
   accesses.push(u)
-  access-part.push(p)
+  access-at.push(at)
+  access-bytes.push(bytes)
   true
 }
 
@@ -50,7 +59,8 @@ fn consider(s: Node) {
   part-bytes.clear()
   part-object.clear()
   accesses.clear()
-  access-part.clear()
+  access-at.clear()
+  access-bytes.clear()
   let size = int(s.payload)
   for u in users(s) {
     let at = offset-of(u, s)
@@ -59,10 +69,18 @@ fn consider(s: Node) {
       for w in users(u) { if not access(w, u, at) { return } }
     } else if not access(u, s, 0) { return }
   }
+  # What is written says what the parts are; a load reads one of them, whole
+  # or its low bytes, or is a part of its own that nothing writes.
+  for i in 0..accesses.len {
+    if accesses[i] is STORE and part(access-at[i], access-bytes[i]) < 0 { return }
+  }
+  for i in 0..accesses.len {
+    if accesses[i] is LOAD and part-read(access-at[i], access-bytes[i]) < 0 and part(access-at[i], access-bytes[i]) < 0 { return }
+  }
   # One part that is the whole object is the object as it was.
   if part-at.len < 2 { return }
   for i in 0..accesses.len {
-    let p = access-part[i]
+    let p = if accesses[i] is LOAD then part-read(access-at[i], access-bytes[i]) else part(access-at[i], access-bytes[i])
     if part-object[p] == none {
       part-object[p] = ir.slot!(mut graph, word(part-bytes[p]))
       grow-nodes()
