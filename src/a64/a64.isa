@@ -109,6 +109,8 @@ inst adrp(rd: def gpr, to: symbol)                        = 1 to[1:0] 10000 to[2
 inst add-symbol(rd: def gpr, rn: use gpr, to: symbol)     = 1 0 0 100010 0 to:12 rn rd    reloc pageoff12 = S & 4095
 inst adrp-got(rd: def gpr, to: symbol)                    = 1 to[1:0] 10000 to[20:2] rd   reloc got-page21 = (page(G) - page(P)) >> 12
 inst ldr-got(rt: def gpr, rn: use gpr, to: symbol)        = 1111100101 to:12 rn rt        reloc got-pageoff12 = (G & 4095) >> 3
+inst br(rn: use gpr)                                      = 1101011000011111000000 rn 00000
+inst b-symbol(to: symbol)                                 = 000101 to:26                  reloc branch26 = (S - P) >> 2
 inst blr(rn: use gpr)                                     = 1101011000111111000000 rn 00000
 
 # Floating point. `ty` picks double (1) or single (0).

@@ -39,6 +39,9 @@ node TRAP(c: ctrl)                              role trap
 # A call follows the C convention; RESULT is the value it returned.
 node CALL(c: ctrl, target: ptr, args...) : ctrl role call
 node RESULT(call: ctrl) : T                     role result
+# A call whose result is this function's: the function ends by going there,
+# with its own frame already given back. Its type is what it returns.
+node TAILCALL(c: ctrl, target: ptr, args...) : T  role tailcall
 
 # Memory. A load and a store sit in the control chain, in the order they happen;
 # a load is also the value it read. The width is the type's.

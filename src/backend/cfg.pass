@@ -25,7 +25,7 @@ fn head?(n: Node) -> Bool =
   n is START or n is REGION or n is LOOP or n is TRUE or n is FALSE or n is CASE or n is DEFAULT
 
 # What a block ends with, when it does not just go on to a region.
-fn end?(n: Node) -> Bool = n is IF or n is SWITCH or n is RETURN or n is TRAP
+fn end?(n: Node) -> Bool = n is IF or n is SWITCH or n is RETURN or n is TRAP or n is TAILCALL
 
 # In the control chain inside a block: it happens where it stands.
 fn chain?(n: Node) -> Bool = n is CALL or n is LOAD or n is STORE

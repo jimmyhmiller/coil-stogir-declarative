@@ -26,6 +26,8 @@ template frame-record(n)          = lea(rbp, rsp, n)
 # Go to `to` if register v holds k; `w` is 1 to compare all 64 bits.
 template branch-if-equal(w, v, k, to) when s32(k) = cmp-imm(w, v, k) ; jcc(equal, to)
 template branch-if-equal(w, v, k, to)             = mov-imm64($t, k) ; cmp(w, v, $t) ; jcc(equal, to)
+template tail-register(f) is return = jmp-reg(f)
+template tail-symbol(s) is return   = jmp-symbol(s)
 template call-register(f)         = call-reg(f)
 template call-symbol(s)           = call(s)
 
@@ -48,6 +50,7 @@ rule SWITCH  => nothing
 rule CASE    => nothing
 rule DEFAULT => nothing
 rule TRAP    => ud2()
+rule TAILCALL => nothing
 rule CALL    => nothing
 rule RESULT  => nothing
 rule PARAM   => nothing

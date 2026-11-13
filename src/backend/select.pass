@@ -15,7 +15,7 @@ fn choose(n: Node) {
   }
   n.tile = rule
   lower.mark(n, rule)
-  if n is PHI or n is CALL or n is SWITCH { for i in 1..n.arity { mach.need(n.in(i)) } }
+  if n is PHI or n is CALL or n is SWITCH or n is TAILCALL { for i in 1..n.arity { mach.need(n.in(i)) } }
 }
 
 # An argument's value into register `d`. The convention wants an integer
@@ -63,6 +63,31 @@ fn call(n: Node) {
   calls = true
   let result = first u in users(n): u is RESULT and u.needed
   if result != none { arrive(result, 0 - (if result.float then abi.FLOAT-RESULT else abi.RESULT) - 1) }
+}
+
+# A tail call: arguments as for a call, all in registers, then out of this
+# function straight into the other. The target waits in a register the
+# function's exit does not touch.
+fn tail-call(n: Node) {
+  var passed = word(0)
+  var ints = 0
+  var floats = 0
+  for i in 2..n.arity {
+    let a = n.in(i)
+    let r = if a.float then abi.float-arg(floats) else abi.int-arg(ints)
+    if a.float { floats = floats + 1 } else { ints = ints + 1 }
+    if r < 0 { panic("a tail call's arguments must all fit in registers") }
+    widened(0 - r - 1, a)
+    passed = set-bit(passed, r)
+  }
+  if n.in(1) is SYMBOL {
+    lower.tail-symbol(int(n.in(1).payload))
+    mach.implicit(passed, word(0))
+  } else {
+    lower.move(0 - isa.SCRATCH0 - 1, lower.operand(n.in(1)))
+    lower.tail-register(0 - isa.SCRATCH0 - 1)
+    mach.implicit(passed, word(0))
+  }
 }
 
 # A switch: its value against each case in turn, then the default.
@@ -161,6 +186,7 @@ fn run() {
     for n in b.seq {
       if n is CALL { call(n) }
       else if n is SWITCH { switch(n) }
+      else if n is TAILCALL { tail-call(n) }
       else if n is PARAM { if n.tile != 0 { param(n) } }
       else if n.tile != 0 and not lower.local?(n) { lower.emit(n, n.tile, int(n)) }
     }

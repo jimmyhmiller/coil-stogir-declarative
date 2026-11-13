@@ -462,7 +462,15 @@
         (set! result (ir/xor! (mut (.g r)) type
                               (ir/add! (mut (.g r)) type result (get (.env r) i))
                               (ir/const! (mut (.g r)) type (cast u64 i)))))
-      (ir/return! (mut (.g r)) (.control r) result))
+      ; One program in four ends by calling a helper in its own place.
+      (if (and rich (= (% seed 4) 1))
+          (let [narrow (< (ir/type-bits type) 64)
+                target (ir/const! (mut (.g r)) ir/T-PTR
+                                  (if narrow (primitive/cast u64 (primitive/cast (ptr i8) (fnptr-of helper1-32)))
+                                      (primitive/cast u64 (primitive/cast (ptr i8) (fnptr-of helper1)))))
+                node (ir/tailcall! (mut (.g r)) type (.control r) target 1)]
+            (graph/set-input! (mut (.g r)) node 2 result))
+          (ir/return! (mut (.g r)) (.control r) result)))
     (free! (mut (.env r)))
     (.g r)))
 

@@ -70,6 +70,7 @@
         (= role "switch") 19
         (= role "case") 20
         (= role "default") 21
+        (= role "tailcall") 22
         :else -1))
 
 ;;; A type's number; 0 is "no type". Numbers follow declaration order from 1.
@@ -101,7 +102,7 @@
 ;;; sits in the control chain and is also its value, and a return, which ends it.
 (defn control-node? [(spec Spec) (node Node)] (-> bool)
   (or (control-type? spec (.result node)) (= (.role node) "load") (= (.role node) "return")
-      (= (.role node) "trap")))
+      (= (.role node) "trap") (= (.role node) "tailcall")))
 
 (defn fixed-count [(node Node)] (-> i64)
   (let [(mut k) 0]
@@ -679,8 +680,8 @@
   (t/line! (mut o) ";;; integers and eight floating values go in their own registers.")
   (t/line! (mut o) "(defn call-out! [(g graph/Graph) (it (mut Interp)) (args (slice u64)) (n i32)] (-> void)")
   (t/line! (mut o) "  (let [target (primitive/cast (ptr u8) (value g (mut it) args (graph/input g n 1)))")
-  (t/line! (mut o) "        (mut floating) false")
-  (t/line! (mut o) "        (mut float-result) false")
+  (t/line! (mut o) "        (mut floating) (and (!= (graph/ty g n) 0) (value-type? (graph/ty g n)) (type-float? (graph/ty g n)))")
+  (t/line! (mut o) "        (mut float-result) (and (!= (graph/ty g n) 0) (value-type? (graph/ty g n)) (type-float? (graph/ty g n)))")
   (t/line! (mut o) "        (mut ints) (ArrayList::new [u64] (.alc g))")
   (t/line! (mut o) "        (mut floats) (ArrayList::new [f64] (.alc g))")
   (t/line! (mut o) "        (mut e) (graph/first-use g n)]")
@@ -749,7 +750,7 @@
   (t/line! (mut o) "      (let [u (graph/user g e)")
   (t/line! (mut o) "            r (get ROLES (cast i64 (graph/op g u)))]")
   (t/line! (mut o) "        (when (and (= (graph/input g u 0) c)")
-  (t/line! (mut o) "                   (or (= r 5) (= r 2) (= r 11) (= r 13) (= r 14) (= r 18) (= r 19)))")
+  (t/line! (mut o) "                   (or (= r 5) (= r 2) (= r 11) (= r 13) (= r 14) (= r 18) (= r 19) (= r 22)))")
   (t/line! (mut o) "          (set! found u)))")
   (t/line! (mut o) "      (set! e (graph/next-use g e)))")
   (t/line! (mut o) "    found))")
@@ -777,6 +778,12 @@
   (t/line! (mut o) "          (> steps limit) (set! running false)")
   (t/line! (mut o) "          (= r 2)")
   (t/line! (mut o) "            (do (set! result (Some (value g (mut it) args (graph/input g c 1))))")
+  (t/line! (mut o) "                (set! running false))")
+  (t/line! (mut o) "          ; A tail call's result is the function's.")
+  (t/line! (mut o) "          (= r 22)")
+  (t/line! (mut o) "            (do (call-out! g (mut it) args c)")
+  (t/line! (mut o) "                (set! result (Some (bv/cut (get (.phi it) (cast i64 c))")
+  (t/line! (mut o) "                                           (if (= (graph/ty g c) 0) 64 (type-bits (graph/ty g c))))))")
   (t/line! (mut o) "                (set! running false))")
   (t/line! (mut o) "          ; A trap ends the run with no result.")
   (t/line! (mut o) "          (= r 18) (set! running false)")

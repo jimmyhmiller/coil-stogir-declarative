@@ -104,6 +104,8 @@ inst jmp(to: label)                                  = byte(0xE9) rel32(to)
 inst jcc(cond: u4, to: label)                        = byte(0x0F) byte(0x80 | cond) rel32(to)
 inst ret()                                           = byte(0xC3)
 inst ud2()                                           = byte(0x0F) byte(0x0B)
+inst jmp-reg(f: use gpr)                             = rex(0, 0, f) byte(0xFF) modrm(4, f)
+inst jmp-symbol(to: symbol)                          = byte(0xE9) sym32(to)                                        reloc plt32 = S - P - 4
 inst call-reg(f: use gpr)                            = rex(0, 0, f) byte(0xFF) modrm(2, f)
 
 # Symbols. S is the symbol's address, G the address of its slot in the table of

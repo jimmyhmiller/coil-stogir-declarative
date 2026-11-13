@@ -38,6 +38,7 @@
 (const ROLE-SWITCH 19)
 (const ROLE-CASE 20)
 (const ROLE-DEFAULT 21)
+(const ROLE-TAILCALL 22)
 
 (defstruct Graph
   [(ops (ArrayList u16))

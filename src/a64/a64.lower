@@ -30,6 +30,8 @@ template frame-record(n)               = add-imm(1, x29, sp, n % 4096) ; add-imm
 # Go to `to` if register v holds k; `w` is 1 to compare all 64 bits.
 template branch-if-equal(w, v, k, to) when k >= 0 and k < 4096 = subs-imm(w, zr, v, k) ; b-cond(eq, to)
 template branch-if-equal(w, v, k, to) = movz(1, $t, k & 65535, 0) ; movk(1, $t, (k >> 16) & 65535, 1) ; movk(1, $t, (k >> 32) & 65535, 2) ; movk(1, $t, (k >> 48) & 65535, 3) ; subs(w, zr, v, $t) ; b-cond(eq, to)
+template tail-register(f) is return = br(f)
+template tail-symbol(s) is return   = b-symbol(s)
 template call-register(f)  = blr(f)
 template call-symbol(s)    = bl(s)
 
@@ -49,6 +51,7 @@ rule SWITCH  => nothing
 rule CASE    => nothing
 rule DEFAULT => nothing
 rule TRAP    => brk(1)
+rule TAILCALL => nothing
 rule CALL    => nothing
 rule RESULT  => nothing
 
