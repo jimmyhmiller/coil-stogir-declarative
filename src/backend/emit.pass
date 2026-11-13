@@ -185,6 +185,14 @@ fn rewrite(i: Inst, next: Int) {
     let at = i.copy-from + frame + abi.RETURN-SLOTS * 8
     if floating?(0 - d - 1) { lower.from-stack-float(d, base(), at, i.caller-bytes) }
     else { lower.from-stack(d, base(), at, i.caller-bytes) }
+  } else if i.kind == 6 {
+    # The frame register is where the record is, which is known from the base;
+    # in a function that moves the stack pointer, the base must have survived.
+    if dynamic and has-bit(i.also-writes, abi.BASE) { panic("a call writes both registers the frame is found by, in a function that moves the stack pointer") }
+    lower.frame-record(base(), record-slot() * 8)
+  } else if i.kind == 7 {
+    # Only a function that moves the stack pointer keeps a base, below the record.
+    if dynamic { lower.base-from-frame(marker(abi.BASE), record-slot() * 8) }
   } else if i.kind == 5 {
     lower.above-arguments(placed(i.copy-to, 2 * int(i) + 1), out-slots * 8)
   } else if not same-register and not falls-through {
@@ -266,7 +274,7 @@ fn enter() {
   if keeps-record?() {
     lower.to-frame(marker(abi.FRAME), sp, record-slot())
     if abi.LINK >= 0 { lower.to-frame(marker(abi.LINK), sp, record-slot() + 1) }
-    lower.frame-record(record-slot() * 8)
+    lower.frame-record(sp, record-slot() * 8)
   }
   var rest = others-saved()
   var at = others-slot()

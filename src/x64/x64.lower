@@ -49,7 +49,9 @@ template reserve(n)          = move($whole, n) ; add-imm(1, $whole, 15) ; and-im
 template above-arguments(d, n) = lea(d, rsp, n)
 template grow-stack(n)            = sub-imm(1, rsp, n)
 template shrink-stack(n)          = add-imm(1, rsp, n)
-template frame-record(n)          = lea(rbp, rsp, n)
+template frame-record(base, n)    = lea(rbp, base, n)
+# And the base from rbp, which is n bytes above it.
+template base-from-frame(d, n)    = lea(d, rbp, 0 - n)
 # Go to `to` if register v holds k; `w` is 1 to compare all 64 bits.
 template branch-if-equal(w, v, k, to) when s32(k) = cmp-imm(w, v, k) ; jcc(equal, to)
 template branch-if-equal(w, v, k, to)             = mov-imm64($t, k) ; cmp(w, v, $t) ; jcc(equal, to)

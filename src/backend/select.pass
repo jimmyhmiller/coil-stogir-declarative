@@ -159,6 +159,15 @@ fn pinned-call(n: Node) {
   mach.implicit(passed, writes)
   pinned-writes = pinned-writes | writes
   calls = true
+  # The registers the frame is found by are put back if the call wrote them.
+  if has-bit(writes, abi.FRAME) {
+    lower.frame-record(0 - abi.STACK - 1, 0)
+    mach.mark-restore(6)
+  }
+  if has-bit(writes, abi.BASE) {
+    lower.base-from-frame(0 - abi.BASE - 1, 0)
+    mach.mark-restore(7)
+  }
   for u in users(n) {
     if u is RESULT and u.needed {
       if to < 0 { panic("a call that gives no result is asked for one") }

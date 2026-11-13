@@ -149,7 +149,8 @@
         (= ty cir/T-I128) W
         (= ty cir/T-F32) ir/T-F32
         (= ty cir/T-F64) ir/T-F64
-        :else (fail (.f s) "a 128-bit vector, which the backend does not have yet")))
+        (= ty cir/T-V128) ir/T-V128
+        :else (fail (.f s) "a value of a type the backend does not know")))
 
 (defn wide? [(s (mut Adapter)) (v u32)] (-> bool)
   (= (cast i64 (.ty (cir/val (.f s) v))) cir/T-I128))
@@ -232,7 +233,8 @@
                             (do (set! (mut (.high s)) (i64-of v) (word (mut s) (cast u64 (.imm2 x))))
                                 (word (mut s) (cast u64 (.imm x))))
                           (= ty cir/T-I64) (word (mut s) (cast u64 (.imm x)))
-                          :else (fail f "a constant 128-bit vector, which the backend does not have yet"))
+                          (and (= ty cir/T-V128) (= (.imm x) 0) (= (.imm2 x) 0)) (ir/const! (mut (.g s)) ir/T-V128 0)
+                          :else (fail f "a constant vector that is not zero"))
                   (= op cir/OP-SYM)
                     (let [address (symbol-address (mut s) (cast u32 (.imm x)))]
                       (if (= (.imm2 x) 0)
@@ -446,7 +448,7 @@
                         (ir/result! (mut (.g s)) W (cast u64 (.ints s)) call)
                         (ir/result! (mut (.g s)) W (cast u64 (+ (.ints s) 1)) call))
           (set! (.ints s) (+ (.ints s) 2)))
-    (or (= ty cir/T-F32) (= ty cir/T-F64))
+    (or (= ty cir/T-F32) (= ty cir/T-F64) (= ty cir/T-V128))
       (do (define! (mut s) v (ir/result! (mut (.g s)) (type-of (mut s) ty) (cast u64 (.floats s)) call))
           (set! (.floats s) (+ (.floats s) 1)))
     :else
@@ -893,7 +895,7 @@
         x (cir/val f v)
         op (cast i64 (.op x))
         ty (cast i64 (.ty x))
-        type (if (or (= ty cir/T-VOID) (= ty cir/T-V128)) W (type-of (mut s) ty))
+        type (if (= ty cir/T-VOID) W (type-of (mut s) ty))
         a (if (> (.nops x) (: 0 u32)) (cir/operand f x 0) (: 0 u32))
         b (if (> (.nops x) (: 1 u32)) (cir/operand f x 1) (: 0 u32))]
     (cond

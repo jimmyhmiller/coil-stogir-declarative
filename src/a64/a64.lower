@@ -62,8 +62,11 @@ template grow-stack(n)                 = sub-imm(1, sp, sp, n % 4096) ; sub-imm-
 template shrink-stack(n) when n < 4096 = add-imm(1, sp, sp, n)
 template shrink-stack(n)               = add-imm(1, sp, sp, n % 4096) ; add-imm-hi(1, sp, sp, n / 4096)
 # x29 to the frame record, n bytes above the stack pointer.
-template frame-record(n) when n < 4096 = add-imm(1, x29, sp, n)
-template frame-record(n)               = add-imm(1, x29, sp, n % 4096) ; add-imm-hi(1, x29, x29, n / 4096)
+template frame-record(base, n) when n < 4096 = add-imm(1, x29, base, n)
+template frame-record(base, n)               = add-imm(1, x29, base, n % 4096) ; add-imm-hi(1, x29, x29, n / 4096)
+# And the base from x29, which is n bytes above it.
+template base-from-frame(d, n) when n < 4096 = sub-imm(1, d, x29, n)
+template base-from-frame(d, n)               = sub-imm(1, d, x29, n % 4096) ; sub-imm-hi(1, d, d, n / 4096)
 # Go to `to` if register v holds k; `w` is 1 to compare all 64 bits.
 template branch-if-equal(w, v, k, to) when k >= 0 and k < 4096 = subs-imm(w, zr, v, k) ; b-cond(eq, to)
 template branch-if-equal(w, v, k, to) = movz(1, $t, k & 65535, 0) ; movk(1, $t, (k >> 16) & 65535, 1) ; movk(1, $t, (k >> 32) & 65535, 2) ; movk(1, $t, (k >> 48) & 65535, 3) ; subs(w, zr, v, $t) ; b-cond(eq, to)

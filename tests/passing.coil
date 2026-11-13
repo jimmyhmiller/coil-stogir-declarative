@@ -194,8 +194,9 @@
     g))
 
 ;;; A call that follows no convention: machine code where the call stands,
-;;; which adds registers 10 and 11 into register 9 and touches nothing else.
-;;; pinned(a, b) = that code on (a * 3, b), plus a.
+;;; which adds registers 10 and 11 into register 9 and then zeroes the two
+;;; registers a frame is found by. pinned(a, b) = that code on (a * 3, b), plus
+;;; a, which waited in a frame object meanwhile.
 (defn pinned [] (-> graph/Graph)
   (let [(mut g) (graph/create (malloc-allocator))
         s (ir/start! (mut g))
@@ -203,20 +204,26 @@
         b (ir/param! (mut g) ir/T-U64 1)
         shape (graph/shape! (mut g) false)
         (mut code) (ArrayList::new [u8] (malloc-allocator))
-        call (ir/call-node! (mut g) shape s (ir/const! (mut g) ir/T-PTR 0) 2)]
-    ; add x9, x10, x11 on one machine; lea r9, [r10 + r11] on the other.
+        room (ir/slot! (mut g) 8)
+        kept (ir/store-node! (mut g) 0 s room a)
+        call (ir/call-node! (mut g) shape kept (ir/const! (mut g) ir/T-PTR 0) 2)
+        back (ir/load-node! (mut g) ir/T-U64 1 call room)
+        ; add x9, x10, x11; mov x28, xzr; mov x29, xzr
+        arm [(: 0x49 u8) (: 0x01 u8) (: 0x0B u8) (: 0x8B u8) (: 0xFC u8) (: 0x03 u8) (: 0x1F u8) (: 0xAA u8)
+             (: 0xFD u8) (: 0x03 u8) (: 0x1F u8) (: 0xAA u8)]
+        ; lea r9, [r10 + r11]; xor ebx, ebx; xor ebp, ebp, and padding
+        intel [(: 0x4F u8) (: 0x8D u8) (: 0x0C u8) (: 0x1A u8) (: 0x31 u8) (: 0xDB u8) (: 0x31 u8) (: 0xED u8)
+               (: 0x90 u8) (: 0x90 u8) (: 0x90 u8) (: 0x90 u8)]]
     ; The tests run on Linux for x86-64 and on macOS for AArch64.
-    (for b (os/os-pick [(: 0x4F u8) (: 0x8D u8) (: 0x0C u8) (: 0x1A u8)]
-                       [(: 0x49 u8) (: 0x01 u8) (: 0x0B u8) (: 0x8B u8)]
-                       [(: 0x49 u8) (: 0x01 u8) (: 0x0B u8) (: 0x8B u8)])
-      (push! (mut code) b))
+    (for b (os/os-pick intel arm arm) (push! (mut code) b))
     (graph/shape-arg! (mut g) shape (| graph/PASS-PINNED 10))
     (graph/shape-arg! (mut g) shape (| graph/PASS-PINNED 11))
-    (graph/shape-pin! (mut g) shape (: 512 u64) 9 (slice code))
+    ; It writes register 9, and 28 and 29 on one machine, 3 and 5 on the other.
+    (graph/shape-pin! (mut g) shape (os/os-pick (: 0x228 u64) (: 0x30000200 u64) (: 0x30000200 u64)) 9 (slice code))
     (graph/set-input! (mut g) call 2 (ir/mul! (mut g) ir/T-U64 a (ir/const! (mut g) ir/T-U64 3)))
     (graph/set-input! (mut g) call 3 b)
-    (graph/set-input! (mut g) (ir/return! (mut g) call 1) 1
-                      (ir/add! (mut g) ir/T-U64 (ir/result! (mut g) ir/T-U64 0 call) a))
+    (graph/set-input! (mut g) (ir/return! (mut g) back 1) 1
+                      (ir/add! (mut g) ir/T-U64 (ir/result! (mut g) ir/T-U64 0 call) back))
     g))
 
 ;;; Whether to print each function's code, for `tools/disasm.py`.
