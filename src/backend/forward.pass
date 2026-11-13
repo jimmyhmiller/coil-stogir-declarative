@@ -121,7 +121,7 @@ fn walk(b: Block) {
       }
     } else if c is STORE {
       # A store nothing has read, to the same place and as wide, is written over.
-      if c.payload == 0 and cfg.on?(6) {
+      if c.payload == 0 and cfg.on?(6) and not debugging {
         var kept = 0
         for i in 0..open.len {
           let s = open[i]
