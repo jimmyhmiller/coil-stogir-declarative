@@ -10,6 +10,7 @@
 (import "backend.nodes" :as ir)
 (import "backend.unit" :as st)
 (import "backend.driver" :as driver)
+(import "backend.a64" :as isa)
 (import "tests.gen" :as gen)
 
 (defn now-ns [] (-> i64)
@@ -29,7 +30,9 @@
         size (arg-or argc argv 2 60)
         (mut graphs) (ArrayList::new [graph/Graph] (malloc-allocator))
         (mut nodes) 0
-        (mut words) 0]
+        (mut words) 0
+        (mut histogram) (ArrayList::new [i64] (malloc-allocator))]
+    (for _ (range 0 64) (push! (mut histogram) 0))
     (for seed (range 1 (+ programs 1)) (push! (mut graphs) (gen/program (cast u64 seed) ir/T-I64 size)))
     ; One state for every compile, as a compiler thread would keep.
     (let [start (now-ns)
@@ -39,10 +42,17 @@
         (st/begin! (mut cx))
         (driver/compile (mut cx))
         (set! nodes (+ nodes (graph/size (.g cx))))
-        (set! words (+ words (len (.code cx)))))
+        (set! words (+ words (len (.code cx))))
+        (when (> (cast i64 argc) 3)
+          (for at (range (+ (.final-start cx) 1) (+ (cast i64 (.inst-count cx)) 1))
+            (let [op (get (.inst-op cx) at)]
+              (set! (mut histogram) op (+ (get histogram op) 1))))))
       (let [elapsed (- (now-ns) start)]
         (println "{} programs of size {}: {} nodes -> {} instructions in {} ms"
                  programs size nodes words (/ elapsed 1000000))
         (println "{} ns per node, {} ns per instruction, {} instructions per second"
-                 (/ elapsed nodes) (/ elapsed words) (/ (* words 1000000000) elapsed))))
+                 (/ elapsed nodes) (/ elapsed words) (/ (* words 1000000000) elapsed))
+        (when (> (cast i64 argc) 3)
+          (for op (range 1 64)
+            (when (> (get histogram op) 0) (println "  {:>8} {}" (get histogram op) (isa/name op)))))))
     0))

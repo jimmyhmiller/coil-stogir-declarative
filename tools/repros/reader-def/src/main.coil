@@ -1,0 +1,3 @@
+(module defbug.main)
+(import "defbug.data" :as data)
+(defn main [] (-> i64) (println "{}" (data/answer)) 0)

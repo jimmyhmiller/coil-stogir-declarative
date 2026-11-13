@@ -1,0 +1,195 @@
+;;; tests/gen.coil's random programs, built with the existing Stogir's builder and
+;;; compiled by it, against the clock. The generator makes the same choices in the
+;;; same order. Usage: bench [programs] [size]
+(module oldbench.bench)
+(import "coil.alloc" :use [malloc-allocator])
+(import "coil.arraylist" :use [ArrayList])
+(import "coil.primitive" :as primitive)
+(import "coil.str" :as str)
+(import "coil.time" :as time)
+(import "coil.result" :use [Result Ok Err])
+(import "stogir.graph" :as g)
+(import "stogir.builder" :as b)
+(import "stogir.native.compile" :as compile)
+
+(defstruct Gen
+  [(g g/Graph) (state u64) (control i32) (env (ArrayList i32)) (budget i64)])
+
+(defn require [(result (Result i32 (slice u8)))] (-> i32)
+  (match result (Ok [value] value) (Err [msg] (panic "builder: {}" msg))))
+
+(defn next! [(r (mut Gen))] (-> u64)
+  (let [(mut x) (.state r)]
+    (set! x (^ x (<< x 13)))
+    (set! x (^ x (>> x 7)))
+    (set! x (^ x (<< x 17)))
+    (set! (.state r) x)
+    x))
+
+(defn below! [(r (mut Gen)) (n i64)] (-> i64)
+  (cast i64 (% (next! (mut r)) (cast u64 n))))
+
+(defn pick! [(r (mut Gen))] (-> i32)
+  (get (.env r) (below! (mut r) (len (.env r)))))
+
+(defn const! [(r (mut Gen)) (raw u64)] (-> i32)
+  (require (b/scalar-constant! (mut (.g r)) 11 raw 8)))
+
+(defn constant! [(r (mut Gen))] (-> i32)
+  (let [kind (below! (mut r) 6)
+        raw (cond (= kind 0) (: 0 u64)
+                  (= kind 1) (: 1 u64)
+                  (= kind 2) (cast u64 (below! (mut r) 4096))
+                  (= kind 3) (primitive/isub (: 0 u64) (cast u64 (below! (mut r) 4096)))
+                  (= kind 4) (cast u64 (below! (mut r) 100000))
+                  :else (next! (mut r)))]
+    (const! (mut r) raw)))
+
+(defn operand! [(r (mut Gen))] (-> i32)
+  (if (= (below! (mut r) 4) 0) (constant! (mut r)) (pick! (mut r))))
+
+(defn arithmetic! [(r (mut Gen))] (-> i32)
+  (let [a (pick! (mut r))
+        y (operand! (mut r))
+        op (below! (mut r) 9)
+        opcode (cond (= op 0) 26 (= op 1) 27 (= op 2) 28 (= op 3) 47 (= op 4) 46 (= op 5) 48
+                     (= op 6) 49 (= op 7) 50 :else 51)]
+    (require (b/emit! (mut (.g r)) (cast i32 opcode) 11 [a y]))))
+
+(defn comparison! [(r (mut Gen))] (-> i32)
+  (let [a (pick! (mut r))
+        y (operand! (mut r))
+        op (below! (mut r) 6)
+        opcode (cond (= op 0) 14 (= op 1) 15 (= op 2) 16 (= op 3) 18 (= op 4) 20 :else 22)]
+    (require (b/emit! (mut (.g r)) (cast i32 opcode) 1 [a y]))))
+
+(defn statements! [(r (mut Gen)) (depth i64)] (-> void)
+  (let [count (+ 1 (below! (mut r) 6))]
+    (for _ (range 0 count)
+      (let [choice (below! (mut r) 10)]
+        (set! (.budget r) (- (.budget r) 1))
+        (cond
+          (or (< choice 6) (>= depth 3) (< (.budget r) 0))
+            (push! (mut (.env r)) (arithmetic! (mut r)))
+          (< choice 8) (diamond! (mut r) depth)
+          :else (counted-loop! (mut r) depth))))))
+
+(defn diamond! [(r (mut Gen)) (depth i64)] (-> void)
+  (let [condition (comparison! (mut r))
+        branch (require (b/emit! (mut (.g r)) 116 0 [(.control r) condition]))
+        base (len (.env r))
+        yes (require (b/emit! (mut (.g r)) 107 0 [branch (: 0 i32)]))
+        no (require (b/emit! (mut (.g r)) 108 0 [branch (: 0 i32)]))]
+    (set! (.control r) yes)
+    (statements! (mut r) (+ depth 1))
+    (let [yes-end (require (b/emit! (mut (.g r)) 114 0 [(.control r)]))
+          yes-a (pick! (mut r))
+          yes-b (pick! (mut r))]
+      (while (> (len (.env r)) base) (pop! (mut (.env r))))
+      (set! (.control r) no)
+      (statements! (mut r) (+ depth 1))
+      (let [no-end (require (b/emit! (mut (.g r)) 114 0 [(.control r)]))
+            no-a (pick! (mut r))
+            no-b (pick! (mut r))
+            region (require (b/emit! (mut (.g r)) 112 0 [yes-end no-end]))
+            pa (require (b/emit! (mut (.g r)) 67 11 [region yes-a no-a]))
+            pb (require (b/emit! (mut (.g r)) 67 11 [region yes-b no-b]))]
+        (while (> (len (.env r)) base) (pop! (mut (.env r))))
+        (push! (mut (.env r)) pa)
+        (push! (mut (.env r)) pb)
+        (set! (.control r) region)))))
+
+(defn counted-loop! [(r (mut Gen)) (depth i64)] (-> void)
+  (let [entry (require (b/emit! (mut (.g r)) 114 0 [(.control r)]))
+        head (require (b/loop-begin! (mut (.g r)) entry))
+        x0 (pick! (mut r))
+        y0 (pick! (mut r))
+        i (require (b/loop-phi! (mut (.g r)) head (const! (mut r) 0)))
+        x (require (b/loop-phi! (mut (.g r)) head x0))
+        y (require (b/loop-phi! (mut (.g r)) head y0))
+        bound (const! (mut r) (cast u64 (+ 1 (below! (mut r) 9))))
+        test (require (b/emit! (mut (.g r)) 20 1 [i bound]))
+        branch (require (b/emit! (mut (.g r)) 116 0 [head test]))
+        body (require (b/emit! (mut (.g r)) 107 0 [branch (: 0 i32)]))
+        exit (require (b/emit! (mut (.g r)) 108 0 [branch (: 0 i32)]))
+        base (len (.env r))]
+    (push! (mut (.env r)) i)
+    (push! (mut (.env r)) x)
+    (push! (mut (.env r)) y)
+    (set! (.control r) body)
+    (statements! (mut r) (+ depth 1))
+    (let [swap (= (below! (mut r) 4) 0)
+          x2 (if swap y (pick! (mut r)))
+          y2 (if swap x (pick! (mut r)))
+          back (require (b/emit! (mut (.g r)) 115 0 [(.control r)]))
+          i2 (require (b/emit! (mut (.g r)) 26 11 [i (const! (mut r) 1)]))]
+      (b/patch! (mut (.g r)) head 2 back)
+      (b/patch! (mut (.g r)) i 3 i2)
+      (b/patch! (mut (.g r)) x 3 x2)
+      (b/patch! (mut (.g r)) y 3 y2))
+    (while (> (len (.env r)) base) (pop! (mut (.env r))))
+    (push! (mut (.env r)) x)
+    (push! (mut (.env r)) y)
+    (set! (.control r) exit)))
+
+(defstruct Program [(g g/Graph) (start i32) (ret i32)])
+
+(defn program [(seed u64) (size i64)] (-> Program)
+  (let [(mut r) (Gen
+                  :g (g/create (malloc-allocator))
+                  :state (| (primitive/imul seed (: 0x9E3779B97F4A7C15 u64)) 1)
+                  :control 0
+                  :env (ArrayList::new [i32] (malloc-allocator))
+                  :budget size)
+        start (require (b/emit! (mut (.g r)) 104 0 [(: 0 i32)]))]
+    (set! (.control r) start)
+    (for i (range 0 4)
+      (push! (mut (.env r)) (require (b/emit! (mut (.g r)) 71 11 [start (: 0 i32) (cast i32 i)]))))
+    (statements! (mut r) 0)
+    (statements! (mut r) 0)
+    (while (> (.budget r) 0) (statements! (mut r) 0))
+    (let [(mut result) (get (.env r) 0)]
+      (for i (range 1 (len (.env r)))
+        (let [sum (require (b/emit! (mut (.g r)) 26 11 [result (get (.env r) i)]))]
+          (set! result (require (b/emit! (mut (.g r)) 48 11 [sum (const! (mut r) (cast u64 i))])))))
+      (let [ret (require (b/emit! (mut (.g r)) 120 11 [(.control r) result (: 0 i32)]))]
+        (free! (mut (.env r)))
+        (Program :g (.g r) :start start :ret ret)))))
+
+(defn now-ns [] (-> i64)
+  (match (time/monotonic-now)
+    (Ok [t] (+ (* (.sec t) 1000000000) (.nsec t)))
+    (Err [_] 0)))
+
+(defn arg-or [(argc i32) (argv (ptr (ptr i8))) (i i64) (otherwise i64)] (-> i64)
+  (if (> (cast i64 argc) i)
+      (match (str/parse-int (str/from-cstr (primitive/load (primitive/index argv i))))
+        (Some [n] n)
+        (None [] otherwise))
+      otherwise))
+
+(defn main [(argc i32) (argv (ptr (ptr i8)))] (-> i64)
+  (let [programs (arg-or argc argv 1 2000)
+        size (arg-or argc argv 2 60)
+        (mut built) (ArrayList::new [Program] (malloc-allocator))
+        (mut nodes) 0
+        (mut words) 0
+        (mut failed) 0]
+    (for seed (range 1 (+ programs 1)) (push! (mut built) (program (cast u64 seed) size)))
+    (let [start (now-ns)]
+      (for i (range 0 programs)
+        (let [p (get built i)]
+          (set! nodes (+ nodes (len (.instructions (.g p)))))
+          (match (compile/text (.g p) (.start p) [(.ret p)] (malloc-allocator))
+            (Err [msg] (do (when (= failed 0) (println "compile failed: {}" msg))
+                           (set! failed (+ failed 1))))
+            (Ok [text] (let [(mut bytes) text]
+                         (set! words (+ words (/ (len bytes) 4)))
+                         (free! (mut bytes)))))))
+      (let [elapsed (- (now-ns) start)]
+        (println "{} programs of size {}: {} nodes -> {} instructions in {} ms ({} failed)"
+                 programs size nodes words (/ elapsed 1000000) failed)
+        (println "{} ns per node, {} ns per instruction, {} instructions per second"
+                 (/ elapsed nodes) (/ elapsed (if (= words 0) 1 words))
+                 (/ (* words 1000000000) (if (= elapsed 0) 1 elapsed)))))
+    0))

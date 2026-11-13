@@ -1,0 +1,5 @@
+# The same random programs through the existing Stogir, for comparison only.
+[package]
+name = "oldbench"
+entry = "bench.coil"
+source-roots = [".", "../../../coil-stogir/src"]

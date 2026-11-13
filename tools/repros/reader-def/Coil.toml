@@ -1,0 +1,8 @@
+[package]
+name = "defbug"
+entry = "src/main.coil"
+source-roots = ["src"]
+[readers]
+".txt" = "defbug.reader"
+[modules]
+"defbug.data" = "src/data.txt"
