@@ -45,3 +45,12 @@
     (when (= (& x (: 0x3 u64)) 0) (set! n (+ n 2)) (set! x (>> x 2)))
     (when (= (& x (: 0x1 u64)) 0) (set! n (+ n 1)))
     n))
+
+;;; How many bits of a word are set.
+(defn count [(v u64)] (-> i64)
+  (let [(mut x) v
+        (mut n) 0]
+    (while (!= x 0)
+      (set! x (& x (primitive/isub x (: 1 u64))))
+      (set! n (+ n 1)))
+    n))

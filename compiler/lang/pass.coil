@@ -665,6 +665,7 @@
         (and (= name "clear-bit") (= n 2))
           (cat5 "(& " a " (^ (<< (: 1 u64) (cast u64 " b ")) (: 0xFFFFFFFFFFFFFFFF u64)))")
         (and (= name "lowest-bit") (= n 1)) (t/cat3 "(bv/lowest " a ")")
+        (and (= name "bit-count") (= n 1)) (t/cat3 "(bv/count " a ")")
         (and (= name "print") (>= n 1))
           (let [(mut o) (t/out-new)]
             (t/emit! (mut o) "(println")

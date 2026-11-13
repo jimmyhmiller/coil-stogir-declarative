@@ -10,6 +10,7 @@ import backend.a64 as isa
 column final-first: Block -> Int      # a block's first final instruction
 state final-start: Int                # final instructions follow the selected ones
 state frame: Int                      # bytes of frame, a multiple of 16
+state saved: Word                     # the registers the caller expects back unchanged
 state loads: Int
 state code: [Word]
 
@@ -56,7 +57,10 @@ fn rewrite(i: Inst, next: Int) {
   let x4 = resolve(i, 4)
   if alloc.move-source(i) != 0 and x1 == x3 { return }
   if op == isa.B and x0 == next { return }
-  if op == isa.RET and frame > 0 { lower.shrink-stack(frame) }
+  if op == isa.RET and frame > 0 {
+    restore-saved()
+    lower.shrink-stack(frame)
+  }
   mach.emit(op, x0, x1, x2, x3, x4)
   for k in 0..5 { finish(i, k) }
 }
@@ -71,10 +75,37 @@ fn encoded(i: Inst, k: Int) -> Int {
   a
 }
 
+# Registers the caller expects back are kept in the frame above the spilled values.
+fn save-saved() {
+  var rest = saved
+  var at = slots
+  while rest != word(0) {
+    let r = lowest-bit(rest)
+    lower.to-frame(marker(r), at)
+    at = at + 1
+    rest = clear-bit(rest, r)
+  }
+}
+
+fn restore-saved() {
+  var rest = saved
+  var at = slots
+  while rest != word(0) {
+    let r = lowest-bit(rest)
+    lower.from-frame(marker(r), at)
+    at = at + 1
+    rest = clear-bit(rest, r)
+  }
+}
+
 fn run() {
-  frame = (slots * 8 + 15) / 16 * 16
+  saved = used & isa.CALLEE-SAVED
+  frame = ((slots + bit-count(saved)) * 8 + 15) / 16 * 16
   final-start = Inst.count
-  if frame > 0 { lower.grow-stack(frame) }
+  if frame > 0 {
+    lower.grow-stack(frame)
+    save-saved()
+  }
   for index in 0..order.len {
     let b = order[index]
     let next = if index + 1 < order.len then int(order[index + 1]) else 0

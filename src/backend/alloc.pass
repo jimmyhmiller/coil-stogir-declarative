@@ -34,6 +34,7 @@ column written: Phys -> Int
 state active: [Vreg]
 state free: Word
 state slots: Int
+state used: Word                      # every register a value was given
 state stack: [Block]
 
 fn reg-kind?(kind: Int) -> Bool = kind == isa.K-DEF or kind == isa.K-USE or kind == isa.K-MOD
@@ -165,6 +166,7 @@ fn assign(v: Vreg) {
   let r = pick(v)
   if r >= 0 {
     v.reg = r + 1
+    used = set-bit(used, r)
     free = clear-bit(free, r)
     active.push(v)
     return

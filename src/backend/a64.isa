@@ -6,7 +6,7 @@ reg x0..x30 : gpr
 reg sp : gpr = 31
 reg zr : gpr = 31
 
-set allocatable  = x0..x14
+set allocatable  = x0..x14 x19..x28
 set caller-saved = x0..x17
 set callee-saved = x19..x28
 set arguments    = x0..x7
