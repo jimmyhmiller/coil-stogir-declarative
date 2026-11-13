@@ -25,6 +25,8 @@ column needed: Node -> Bool           # must be in a register
 column tile: Node -> Int              # the rule that computes it, or 0
 column local-reg: Node -> Int         # for a node computed per block: its register there
 column local-block: Node -> Block
+column kept: Node -> Bool             # computed once after all, where it was placed: it costs
+                                      # several instructions and is wanted inside a loop
 state emitting: Block                 # the block whose instructions are being emitted
 state next-vreg: Int
 column object-at: Node -> Int         # a frame object's distance below the frame record
@@ -79,6 +81,8 @@ fn target(n: Node, taken: Int) -> Int {
 fn fusable(inner: Node, root: Node) -> Bool = inner.uses == 1 and inner.block-of == root.block-of
 
 # The register a per-block node has in the block being emitted, or 0.
+fn kept?(n: Node) -> Bool = n.kept
+
 fn local(n: Node) -> Int = if n.local-block == emitting then n.local-reg else 0
 
 fn set-local(n: Node, r: Int) {
