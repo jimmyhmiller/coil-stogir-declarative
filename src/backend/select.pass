@@ -42,10 +42,13 @@ fn call(n: Node) {
   var ints = 0
   var floats = 0
   var stacked = 0
+  # For a function that takes any number of arguments: how many it names.
+  let named = int(n.payload) - 1
   for i in 2..n.arity {
     let a = n.in(i)
-    let r = if a.float then abi.float-arg(floats) else abi.int-arg(ints)
-    if a.float { floats = floats + 1 } else { ints = ints + 1 }
+    let unnamed-on-stack = named >= 0 and i - 2 >= named and abi.VARIADIC-ON-STACK
+    let r = if unnamed-on-stack then -1 else if a.float then abi.float-arg(floats) else abi.int-arg(ints)
+    if not unnamed-on-stack { if a.float { floats = floats + 1 } else { ints = ints + 1 } }
     if r >= 0 {
       widened(0 - r - 1, a)
       passed = set-bit(passed, r)
@@ -55,6 +58,11 @@ fn call(n: Node) {
       stacked = stacked + 1
       out-slots = max(out-slots, stacked)
     }
+  }
+  # Where the convention wants it, the number of floating registers used.
+  if named >= 0 and abi.VARIADIC-COUNT >= 0 {
+    lower.count-into(0 - abi.VARIADIC-COUNT - 1, min(floats, abi.FLOAT-ARGS))
+    passed = set-bit(passed, abi.VARIADIC-COUNT)
   }
   # Something in the same image is called where it is; anything else through a register.
   if n.in(1) is SYMBOL { lower.call-symbol(int(n.in(1).payload)) }

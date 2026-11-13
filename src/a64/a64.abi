@@ -6,3 +6,4 @@ floats v0..v7
 float-result v0
 link x30
 frame x29
+variadic stack

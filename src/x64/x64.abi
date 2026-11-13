@@ -6,3 +6,4 @@ floats xmm0..xmm7
 float-result xmm0
 frame rbp
 return-address 8
+variadic count rax

@@ -231,7 +231,7 @@
                 wide-b (if (= ft ir/T-F32) (ir/fext! (mut (.g r)) ir/T-F64 b) b)
                 target (ir/const! (mut (.g r)) ir/T-PTR
                                   (primitive/cast u64 (primitive/cast (ptr i8) (fnptr-of float-helper))))
-                node (ir/call-node! (mut (.g r)) (.control r) target 3)]
+                node (ir/call-node! (mut (.g r)) 0 (.control r) target 3)]
             (graph/set-input! (mut (.g r)) node 2 wide-a)
             (graph/set-input! (mut (.g r)) node 3 (ir/zext! (mut (.g r)) ir/T-U64 (ir/trunc! (mut (.g r)) ir/T-U8 (pick! (mut r)))))
             (graph/set-input! (mut (.g r)) node 4 wide-b)
@@ -296,7 +296,7 @@
                       :else (if narrow (primitive/cast u64 (primitive/cast (ptr i8) (fnptr-of helper10-32)))
                                 (primitive/cast u64 (primitive/cast (ptr i8) (fnptr-of helper10)))))
         target (ir/const! (mut (.g r)) ir/T-PTR address)
-        node (ir/call-node! (mut (.g r)) (.control r) target count)]
+        node (ir/call-node! (mut (.g r)) 0 (.control r) target count)]
     (for i (range 0 count) (graph/set-input! (mut (.g r)) node (+ i 2) (operand! (mut r))))
     (set! (.control r) node)
     (ir/result! (mut (.g r)) (.type r) node)))
