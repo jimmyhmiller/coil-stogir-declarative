@@ -761,9 +761,15 @@
             (t/emit! (mut o) ")")
             (t/text-of (mut o)))
         (and (= name "grow-nodes") (= n 0)) "(st/grow-nodes! (mut cx))"
+        ; Forget everything the passes have worked out, keeping the graph.
+        (and (= name "start-over") (= n 0)) "(st/begin! (mut cx))"
         ; Editing the graph.
         (and (= name "replace-uses") (= n 2)) (cat5 "(graph/replace-uses! (mut (.g cx)) " a " " b ")")
         (and (= name "drop") (= n 1)) (t/cat3 "(graph/drop! (mut (.g cx)) " a ")")
+        ; A node over again, for whoever is about to change an input of it.
+        (and (= name "copy") (= n 1)) (t/cat3 "(graph/copy! (mut (.g cx)) " a ")")
+        ; Whether a call of this symbol is known to write no memory.
+        (and (= name "reads-only") (= n 1)) (t/cat3 "(graph/reads-only? (.g cx) " a ")")
         (and (= name "set-input") (= n 3))
           (cat6 "(graph/set-input! (mut (.g cx)) " a " " b " " (t/cat2 (get args 2) ")"))
         ; An edge is one use of a node: who uses it, and as which input.

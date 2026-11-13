@@ -1,0 +1,333 @@
+# Loops. A loop that tests whether to go on at its top is turned so that it
+# tests at its bottom, behind a first test of whether to enter it at all: each
+# round is then one branch, not two, and what the body does first is what the
+# loop always does. And a load the loop always makes, of an address that does
+# not change there and that nothing in the loop writes, is made once, before
+# the loop.
+pass in unit
+use cfg as cfg
+
+column member: Block -> Int            # == `serial`: in the loop in hand
+column touched: Block -> Bool          # changed by a turn since blocks were last found
+column varies: Node -> Int             # == `serial`: a value that is a loop's phi or computed from one
+column steady: Node -> Int             # == `serial`: known not to change in the loop in hand
+column way-walked: Block -> Int            # == `walk`: seen by the walk in hand
+state loop-serial: Int
+state way-walk: Int
+state loop-node: Node                       # the loop in hand,
+state loop-exit: Block                      # the block its test leaves by,
+state loop-after: Node                      # and the region both of the turned loop's tests leave to
+state use-of: [Node]                   # uses, outside the loop, of values that change in it: who,
+state use-slot: [Int]                  # as which input,
+state use-at: [Block]                  # and in which block
+state reach-phi: [Node]                # for a phi of the loop and a block outside it:
+state reach-at: [Block]
+state reach-as: [Node]                 # the phi's value there
+state stores: [Node]                   # the stores of the loop in hand
+state unknown: Bool                    # something in it may write memory this knows nothing of
+state turned: Int
+state hoisted: Int
+
+fn pinned?(n: Node) -> Bool = cfg.control?(n) or n is PHI or n is PARAM or n is RESULT
+
+fn of-loop?(n: Node) -> Bool = n is PHI and n.in(0) == loop-node
+
+fn mark-members(h: Block) {
+  loop-serial = loop-serial + 1
+  for b in h.loop-blocks { b.member = loop-serial }
+}
+
+# ---------------------------------------------------------------- turning
+
+# The block where `u` uses its input `k`: its own, or for a phi the block that
+# input comes from. `none` if it is not known.
+fn use-block(u: Node, k: Int) -> Block {
+  if u is PHI {
+    let region = u.in(0).block-of
+    if region == none or k < 1 or k > region.preds.len { return none }
+    return region.preds[k - 1]
+  }
+  if u is RESULT { return u.in(0).block-of }
+  u.block-of
+}
+
+# Everything computed from `n`, which changes in the loop, changes in it; where
+# something outside the loop that stays where it is uses such a value, note it.
+# False if such a use is in no known block.
+fn spread(n: Node) -> Bool {
+  for e in edges(n) {
+    let u = edge-user(e)
+    let k = edge-slot(e)
+    if pinned?(u) {
+      if not of-loop?(u) {
+        let b = use-block(u, k)
+        if b == none { return false }
+        if b.member != loop-serial {
+          use-of.push(u)
+          use-slot.push(k)
+          use-at.push(b)
+        }
+      }
+    } else if u.varies != loop-serial {
+      u.varies = loop-serial
+      if not spread(u) { return false }
+    }
+  }
+  true
+}
+
+# Whether the way from the loop to block `b` passes only blocks that are as
+# they were when blocks were last found.
+fn clear-way?(b: Block) -> Bool {
+  if b.member == loop-serial or b == loop-exit { return true }
+  if b.way-walked == way-walk { return true }
+  b.way-walked = way-walk
+  if b.touched or b.preds.len == 0 { return false }
+  all p in b.preds: clear-way?(p)
+}
+
+# How many values that change in the loop `n` is computed from, itself
+# included, counting one as often as it is reached; past `deep` levels, many.
+fn weight(n: Node, deep: Int) -> Int {
+  if of-loop?(n) or n.varies != loop-serial { return 0 }
+  if deep == 0 { return 1000 }
+  var w = 1
+  for i in inputs(n) { if i != none { w = w + weight(i, deep - 1) } }
+  w
+}
+
+# `n` with each phi of the loop taken as its input `k`: what `n` is on the way
+# in (1) and on the way round (2).
+fn with(n: Node, k: Int) -> Node {
+  if of-loop?(n) { return n.in(k) }
+  if n.varies != loop-serial { return n }
+  let c = copy(n)
+  grow-nodes()
+  for i in 0..n.arity {
+    if n.in(i) != none { set-input(c, i, with(n.in(i), k)) }
+  }
+  c
+}
+
+# The value of the loop's phi `p` in block `b`, which is outside the loop: the
+# phi itself where the loop was left from its body, a phi of what it was on
+# the way in and on the way round where it was left by its test, and where
+# ways meet a phi of what it is on each.
+fn reaching(p: Node, b: Block) -> Node {
+  if b.member == loop-serial { return p }
+  for i in 0..reach-phi.len {
+    if reach-phi[i] == p and reach-at[i] == b { return reach-as[i] }
+  }
+  var v: Node = none
+  if b == loop-exit {
+    v = ir.phi!(mut graph, p.type, loop-after, 2)
+    grow-nodes()
+    set-input(v, 1, p.in(1))
+    set-input(v, 2, p.in(2))
+  } else if b.preds.len == 1 {
+    v = reaching(p, b.preds[0])
+  } else {
+    v = ir.phi!(mut graph, p.type, b.head, b.preds.len)
+    grow-nodes()
+  }
+  reach-phi.push(p)
+  reach-at.push(b)
+  reach-as.push(v)
+  if b != loop-exit and b.preds.len > 1 {
+    var i = 1
+    for q in b.preds {
+      set-input(v, i, reaching(p, q))
+      i = i + 1
+    }
+  }
+  v
+}
+
+# `n` as it is in block `b`, outside the loop.
+fn outside(n: Node, b: Block) -> Node {
+  if of-loop?(n) { return reaching(n, b) }
+  if n.varies != loop-serial { return n }
+  let c = copy(n)
+  grow-nodes()
+  for i in 0..n.arity {
+    if n.in(i) != none { set-input(c, i, outside(n.in(i), b)) }
+  }
+  c
+}
+
+# Everything that follows control `from` follows `to` instead.
+fn follow(from: Node, to: Node) {
+  var users: [Node] = []
+  var slots: [Int] = []
+  for e in edges(from) {
+    users.push(edge-user(e))
+    slots.push(edge-slot(e))
+  }
+  for i in 0..users.len {
+    let u = users[i]
+    if u is REGION or u is LOOP or (slots[i] == 0 and cfg.control?(u)) { set-input(u, slots[i], to) }
+  }
+}
+
+fn turn(h: Block) {
+  let l = h.head
+  if l.arity != 2 or h.touched { return }
+  let test = cfg.follower(l)
+  if test == none or not (test is IF) { return }
+  let yes = first u in users(test): u is TRUE
+  let no = first u in users(test): u is FALSE
+  if yes == none or no == none { return }
+  mark-members(h)
+  let stay-true = yes.block-of.member == loop-serial
+  let stay = if stay-true then yes else no
+  let leave = if stay-true then no else yes
+  if stay.block-of.member != loop-serial or leave.block-of.member == loop-serial { return }
+  let back = l.in(1)
+  # A loop with nothing in it but its test stays as it is, and so does one
+  # that already ends in a test that leaves it.
+  if back == stay { return }
+  if (back is TRUE or back is FALSE) and (any u in users(back.in(0)): (u is TRUE or u is FALSE) and u != back and u.block-of != none and u.block-of.member != loop-serial) { return }
+  if leave.block-of.touched or stay.block-of.touched { return }
+  loop-node = l
+  loop-exit = leave.block-of
+  use-of.clear()
+  use-slot.clear()
+  use-at.clear()
+  for u in users(l) {
+    if of-loop?(u) and not spread(u) { return }
+  }
+  # Each test, and each value read outside, is computed over again: only a little may be.
+  if weight(test.in(1), 6) > 8 { return }
+  way-walk = way-walk + 1
+  for i in 0..use-of.len {
+    if not clear-way?(use-at[i]) or weight(use-of[i].in(use-slot[i]), 6) > 12 { return }
+  }
+  # The two tests, and where they leave to.
+  let first-test = ir.if!(mut graph, l.in(0), with(test.in(1), 1))
+  let last-test = ir.if!(mut graph, back, with(test.in(1), 2))
+  let enter = if stay-true then ir.true!(mut graph, first-test) else ir.false!(mut graph, first-test)
+  let skip = if stay-true then ir.false!(mut graph, first-test) else ir.true!(mut graph, first-test)
+  let again = if stay-true then ir.true!(mut graph, last-test) else ir.false!(mut graph, last-test)
+  let done = if stay-true then ir.false!(mut graph, last-test) else ir.true!(mut graph, last-test)
+  loop-after = ir.region!(mut graph, 2)
+  grow-nodes()
+  set-input(loop-after, 0, skip)
+  set-input(loop-after, 1, done)
+  # What is outside the loop reads each value as it is where the loop was left.
+  reach-phi.clear()
+  reach-at.clear()
+  reach-as.clear()
+  for i in 0..use-of.len {
+    let u = use-of[i]
+    set-input(u, use-slot[i], outside(u.in(use-slot[i]), use-at[i]))
+  }
+  # The body follows the loop's head, and what followed the loop follows the region.
+  follow(stay, l)
+  follow(leave, loop-after)
+  set-input(l, 0, enter)
+  set-input(l, 1, again)
+  drop(stay)
+  drop(leave)
+  drop(test)
+  for b in h.loop-blocks { b.touched = true }
+  loop-exit.touched = true
+  for p in h.preds { p.touched = true }
+  turned = turned + 1
+}
+
+# ---------------------------------------------------------------- loads made once
+
+# Whether `n` is the same every time round the loop in hand.
+fn steady?(n: Node) -> Bool {
+  if n.steady == loop-serial { return true }
+  if n.varies == loop-serial { return false }
+  var same = true
+  if n is PHI or n is RESULT { same = n.in(0).block-of != none and n.in(0).block-of.member != loop-serial }
+  else if cfg.control?(n) { same = n.block-of != none and n.block-of.member != loop-serial }
+  else if not (n is PARAM) {
+    for i in inputs(n) { if i != none and same and not steady?(i) { same = false } }
+  }
+  if same { n.steady = loop-serial } else { n.varies = loop-serial }
+  same
+}
+
+# What an address is an offset from, and the offset.
+fn base(a: Node) -> Node =
+  if a is ADD and a.in(1) is CONST then a.in(0) else if a is ADD and a.in(0) is CONST then a.in(1) else a
+
+fn offset(a: Node) -> Int =
+  if a is ADD and a.in(1) is CONST then int(a.in(1).payload) else if a is ADD and a.in(0) is CONST then int(a.in(0).payload) else 0
+
+# Whether store `s` surely writes none of what load `l` reads: offsets from
+# one base that do not overlap, or two different frame objects.
+fn apart?(s: Node, l: Node) -> Bool {
+  let x = base(s.in(1))
+  let y = base(l.in(1))
+  if x == y {
+    return offset(s.in(1)) + type-bytes(s.in(2).type) <= offset(l.in(1)) or offset(l.in(1)) + type-bytes(l.type) <= offset(s.in(1))
+  }
+  x is SLOT and y is SLOT
+}
+
+# A call of a routine known only to read memory.
+fn quiet?(n: Node) -> Bool = n is CALL and n.in(1) is SYMBOL and reads-only(n.in(1).payload)
+
+fn hoist(h: Block) {
+  let l = h.head
+  if h.touched or h.preds.len < 2 { return }
+  let before = h.preds[0]
+  if before.succs.len != 1 or before.touched { return }
+  mark-members(h)
+  if before.member == loop-serial { return }
+  stores.clear()
+  unknown = false
+  for b in h.loop-blocks {
+    var c = cfg.follower(b.head)
+    while c != none {
+      if c is STORE { stores.push(c) }
+      else if c is CALL and not quiet?(c) { unknown = true }
+      else if c is COPY or c is FILL or c is ATOMIC-STORE or c is RESERVE or c is TAILCALL or cfg.update?(c) { unknown = true }
+      c = if cfg.chain?(c) then cfg.follower(c) else none
+    }
+  }
+  if unknown { return }
+  # The loads at the head of the loop are made every time the loop is entered.
+  var c = cfg.follower(l)
+  while c != none and c is LOAD {
+    let next = cfg.follower(c)
+    if c.payload == 0 and steady?(c.in(1)) and (all s in stores: apart?(s, c)) {
+      follow(c, c.in(0))
+      set-input(c, 0, l.in(0))
+      set-input(l, 0, c)
+      c.block-of = before
+      c.steady = loop-serial
+      hoisted = hoisted + 1
+    }
+    c = next
+  }
+}
+
+# How much was changed: blocks must be found again after any of it.
+fn round() -> Int {
+  let was = turned + hoisted
+  for h in order { if h.head is LOOP { hoist(h) } }
+  for h in order { if h.head is LOOP { turn(h) } }
+  turned + hoisted - was
+}
+
+fn any-loop?() -> Bool = any n in Node: not n.dead and n is LOOP
+
+# Round after round, finding the blocks again each time, until a round changes
+# nothing. What the passes had worked out is forgotten, before and after.
+fn run() {
+  if not any-loop?() { return }
+  var rounds = 0
+  var changed = 1
+  while changed > 0 and rounds < 6 {
+    start-over()
+    cfg.build()
+    changed = round()
+    rounds = rounds + 1
+  }
+  start-over()
+}

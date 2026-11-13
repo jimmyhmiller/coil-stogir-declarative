@@ -16,7 +16,7 @@ def count(path, comment):
 by_language = {}
 coil_in_src = []
 for path in sorted((root / "src").rglob("*")):
-    if path.is_file():
+    if path.is_file() and not path.name.startswith('.'):
         if path.suffix == ".coil":
             coil_in_src.append(path)
         by_language[path.suffix] = by_language.get(path.suffix, 0) + count(path, "#")

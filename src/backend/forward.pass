@@ -13,7 +13,7 @@ state forwarded: Int
 
 # Something that may write memory this pass knows nothing of.
 fn clobbers?(n: Node) -> Bool =
-  n is CALL or n is COPY or n is FILL or n is ATOMIC-STORE or n is RESERVE or cfg.update?(n)
+  (n is CALL and not (n.in(1) is SYMBOL and reads-only(n.in(1).payload))) or n is COPY or n is FILL or n is ATOMIC-STORE or n is RESERVE or cfg.update?(n)
 
 # What an address is an offset from, and the offset.
 fn base(a: Node) -> Node =

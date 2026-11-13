@@ -26,5 +26,7 @@ plan default {
   until-stable { simplify.run }
   facts.solve
   until-stable { narrow.run  simplify.run }
+  loops.run
+  until-stable { simplify.run }
   quick
 }

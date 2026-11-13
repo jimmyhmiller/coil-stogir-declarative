@@ -32,6 +32,8 @@ column writes: Vreg -> [Int]           # the instructions that write it
 column open-from: Vreg -> Int          # while building: where its range in this block began
 column last-touch: Vreg -> Int         # and the position after its last use so far
 column out-mark: Vreg -> Int           # the block it was last seen live out of
+column weight: Vreg -> Int             # how much it is read and written: each time counts
+                                       # eight times as much for every loop it is in
 
 entity Range                           # positions from..to, `to` not included
 column from: Range -> Int
@@ -71,8 +73,6 @@ column write-mark: Block -> Int        # the register last seen written in this 
 column write-first: Block -> Int       # and where it is first written there
 column live-mark: Block -> Int         # the register last found live into this block
 column live-in: Block -> [Vreg]
-column span-from: Block -> Int         # for a loop's head: the loop's first and last
-column span-to: Block -> Int           # instructions, once they are asked for
 
 state active: [Piece]                  # placed pieces live at the current position
 state inactive: [Piece]                # placed pieces in a hole at the current position
@@ -113,6 +113,7 @@ fn touch(i: Inst, kind: Int, a: Int, class: Int) {
   if a > 0 {
     let v = id(a)
     v.class = class
+    v.weight = v.weight + (1 << (3 * min(i.home.loop-depth, 6)))
     if kind != isa.K-DEF { v.reads.push(at) }
     if writes?(kind) { v.writes.push(at) }
   } else if allocatable?(0 - a - 1) {
@@ -444,29 +445,6 @@ fn advance(pos: Int) {
   while inactive.len > kept { inactive.pop() }
 }
 
-# Whether `v` is read in the innermost loop around position `pos`: if it is,
-# it is wanted in a register every time round, however far off its next
-# reading is in the order of the code.
-fn read-in-loop?(v: Vreg, pos: Int) -> Bool {
-  let i: Inst = id(pos / 2)
-  let h = i.home.loop-head
-  if h == none { return false }
-  if h.span-to == 0 {
-    var low = far()
-    var high = 0
-    for b in h.loop-blocks {
-      low = min(low, b.first-inst)
-      high = max(high, b.last-inst)
-    }
-    h.span-from = low
-    h.span-to = high
-  }
-  for k in 0..v.reads.len {
-    if v.reads[k] >= h.span-from and v.reads[k] <= h.span-to { return true }
-  }
-  false
-}
-
 # A register nothing else holds for some way ahead; with `whole`, only one
 # free for all of the piece's life.
 fn try-free(p: Piece, whole: Bool) -> Bool {
@@ -506,9 +484,9 @@ fn try-free(p: Piece, whole: Bool) -> Bool {
 
 # Take the register whose holder is needed furthest away; the holder waits in
 # the frame. With `far`, only if that holder is not needed for the whole of the
-# piece's life nor read in the loop the piece begins in, so that the piece has
-# the register throughout: better that a value wanted after a loop waits than
-# that one wanted every time round is fetched every time round.
+# piece's life and is read and written less than the piece's value is, so that
+# the piece has the register throughout: better that a value wanted after a
+# loop waits than that one wanted every time round is fetched every time round.
 fn take-blocked(p: Piece, far-only: Bool) -> Bool {
   let pos = p.pstart
   for r in Phys {
@@ -516,12 +494,12 @@ fn take-blocked(p: Piece, far-only: Bool) -> Bool {
     r.blocked-at = far()
   }
   for a in active {
-    let x = if far-only and read-in-loop?(a.owner, pos) then pos else next-need(a, pos)
+    let x = if far-only and a.owner.weight >= p.owner.weight then pos else next-need(a, pos)
     if x < id(a.reg).needed-at { id(a.reg).needed-at = x }
   }
   for a in inactive {
     if meeting(a.ranges, p.ranges) != 0 {
-      let x = if far-only and read-in-loop?(a.owner, pos) then pos else next-need(a, pos)
+      let x = if far-only and a.owner.weight >= p.owner.weight then pos else next-need(a, pos)
       if x < id(a.reg).needed-at { id(a.reg).needed-at = x }
     }
   }
