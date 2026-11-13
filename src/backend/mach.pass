@@ -19,6 +19,7 @@ column kind: Inst -> Int               # 1 a register copy, 2 a jump, 3 a return
 column caller-bytes: Inst -> Int       # for a read of the caller's frame: how many bytes
 column copy-to: Inst -> Int            # for a copy: the register written
 column copy-from: Inst -> Int          # and the register read
+column calling: Inst -> Bool           # it calls a function
 column first-inst: Block -> Int       # a block's instructions are first..last
 column last-inst: Block -> Int
 column needed: Node -> Bool           # must be in a register
@@ -155,6 +156,11 @@ fn mark-object(kind: Int, r: Int, below: Int, bytes: Int) {
   i.copy-to = r
   i.copy-from = below
   i.caller-bytes = bytes
+}
+
+# The instruction just emitted is a call.
+fn mark-call() {
+  id(Inst.count).calling = true
 }
 
 fn mark-jump() {

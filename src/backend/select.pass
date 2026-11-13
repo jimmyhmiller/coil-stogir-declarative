@@ -7,6 +7,8 @@ use lower as lower
 import target as isa
 import abi as abi
 
+state frame-at: Block                 # where the frame is opened, if that is not the function's start
+column framed: Block -> Bool          # the frame is open here: `frame-at` dominates the block
 column pair-with: Node -> Node        # for the first of two loads or stores done together: the second
 column pair-second: Node -> Bool      # the second of such a two,
 column pair-first: Node -> Node       # and its first
@@ -170,6 +172,7 @@ fn call(n: Node) {
   # Something in the same image is called where it is; anything else through a register.
   if n.in(1) is SYMBOL { lower.call-symbol(int(n.in(1).payload)) }
   else { lower.call-register(lower.operand(n.in(1))) }
+  mach.mark-call()
   mach.implicit(passed, if abi.LINK >= 0 then set-bit(isa.CALLER-SAVED, abi.LINK) else isa.CALLER-SAVED)
   calls = true
   for u in users(n) {
@@ -205,6 +208,7 @@ fn pinned-call(n: Node) {
   }
   let to = shape-result(shape)
   if to >= 0 { writes = set-bit(writes, to) }
+  mach.mark-call()
   mach.implicit(passed, writes)
   pinned-writes = pinned-writes | writes
   calls = true
@@ -342,7 +346,61 @@ fn phi-moves(b: Block, s: Block) {
   }
 }
 
+# Whether block `b` has a node that needs the frame whatever registers values
+# get: a call, memory sized as the function runs, or a frame object's address
+# (which is made again wherever it is read, straight or with an offset added).
+fn frame-node?(b: Block) -> Bool {
+  for n in b.seq {
+    if n is CALL or n is RESERVE { return true }
+    for i in inputs(n) {
+      if i != none and (i is SLOT or (i is ADD and (i.in(0) is SLOT or i.in(1) is SLOT))) { return true }
+    }
+  }
+  false
+}
+
+# Whether the blocks `e` dominates are left only by returning, or from a block
+# that goes one way only, where the frame can be closed as it goes: to a
+# block where ways meet that started before the frame was opened.
+fn closed?(e: Block) -> Bool =
+  all b in order: not cfg.dominates(e, b) or b.succs.len == 1 or (all s in b.succs: cfg.dominates(e, s))
+
+# A function that often leaves early, before anything that needs the frame,
+# opens its frame later: at the block that dominates every block needing it,
+# if that block is entered by a branch, is in no loop, and is left only by
+# returning or to where ways that never opened it meet. Until there, values keep to registers the caller does not expect
+# back; from there on they may move. The blocks before it are put first in the
+# code, so that "before the frame" is also earlier in the code. `frame-at`
+# stays none if there is no such block short of the function's start; and the
+# passes after this one drop the plan if the frame turns out to be used
+# before `frame-at` after all.
+fn plan-frame() {
+  frame-at = none
+  if not cfg.on?(14) { return }
+  var e: Block = none
+  for b in order {
+    if frame-node?(b) { e = cfg.join(e, b) }
+    if any n in b.seq: n is RESERVE { return }
+  }
+  if e == none { return }
+  let root = cfg.entry()
+  while e != root and (e.loop-depth > 0 or e.preds.len != 1 or e.preds[0].succs.len < 2 or not closed?(e)) { e = e.idom }
+  if e == root { return }
+  frame-at = e
+  var first: [Block] = []
+  var rest: [Block] = []
+  for b in order {
+    b.framed = cfg.dominates(e, b)
+    if b.framed { rest.push(b) } else { first.push(b) }
+  }
+  order.clear()
+  for b in first { order.push(b) }
+  for b in rest { order.push(b) }
+  for i in 0..order.len { order[i].rpo = i }
+}
+
 fn run() {
+  plan-frame()
   next-vreg = Node.count
   if cfg.on?(12) { for b in order { pair-up(b) } }
   for b in order {

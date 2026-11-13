@@ -101,6 +101,30 @@ fn move-source(i: Inst) -> Int = if i.kind == 1 then i.copy-from else 0
 fn fits?(v: Vreg, r: Int) -> Bool =
   allocatable?(r) and isa.reg-class(r) == v.class and not (v.wide and isa.in-set?(isa.CALLEE-SAVED, r))
 
+# ---------------------------------------------------------------- where the frame opens
+
+# Whether block `b` has something in it that needs the frame whatever
+# registers values get: a call, a frame object, an argument in the caller's
+# frame, a register the caller expects back named outright.
+fn needs-frame?(b: Block) -> Bool {
+  for at in b.first-inst..b.last-inst + 1 {
+    let i = id(at)
+    if i.kind >= 4 or i.calling or ((i.also-reads | i.also-writes) & isa.CALLEE-SAVED) != word(0) { return true }
+    let op = i.inst-op
+    for k in 0..isa.operand-count(op) {
+      let a = mach.arg(i, k)
+      if reg-kind?(isa.operand-kind(op, k)) and a < 0 and isa.in-set?(isa.CALLEE-SAVED, 0 - a - 1) { return true }
+    }
+  }
+  false
+}
+
+# Selection planned to open the frame at `frame-at`, going by the nodes. If an
+# instruction before there needs the frame after all, the plan is dropped.
+fn check-frame-plan() {
+  if frame-at != none and (any b in order: not b.framed and needs-frame?(b)) { frame-at = none }
+}
+
 # ---------------------------------------------------------------- liveness
 
 fn fixed-range(p: Phys, a: Int, b: Int) {
@@ -157,6 +181,15 @@ fn occurrences() {
     for at in b.first-inst..b.last-inst + 1 {
       let i = id(at)
       let op = i.inst-op
+      # Before the frame is open, no register the caller expects back is to be had.
+      if at == b.first-inst and frame-at != none and not b.framed {
+        var rest = isa.CALLEE-SAVED
+        while rest != word(0) {
+          let r = lowest-bit(rest)
+          if allocatable?(r) { fixed-range(id(r + 1), 2 * b.first-inst, 2 * b.last-inst + 2) }
+          rest = clear-bit(rest, r)
+        }
+      }
       i.home = b
       for k in 0..isa.operand-count(op) {
         let kind = isa.operand-kind(op, k)
@@ -647,8 +680,13 @@ fn piece-at(v: Vreg, pos: Int) -> Piece {
 }
 
 fn run() {
+  check-frame-plan()
   occurrences()
   liveness()
   build-ranges()
+  # Where the frame opens, every value alive there may change its home.
+  if frame-at != none {
+    for v in frame-at.live-in { split(v.first-piece, 2 * frame-at.first-inst) }
+  }
   scan()
 }

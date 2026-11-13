@@ -65,6 +65,8 @@ fn label-of(i: Inst) -> Int {
 # A value that waits in the frame anywhere is stored there wherever it is written.
 fn finish(i: Inst, k: Int) {
   let op = i.inst-op
+  # Before the frame is open there is nowhere to store it: it is stored as the frame opens.
+  if frame-at != none and not i.home.framed { return }
   if k < isa.operand-count(op) and alloc.writes?(isa.operand-kind(op, k)) {
     let a = mach.arg(i, k)
     if a > 0 and id(a).slot != 0 {
@@ -224,7 +226,7 @@ fn nothing?(i: Inst) -> Bool {
 # it jumps.
 fn find-onward() {
   for b in order {
-    if id(b.last-inst).kind == 2 and b.preds.len >= 1 and b.succs.len == 1 and b.succs[0] != b {
+    if id(b.last-inst).kind == 2 and b.preds.len >= 1 and b.succs.len == 1 and b.succs[0] != b and b != frame-at and not (frame-at != none and b.framed and not b.succs[0].framed) {
       var empty = true
       for at in b.first-inst..b.last-inst { if not nothing?(id(at)) { empty = false } }
       # Nor may a value come back from the frame part way through it.
@@ -307,7 +309,7 @@ fn rewrite(i: Inst, next: Int) {
   } else if i.kind == 5 {
     lower.above-arguments(placed(i.copy-to, 2 * int(i) + 1), out-slots * 8)
   } else if not same-register and not falls-through {
-    if i.kind == 3 and frame > 0 { leave() }
+    if i.kind == 3 and frame > 0 and (frame-at == none or i.home.framed) { leave() }
     mach.emit(op, x0, x1, x2, x3, x4)
   }
   for k in 0..5 { finish(i, k) }
@@ -429,7 +431,59 @@ fn leave() {
 }
 
 # The final code of block `b`, which block `next` follows.
+# Whether the plan to open the frame at `frame-at` holds now that every value
+# has its homes: before there, nothing waits in the frame or comes back from
+# it, and no register the caller expects back is used.
+fn plan-holds?() -> Bool {
+  for b in order {
+    if not b.framed {
+      for v in b.live-in {
+        let p = alloc.piece-at(v, 2 * b.first-inst)
+        if p.in-frame or p.reg == 0 or isa.in-set?(isa.CALLEE-SAVED, p.reg - 1) { return false }
+      }
+      for at in b.first-inst..b.last-inst + 1 {
+        let i = id(at)
+        if i.kind >= 4 { return false }
+        let op = i.inst-op
+        for k in 0..isa.operand-count(op) {
+          let kind = isa.operand-kind(op, k)
+          let a = mach.arg(i, k)
+          if alloc.reg-kind?(kind) and a > 0 {
+            let p = alloc.piece-at(id(a), if kind == isa.K-DEF then 2 * at + 1 else 2 * at)
+            if p.in-frame or p.reg == 0 or isa.in-set?(isa.CALLEE-SAVED, p.reg - 1) { return false }
+          }
+        }
+        for p in i.starts-even { if p.in-frame or p.reg == 0 or (p.prev-piece != none and (p.prev-piece.in-frame or p.prev-piece.reg == 0)) { return false } }
+        for p in i.starts-odd { if p.in-frame or p.reg == 0 { return false } }
+      }
+      # Nor may a value leave the block waiting in the frame.
+      for s in b.succs {
+        for v in s.live-in {
+          let p = alloc.piece-at(v, 2 * b.last-inst + 1)
+          if p.in-frame or p.reg == 0 { return false }
+        }
+      }
+    }
+  }
+  true
+}
+
+# The frame opens at the top of `b`: and every value alive here that ever
+# waits in the frame is stored there now, from where the block before left it,
+# none having been stored as it was written.
+fn open-frame(b: Block) {
+  enter()
+  let before = b.preds[0]
+  for v in b.live-in {
+    if v.slot != 0 {
+      let from = alloc.piece-at(v, 2 * before.last-inst + 1)
+      keep(from.reg - 1, out-slots + v.slot - 1, v.wide)
+    }
+  }
+}
+
 fn block-code(b: Block, next: Int) {
+  if b == frame-at { open-frame(b) }
   # A block with one way in, from a block with two ways out, takes its values here.
   if b.preds.len == 1 and b.preds[0].succs.len > 1 { bring(b.preds[0], b) }
   for at in b.first-inst..b.last-inst + 1 {
@@ -440,6 +494,8 @@ fn block-code(b: Block, next: Int) {
     }
     # Before a block's closing jump, the values the next block expects.
     if at == b.last-inst and b.succs.len == 1 { bring(b, b.succs[0]) }
+    # Going on to where the frame was never opened, it is closed first.
+    if at == b.last-inst and frame-at != none and b.framed and b.succs.len == 1 and not b.succs[0].framed { leave() }
     # A branch to the next block, then a jump elsewhere, is the opposite
     # branch to elsewhere, if the branch is the block's only one.
     let last = id(b.last-inst)
@@ -470,7 +526,11 @@ fn run() {
   # and so is the frame record's place, below which frame objects are aligned.
   frame = ((out-slots + slots + bit-count(saved) + abi.RETURN-SLOTS) * 8 + object-bytes + 15) / 16 * 16 - abi.RETURN-SLOTS * 8
   final-start = Inst.count
-  if frame > 0 { enter() }
+  if frame-at != none and (frame == 0 or not plan-holds?()) {
+    frame-at = none
+    for b in order { b.framed = true }
+  }
+  if frame > 0 and frame-at == none { enter() }
   find-onward()
   for index in 0..order.len {
     let b = order[index]

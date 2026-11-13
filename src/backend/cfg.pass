@@ -27,6 +27,7 @@ setting trial: Bool
 #   7 known routine calls done in place   8 constants kept out of loops
 #   9 waiting from a loop's start   10 loads and stores forwarded   11 promotion
 #   12 loads and stores in pairs   13 branches that only choose made choices
+#   14 the frame opened only where it is needed
 setting off: Int
 fn on?(what: Int) -> Bool = not has-bit(word(off), what)
 state post: [Block]
