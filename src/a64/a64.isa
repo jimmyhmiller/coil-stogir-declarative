@@ -69,6 +69,14 @@ inst cnt-bytes(rd: def simd, rn: use simd)                = 0 0 0 01110 00 10000
 inst add-bytes(rd: def simd, rn: use simd)                = 0 0 0 01110 00 11000 11011 10 rn rd
 inst csinc(sf: u1, rd: def gpr, rn: use gpr, rm: use gpr, cond: u4) = sf 0 0 11010100 rm cond 0 1 rn rd
 
+# A logical immediate: a run of `ones` one-bits, turned right by `rotate`
+# within an element of `size` bits, the element repeated to fill the register.
+immediate logical(size in 2 4 8 16 32 64, ones in 1..size - 1, rotate in 0..size - 1) = repeat(rotate-right(low-ones(ones), rotate, size), size) encoded (size == 64) << 12 | rotate << 6 | (~(size * 2 - 1)) & 63 | (ones - 1)
+
+inst and-imm(sf: u1, rd: def gpr, rn: use gpr, mask: u13) = sf 00 100100 mask rn rd
+inst orr-imm(sf: u1, rd: def gpr, rn: use gpr, mask: u13) = sf 01 100100 mask rn rd
+inst eor-imm(sf: u1, rd: def gpr, rn: use gpr, mask: u13) = sf 10 100100 mask rn rd
+
 # Arithmetic with a 12-bit immediate.
 inst add-imm(sf: u1, rd: def gpr, rn: use gpr, imm: u12)  = sf 0 0 100010 0 imm rn rd
 inst sub-imm(sf: u1, rd: def gpr, rn: use gpr, imm: u12)  = sf 1 0 100010 0 imm rn rd

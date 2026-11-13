@@ -12,6 +12,7 @@
 ;;; numbers and sets, and an encoder. Other languages read the same file through
 ;;; `parse`.
 (module lang.isa)
+(import "coil.primitive" :as primitive)
 (import "coil.alloc" :use [malloc-allocator])
 (import "coil.arraylist" :use [ArrayList])
 (import "lang.text" :as t)
@@ -58,6 +59,8 @@
    (form-names (ArrayList (slice u8)))
    (form-heads (ArrayList (slice u8)))
    (form-cases (ArrayList (slice u8)))
+   (immediates (ArrayList (slice u8)))
+   (immediate-text (slice u8))
    (align i64)])
 
 (defn class-width [(spec Spec) (name (slice u8))] (-> i64)
@@ -233,6 +236,180 @@
             (push! (mut out) name))))
     out))
 
+;; ---------------------------------------------------------------- enumerated immediates
+
+;;; `immediate NAME(p in A B C, q in LO..HI) = VALUE encoded CODE`: a class of
+;;; immediates given by listing it. Every choice of the parameters gives one
+;;; value and the bits that encode it; the class is the table of them all.
+;;; Expressions are evaluated here, as the file is read.
+(defstruct Env [(names (ArrayList (slice u8))) (values (ArrayList i64))])
+
+(defn imm-level [(op (slice u8))] (-> i64)
+  (cond (= op "|") 1
+        (= op "&") 2
+        (or (= op "==") (= op "!=") (= op "<") (= op ">")) 3
+        (or (= op "<<") (= op ">>")) 4
+        (or (= op "+") (= op "-")) 5
+        (= op "*") 6
+        :else 0))
+
+(defn imm-primary [(c (mut t/Cur)) (env Env)] (-> i64)
+  (let [tok (t/advance! (mut c))
+        name (.text tok)]
+    (cond
+      (= (.kind tok) t/T-NUM) (cast i64 (.value tok))
+      (t/tok-is? tok "(")
+        (let [v (imm-expr (mut c) env 0)]
+          (t/expect! (mut c) ")")
+          v)
+      (t/tok-is? tok "-") (- 0 (imm-primary (mut c) env))
+      (t/tok-is? tok "~") (^ (imm-primary (mut c) env) -1)
+      (and (t/at? (mut c) "(") (.glued (t/peek (mut c))))
+        (do (t/advance! (mut c))
+            (let [a (imm-expr (mut c) env 0)
+                  b (if (t/accept! (mut c) ",") (imm-expr (mut c) env 0) 0)
+                  d (if (t/accept! (mut c) ",") (imm-expr (mut c) env 0) 0)]
+              (t/expect! (mut c) ")")
+              (cond
+                ; The low `a` bits set.
+                (= name "low-ones") (if (>= a 64) -1 (- (<< 1 a) 1))
+                ; `a` turned right by `b` places within `d` bits.
+                (= name "rotate-right")
+                  (let [mask (if (>= d 64) (: 0xFFFFFFFFFFFFFFFF u64) (- (<< (: 1 u64) (cast u64 d)) 1))
+                        x (& (primitive/cast u64 a) mask)]
+                    (primitive/cast i64
+                      (if (= b 0) x (& (| (>> x (cast u64 b)) (<< x (cast u64 (- d b)))) mask))))
+                ; The low `b` bits of `a`, again and again up to 64 bits.
+                (= name "repeat")
+                  (let [(mut out) (: 0 u64)
+                        mask (if (>= b 64) (: 0xFFFFFFFFFFFFFFFF u64) (- (<< (: 1 u64) (cast u64 b)) 1))
+                        (mut at) 0]
+                    (while (< at 64)
+                      (set! out (| out (<< (& (primitive/cast u64 a) mask) (cast u64 at))))
+                      (set! at (+ at b)))
+                    (primitive/cast i64 out))
+                :else (t/die (mut c) tok (t/cat2 "no function named " name)))))
+      (>= (t/index-of (.names env) name) 0) (get (.values env) (t/index-of (.names env) name))
+      :else (t/die (mut c) tok (t/cat2 "no such name: " name)))))
+
+(defn imm-expr [(c (mut t/Cur)) (env Env) (min i64)] (-> i64)
+  (let [(mut left) (imm-primary (mut c) env)
+        (mut going) true]
+    (while going
+      (let [tok (t/peek (mut c))
+            level (if (.first tok) 0 (imm-level (.text tok)))
+            op (.text tok)]
+        (if (and (> level 0) (> level min))
+            (do (t/advance! (mut c))
+                (let [right (imm-expr (mut c) env level)]
+                  (set! left
+                        (cond (= op "|") (| left right)
+                              (= op "&") (& left right)
+                              (= op "==") (if (= left right) 1 0)
+                              (= op "!=") (if (!= left right) 1 0)
+                              (= op "<") (if (< left right) 1 0)
+                              (= op ">") (if (> left right) 1 0)
+                              (= op "<<") (if (>= right 64) 0 (primitive/cast i64 (<< (primitive/cast u64 left) (cast u64 right))))
+                              (= op ">>") (if (>= right 64) 0 (primitive/cast i64 (>> (primitive/cast u64 left) (cast u64 right))))
+                              (= op "+") (primitive/iadd left right)
+                              (= op "-") (primitive/isub left right)
+                              :else (primitive/imul left right)))))
+            (set! going false))))
+    left))
+
+;;; Every choice of the parameters from `depth` on, each adding one value and
+;;; code to the lists.
+(defn enumerate! [(c (mut t/Cur)) (env (mut Env)) (starts (ArrayList i64)) (depth i64) (body i64)
+                  (values (mut (ArrayList u64))) (codes (mut (ArrayList i64)))] (-> void)
+  (if (= depth (len starts))
+      (do (set! (.pos c) body)
+          (let [v (imm-expr (mut c) env 0)]
+            (t/expect! (mut c) "encoded")
+            (push! (mut values) (primitive/cast u64 v))
+            (push! (mut codes) (imm-expr (mut c) env 0))))
+      (do
+        ; A parameter's choices: listed numbers, or a range whose ends may
+        ; depend on the parameters before it.
+        (set! (.pos c) (get starts depth))
+        (let [name (t/name! (mut c) "a parameter")]
+          (t/expect! (mut c) "in")
+          (let [first (imm-expr (mut c) env 0)]
+            (if (t/accept! (mut c) "..")
+                (let [last (imm-expr (mut c) env 0)]
+                  (for v (range first (+ last 1))
+                    (push! (mut (.names env)) name)
+                    (push! (mut (.values env)) v)
+                    (enumerate! (mut c) (mut env) starts (+ depth 1) body (mut values) (mut codes))
+                    (pop! (mut (.names env)))
+                    (pop! (mut (.values env)))))
+                (let [(mut choices) (ArrayList::new [i64] (malloc-allocator))]
+                  (push! (mut choices) first)
+                  (while (t/at-num? (mut c)) (push! (mut choices) (cast i64 (.value (t/advance! (mut c))))))
+                  (for v choices
+                    (push! (mut (.names env)) name)
+                    (push! (mut (.values env)) v)
+                    (enumerate! (mut c) (mut env) starts (+ depth 1) body (mut values) (mut codes))
+                    (pop! (mut (.names env)))
+                    (pop! (mut (.values env)))))))))))
+
+(defn parse-immediate [(c (mut t/Cur)) (spec (mut Spec))] (-> void)
+  (let [name (t/name! (mut c) "an immediate class name")
+        (mut starts) (ArrayList::new [i64] (malloc-allocator))
+        (mut depth) 0]
+    (t/expect! (mut c) "(")
+    ; Note where each parameter starts, and pass over it.
+    (push! (mut starts) (.pos c))
+    (set! depth 1)
+    (while (> depth 0)
+      (let [tok (t/advance! (mut c))]
+        (cond (t/tok-is? tok "(") (set! depth (+ depth 1))
+              (t/tok-is? tok ")") (set! depth (- depth 1))
+              (and (t/tok-is? tok ",") (= depth 1)) (push! (mut starts) (.pos c))
+              :else 0)))
+    (t/expect! (mut c) "=")
+    (let [body (.pos c)
+          (mut env) (Env :names (ArrayList::new [(slice u8)] (malloc-allocator))
+                         :values (ArrayList::new [i64] (malloc-allocator)))
+          (mut values) (ArrayList::new [u64] (malloc-allocator))
+          (mut codes) (ArrayList::new [i64] (malloc-allocator))
+          (mut o) (t/out-new)]
+      (enumerate! (mut c) (mut env) starts 0 body (mut values) (mut codes))
+      ; In order of value, each value once, so that a search can find it.
+      (let [(mut order) (ArrayList::new [i64] (malloc-allocator))]
+        (for i (range 0 (len values))
+          (let [(mut lo) 0
+                (mut hi) (len order)]
+            (while (< lo hi)
+              (let [mid (/ (+ lo hi) 2)]
+                (if (< (get values (get order mid)) (get values i)) (set! lo (+ mid 1)) (set! hi mid))))
+            (unless (and (< lo (len order)) (= (get values (get order lo)) (get values i)))
+              (push! (mut order) 0)
+              (for j (range 0 (- (- (len order) 1) lo))
+                (let [at (- (- (len order) 1) j)]
+                  (set! (mut order) at (get order (- at 1)))))
+              (set! (mut order) lo i))))
+        (t/emit! (mut o) (t/cat3 "(def " (t/upper name) "-VALUES ["))
+        (for i order (t/emit! (mut o) (t/cat2 (t/u64-text (get values i)) " ")))
+        (t/line! (mut o) "])")
+        (t/emit! (mut o) (t/cat3 "(def " (t/upper name) "-CODES ["))
+        (for i order (t/emit! (mut o) (t/cat2 (t/int-text (get codes i)) " ")))
+        (t/line! (mut o) "])")
+        (t/line! (mut o) (t/cat3 ";;; The bits that encode `v` as a " name " immediate, or -1 if it is not one."))
+        (t/line! (mut o) (t/cat3 "(defn " name "-code [(v i64)] (-> i64)"))
+        (t/line! (mut o) "  (let [want (primitive/cast u64 v)")
+        (t/line! (mut o) "        (mut lo) 0")
+        (t/line! (mut o) (t/cat3 "        (mut hi) " (t/int-text (len order)) "]"))
+        (t/line! (mut o) "    (while (< lo hi)")
+        (t/line! (mut o) "      (let [mid (/ (+ lo hi) 2)]")
+        (t/line! (mut o) (t/cat3 "        (if (< (get " (t/upper name) "-VALUES mid) want) (set! lo (+ mid 1)) (set! hi mid))))"))
+        (t/line! (mut o) (t/cat4 "    (if (and (< lo " (t/int-text (len order)) ") (= (get " (t/cat2 (t/upper name) "-VALUES lo) want))")))
+        (t/line! (mut o) (t/cat3 "        (get " (t/upper name) "-CODES lo)"))
+        (t/line! (mut o) "        -1)))"))
+      (push! (mut (.immediates spec)) name)
+      (set! (.immediate-text spec) (t/cat2 (.immediate-text spec) (t/text-of (mut o))))
+      ; The cursor is left after the last evaluation of the body.
+      (do))))
+
 ;; ---------------------------------------------------------------- byte encodings
 
 ;;; Arithmetic in a byte encoding or a form: over the names in `names`, which
@@ -397,6 +574,8 @@
                      :form-names (ArrayList::new [(slice u8)] (malloc-allocator))
                      :form-heads (ArrayList::new [(slice u8)] (malloc-allocator))
                      :form-cases (ArrayList::new [(slice u8)] (malloc-allocator))
+                     :immediates (ArrayList::new [(slice u8)] (malloc-allocator))
+                     :immediate-text ""
                      :align 4)]
     (while (not (t/eof? (mut c)))
       (let [tok (t/advance! (mut c))]
@@ -406,6 +585,7 @@
           (t/tok-is? tok "bytes") (set! (.word spec) 0)
           (t/tok-is? tok "align") (set! (.align spec) (cast i64 (t/num! (mut c) "bytes")))
           (t/tok-is? tok "form") (parse-form (mut c) (mut spec))
+          (t/tok-is? tok "immediate") (parse-immediate (mut c) (mut spec))
           (t/tok-is? tok "class")
             (let [name (t/name! (mut c) "a class name")
                   width (cast i64 (t/num! (mut c) "the field width"))]
@@ -461,6 +641,23 @@
 
 ;;; An instruction's word: its literal bits, and each field cut to its width
 ;;; and shifted into place.
+;;; Coil that stops with the instruction's name if an immediate operand does
+;;; not fit its declared width.
+(defn range-checks [(inst Inst)] (-> (slice u8))
+  (let [(mut o) (t/out-new)]
+    (for i (range 0 (len (.operands inst)))
+      (let [operand (get (.operands inst) i)]
+        (when (and (= (.kind operand) K-IMM) (< (.width operand) 64))
+          (t/emit! (mut o)
+                   (if (.signed operand)
+                       (t/cat4 " (when (or (< " (arg-name i) (t/cat3 " (- 0 (<< 1 " (t/int-text (- (.width operand) 1)) ")))")
+                               (t/cat4 " (>= " (arg-name i) (t/cat3 " (<< 1 " (t/int-text (- (.width operand) 1)) ")))")
+                                       (t/cat4 " (panic \"" (.name inst) (t/cat3 ": operand " (.name operand) " does not fit\"))") "")))
+                       (t/cat4 " (when (or (< " (arg-name i) " 0)"
+                               (t/cat4 " (>= " (arg-name i) (t/cat3 " (<< 1 " (t/int-text (.width operand)) ")))")
+                                       (t/cat4 " (panic \"" (.name inst) (t/cat3 ": operand " (.name operand) " does not fit\"))") ""))))))))
+    (t/text-of (mut o))))
+
 (defn encode-text [(spec Spec) (inst Inst)] (-> (slice u8))
   (let [(mut o) (t/out-new)
         (mut shift) (.word spec)
@@ -477,7 +674,7 @@
                              (arg-name (operand-index inst (.field piece)))
                              (t/cat3 ") " (t/int-text (.low piece)) ") ")
                              (t/cat4 (t/u64-text mask) ") " (t/int-text shift) ")"))))))
-    (t/cat4 "(primitive/cast u32 (| " (t/u64-text literal) (t/text-of (mut o)) "))")))
+    (t/cat4 (t/cat3 "(do" (range-checks inst) " (primitive/cast u32 (| ") (t/u64-text literal) (t/text-of (mut o)) ")))")))
 
 (defn module-text [(src (slice u8)) (path (slice u8))] (-> (slice u8))
   (let [spec (parse src path)
@@ -596,6 +793,7 @@
     (t/line! (mut o) "])")
     (t/line! (mut o) "(defn implicit-reads [(op i64)] (-> u64) (get IMPLICIT-READS op))")
     (t/line! (mut o) "(defn implicit-writes [(op i64)] (-> u64) (get IMPLICIT-WRITES op))")
+    (t/emit! (mut o) (.immediate-text spec))
     (if (!= (.word spec) 0)
         (emit-word-encoder! (mut o) spec)
         (emit-byte-encoder! (mut o) spec))

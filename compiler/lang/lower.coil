@@ -173,6 +173,21 @@
               (t/expect! (mut (.c l)) ")")
               (t/cat4 "(extended (mut cx) " (.code (get (.bindings l) index)) " "
                       (cond (= name "sx") "1)" (= name "zx") "0)" :else "2)"))))
+      ; A class of immediates the target lists: in a condition, whether the
+      ; value is one; as an operand, the bits that encode it.
+      (and call (>= (t/index-of (.immediates (.target l)) name) 0))
+        (do (t/advance! (mut (.c l)))
+            (let [x (value-expr (mut l) 0 false)]
+              (t/expect! (mut (.c l)) ")")
+              (if operand
+                  (t/cat4 "(isa/" name "-code " (t/cat2 x ")"))
+                  (t/cat4 "(>= (isa/" name "-code " (t/cat2 x ") 0)")))))
+      ; `repeat32(k)`: the low 32 bits of k, twice.
+      (and call (= name "repeat32"))
+        (do (t/advance! (mut (.c l)))
+            (let [x (value-expr (mut l) 0 false)]
+              (t/expect! (mut (.c l)) ")")
+              (t/cat3 "(let [v* (& " x " 4294967295)] (| v* (<< v* 32)))")))
       (and call (= name "float"))
         (do (t/advance! (mut (.c l)))
             (let [x (value-expr (mut l) 0 false)]
@@ -332,6 +347,7 @@
       (t/line! (mut o) (t/cat3 "(import \"" unit "\" :as st)"))
       (t/line! (mut o) (t/cat3 "(import \"" nodes-module "\" :as ir)"))
       (t/line! (mut o) (t/cat3 "(import \"" mach-module "\" :as mach)"))
+      (t/line! (mut o) (t/cat3 "(import \"" target-module "\" :as isa)"))
       (while (not (t/eof? (mut (.c l))))
         (let [tok (t/advance! (mut (.c l)))]
           (cond
