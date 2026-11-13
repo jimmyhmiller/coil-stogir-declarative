@@ -24,6 +24,8 @@ column at-piece: Vreg -> Piece         # where emission has got to in its pieces
 column slot: Vreg -> Int               # its frame slot + 1, once any piece waits there
 column hint: Vreg -> Int               # an operand it is copied to or from, or 0
 column class: Vreg -> Int              # which kind of register it lives in
+column wide: Vreg -> Bool              # it holds sixteen bytes: two frame slots, and no
+                                       # register a call gives back only half of
 column last-reg: Vreg -> Int           # the register + 1 its latest placed piece got
 column reads: Vreg -> [Int]            # the instructions that read it
 column writes: Vreg -> [Int]           # the instructions that write it
@@ -91,7 +93,8 @@ fn allocatable?(r: Int) -> Bool = isa.in-set?(isa.ALLOCATABLE, r) and not (dynam
 fn move-source(i: Inst) -> Int = if i.kind == 1 then i.copy-from else 0
 
 # A register `v` may live in: one the allocator may use, of `v`'s class.
-fn fits?(v: Vreg, r: Int) -> Bool = allocatable?(r) and isa.reg-class(r) == v.class
+fn fits?(v: Vreg, r: Int) -> Bool =
+  allocatable?(r) and isa.reg-class(r) == v.class and not (v.wide and isa.in-set?(isa.CALLEE-SAVED, r))
 
 # ---------------------------------------------------------------- liveness
 
@@ -133,6 +136,16 @@ fn also(i: Inst, set: Word, kind: Int) {
 
 fn occurrences() {
   for n in 0..next-vreg { Vreg.new() }
+  for n in Node {
+    if not n.dead and n.bits == 128 {
+      let v: Vreg = id(int(n))
+      v.wide = true
+    }
+  }
+  for t in wide-temps {
+    let v: Vreg = id(t)
+    v.wide = true
+  }
   for r in 0..isa.REGISTERS { Phys.new() }
   for b in order {
     for at in b.first-inst..b.last-inst + 1 {
@@ -348,8 +361,11 @@ fn to-frame-from(p: Piece, at: Int) {
   if rest == p { p.reg = 0 }
   let v = p.owner
   if v.slot == 0 {
+    # Sixteen bytes take two slots, the first at a multiple of sixteen.
+    if v.wide and (out-slots + slots) % 2 != 0 { slots = slots + 1 }
     slots = slots + 1
     v.slot = slots
+    if v.wide { slots = slots + 1 }
   }
   let need = next-need(rest, rest.pstart)
   if need == far() {

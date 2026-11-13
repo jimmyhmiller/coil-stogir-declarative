@@ -152,6 +152,10 @@ inst fcvtzu(sf: u1, ty: u1, rd: def gpr, rn: use simd)       = sf 0011110 0 ty 1
 # The same bits, moved between the two kinds of register.
 inst fmov-from-gpr(sf: u1, rd: def simd, rn: use gpr)        = sf 0011110 0 sf 1 00 111 000000 rn rd
 inst fmov-to-gpr(sf: u1, rd: def gpr, rn: use simd)          = sf 0011110 0 sf 1 00 110 000000 rn rd
+# A whole vector register: copied, and to and from memory at a multiple of sixteen.
+inst mov-vector(rd: def simd, rn: use simd)                  = 0 1 0 01110 10 1 rn 000111 rn rd
+inst ldr-q(rt: def simd, rn: use gpr, imm: u12)              = 0011110111 imm rn rt
+inst str-q(rt: use simd, rn: use gpr, imm: u12)              = 0011110110 imm rn rt
 inst ldr-d(rt: def simd, rn: use gpr, imm: u12)              = 1111110101 imm rn rt
 inst str-d(rt: use simd, rn: use gpr, imm: u12)              = 1111110100 imm rn rt
 inst ldr-s(rt: def simd, rn: use gpr, imm: u12)              = 1011110101 imm rn rt

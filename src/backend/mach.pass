@@ -32,6 +32,7 @@ state out-slots: Int                  # frame slots for arguments passed on the 
 state calls: Bool                     # the function calls another
 state dynamic: Bool                   # the function moves the stack pointer as it runs
 state worklist: [Node]
+state wide-temps: [Int]               # the fresh registers that hold sixteen bytes
 
 fn emit(op: Int, a: Int, b: Int, c: Int, d: Int, e: Int) {
   let i = Inst.new()
@@ -49,6 +50,13 @@ fn arg(i: Inst, k: Int) -> Int =
 fn fresh() -> Int {
   next-vreg = next-vreg + 1
   next-vreg
+}
+
+# A fresh register for a value of `n`'s kind.
+fn fresh-like(n: Node) -> Int {
+  let t = fresh()
+  if n.bits == 128 { wide-temps.push(t) }
+  t
 }
 
 fn need(n: Node) {

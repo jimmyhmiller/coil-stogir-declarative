@@ -31,8 +31,8 @@
         (mut cx) (st/create g (malloc-allocator))]
     (when (!= problem "") (panic "{}: {}" name problem))
     (st/begin! (mut cx))
-    (set! (.copy-routine cx) (image/symbol! (mut im) "memcpy"))
-    (set! (.fill-routine cx) (image/symbol! (mut im) "memset"))
+    (set! (.copy-routine cx) (+ (image/symbol! (mut im) "memcpy") 1))
+    (set! (.fill-routine cx) (+ (image/symbol! (mut im) "memset") 1))
     (plans/default (mut cx))
     (image/add-function! (mut im) (image/symbol! (mut im) name) (.code cx) (.reloc-at cx)
                          (.reloc-symbol cx) (.reloc-op cx) isa/ALIGN)))

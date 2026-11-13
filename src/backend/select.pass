@@ -70,8 +70,10 @@ fn place(type: Int, how: Word) -> Int {
     following = with
     if abi.REGISTERS-CLOSE { if float { floats = abi.FLOAT-ARGS } else { ints = abi.INT-ARGS } }
   }
-  placed-bytes = if abi.STACK-PACKED and not unnamed then type-bytes(id(type)) else if float then type-bytes(id(type)) else 8
-  let slot = if abi.STACK-PACKED and not unnamed then placed-bytes else 8
+  # A floating value is written as wide as it is; an integer fills its place.
+  let bytes = type-bytes(id(type))
+  let slot = if abi.STACK-PACKED and not unnamed then bytes else max(bytes, 8)
+  placed-bytes = if float then bytes else slot
   let align = if has-bit(how, 10) then 16 else slot
   let at = (stack-bytes + align - 1) / align * align
   stack-bytes = at + slot
@@ -222,7 +224,7 @@ fn phi-moves(b: Block, s: Block) {
     var temps: [Int] = []
     for u in users(h) {
       if phi-of?(u, h) {
-        let t = mach.fresh()
+        let t = mach.fresh-like(u)
         temps.push(t)
         copy(t, u.in(k + 1))
       }

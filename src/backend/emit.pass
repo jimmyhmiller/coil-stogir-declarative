@@ -17,6 +17,7 @@ state frame: Int                      # bytes of frame, a multiple of 16
 state saved: Word                     # the registers the caller expects back unchanged
 state move-to: [Int]                  # moves to make together: the registers written
 state move-from: [Int]                # and read; -(slot + 1) for a value in the frame
+state move-wide: [Bool]               # and whether what moves is sixteen bytes
 column offset: Inst -> Int             # a final instruction's place in the code, in bytes
 state code: [Byte]
 state code-bytes: Int
@@ -65,17 +66,18 @@ fn finish(i: Inst, k: Int) {
   if k < isa.operand-count(op) and alloc.writes?(isa.operand-kind(op, k)) {
     let a = mach.arg(i, k)
     if a > 0 and id(a).slot != 0 {
-      keep(here(id(a), 2 * int(i) + 1).reg - 1, out-slots + id(a).slot - 1)
+      keep(here(id(a), 2 * int(i) + 1).reg - 1, out-slots + id(a).slot - 1, id(a).wide)
     }
   }
 }
 
 # ---------------------------------------------------------------- moves made together
 
-fn move(to: Int, from: Int) {
+fn move(to: Int, from: Int, wide: Bool) {
   if to != from {
     move-to.push(to)
     move-from.push(from)
+    move-wide.push(wide)
   }
 }
 
@@ -95,20 +97,21 @@ fn fetch-at(r: Int, from: Int, at: Int) {
   if floating?(r) { lower.from-frame-float(marker(r), from, at) } else { lower.from-frame(marker(r), from, at) }
 }
 
-fn keep(r: Int, at: Int) {
-  keep-at(r, base(), at)
+# The same for a value's own slot: sixteen bytes if it is `wide`.
+fn keep(r: Int, at: Int, wide: Bool) {
+  if wide { lower.to-frame-wide(marker(r), base(), at) } else { keep-at(r, base(), at) }
 }
 
-fn fetch(r: Int, at: Int) {
-  fetch-at(r, base(), at)
+fn fetch(r: Int, at: Int, wide: Bool) {
+  if wide { lower.from-frame-wide(marker(r), base(), at) } else { fetch-at(r, base(), at) }
 }
 
 fn copy(to: Int, from: Int) {
   if floating?(to) { lower.move-float(marker(to), marker(from)) } else { lower.move(marker(to), marker(from)) }
 }
 
-fn emit-move(to: Int, from: Int) {
-  if from < 0 { fetch(to, out-slots + (0 - from) - 1) } else { copy(to, from) }
+fn emit-move(to: Int, from: Int, wide: Bool) {
+  if from < 0 { fetch(to, out-slots + (0 - from) - 1, wide) } else { copy(to, from) }
 }
 
 # Every pending move, each source read before anything overwrites it. A ring
@@ -122,7 +125,7 @@ fn flush-moves() {
       if d >= 0 {
         let wanted = any k in 0..move-to.len: k != j and move-to[k] >= 0 and move-from[k] == d
         if not wanted {
-          emit-move(d, move-from[j])
+          emit-move(d, move-from[j], move-wide[j])
           move-to[j] = -1
           left = left - 1
           progress = true
@@ -139,14 +142,15 @@ fn flush-moves() {
   }
   move-to.clear()
   move-from.clear()
+  move-wide.clear()
 }
 
 # A piece that starts inside a block takes its value from the piece before it.
 fn transition(p: Piece) {
   let q = p.prev-piece
   if q == none or p.in-frame or p.reg == 0 { return }
-  if q.in-frame or q.reg == 0 { move(p.reg - 1, 0 - p.owner.slot) }
-  else { move(p.reg - 1, q.reg - 1) }
+  if q.in-frame or q.reg == 0 { move(p.reg - 1, 0 - p.owner.slot, p.owner.wide) }
+  else { move(p.reg - 1, q.reg - 1, p.owner.wide) }
 }
 
 # The values live into `s`, from where they are at the end of `p` to where `s`
@@ -158,8 +162,8 @@ fn bring(p: Block, s: Block) {
       let to = alloc.piece-at(v, 2 * s.first-inst)
       let from = alloc.piece-at(v, 2 * p.last-inst + 1)
       if not to.in-frame and to.reg != 0 {
-        if from.in-frame or from.reg == 0 { move(to.reg - 1, 0 - v.slot) }
-        else { move(to.reg - 1, from.reg - 1) }
+        if from.in-frame or from.reg == 0 { move(to.reg - 1, 0 - v.slot, v.wide) }
+        else { move(to.reg - 1, from.reg - 1, v.wide) }
       }
     }
   }

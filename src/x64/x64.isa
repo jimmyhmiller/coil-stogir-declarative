@@ -167,6 +167,9 @@ inst float-to-int(w: u1, ty: u1, dst: def gpr, src: use simd)  = scalar(ty) rex(
 # The same bits, moved between the two kinds of register.
 inst bits-to-float(w: u1, dst: def simd, src: use gpr)  = byte(0x66) rex(w, dst, src) byte(0x0F) byte(0x6E) modrm(dst, src)
 inst float-to-bits(w: u1, dst: def gpr, src: use simd)  = byte(0x66) rex(w, src, dst) byte(0x0F) byte(0x7E) modrm(src, dst)
+# A whole vector register to and from memory, wherever that is.
+inst loadv(dst: def simd, base: use gpr, disp: s32)           = rex(0, dst, base) byte(0x0F) byte(0x10) mem(dst, base, disp)
+inst storev(src: use simd, base: use gpr, disp: s32)          = rex(0, src, base) byte(0x0F) byte(0x11) mem(src, base, disp)
 inst loadf(ty: u1, dst: def simd, base: use gpr, disp: s32)   = scalar(ty) rex(0, dst, base) byte(0x0F) byte(0x10) mem(dst, base, disp)
 inst storef(ty: u1, src: use simd, base: use gpr, disp: s32)  = scalar(ty) rex(0, src, base) byte(0x0F) byte(0x11) mem(src, base, disp)
 

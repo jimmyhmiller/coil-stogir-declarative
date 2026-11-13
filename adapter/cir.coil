@@ -13,6 +13,7 @@
 (import "coil.alloc" :use [Allocator malloc-allocator])
 (import "coil.arraylist" :use [ArrayList])
 (import "coil.primitive" :as primitive)
+(import "coil.cc" :as cc)
 (import "coil.scratch" :as scratch)
 (import "tpde.cir" :as cir)
 (import "tpde.asm" :as asm)
@@ -457,7 +458,7 @@
       (let [r (+ v (cast u32 i))]
         (result! (mut s) call r (cast i64 (.ty (cir/val f r))))))))
 
-(defn call! [(s (mut Adapter)) (v u32)] (-> void)
+(defn call-out! [(s (mut Adapter)) (v u32)] (-> void)
   (let [(mut values) (ArrayList::new [i32] (.a s))
         (mut how) (ArrayList::new [u64] (.a s))
         variadic (arguments! (mut s) v (mut values) (mut how))
@@ -508,6 +509,497 @@
           (for i (range 0 (cast i64 (.aux x))) (return-values! (mut s) (mut back) (+ v (cast u32 i))))
           (return! (mut s) back)))))
 
+;; ---------------------------------------------------------------- integers
+
+(defn zext-bool [(s (mut Adapter)) (c i32)] (-> i32)
+  (ir/zext! (mut (.g s)) W c))
+
+;;; a + b and whether it carried; a - b and whether it borrowed.
+(defn carry [(s (mut Adapter)) (sum i32) (a i32)] (-> i32)
+  (zext-bool (mut s) (ir/ult! (mut (.g s)) sum a)))
+
+;;; `x` turned left or right by `n` within its low `w` bits, the rest zeros.
+(defn rotate [(s (mut Adapter)) (left bool) (x i32) (n i32) (w i64)] (-> i32)
+  (cond
+    (= w 64) (if left (ir/rol! (mut (.g s)) W x n) (ir/ror! (mut (.g s)) W x n))
+    (= w 32)
+      (let [low (ir/trunc! (mut (.g s)) ir/T-U32 x)
+            by (ir/trunc! (mut (.g s)) ir/T-U32 n)]
+        (ir/zext! (mut (.g s)) W
+                  (if left (ir/rol! (mut (.g s)) ir/T-U32 low by) (ir/ror! (mut (.g s)) ir/T-U32 low by))))
+    :else
+      ; The count taken within the width; a shift by the whole width is done
+      ; in two steps so that a count of zero leaves the value alone.
+      (let [count (ir/urem! (mut (.g s)) W n (word (mut s) (cast u64 w)))
+            value (extended (mut s) x w false)
+            other (ir/sub! (mut (.g s)) W (word (mut s) (cast u64 (- w 1))) count)
+            one (word (mut s) 1)
+            up (if left
+                   (ir/shl! (mut (.g s)) W value count)
+                   (ir/shl! (mut (.g s)) W (ir/shl! (mut (.g s)) W value one) other))
+            down (if left
+                     (ir/shr! (mut (.g s)) W (ir/shr! (mut (.g s)) W value one) other)
+                     (ir/shr! (mut (.g s)) W value count))]
+        (extended (mut s) (ir/or! (mut (.g s)) W up down) w false))))
+
+;;; Whether a + b, a - b or a * b does not fit `w` bits, signed or not: 0 or 1.
+(defn overflow [(s (mut Adapter)) (op i64) (a i32) (b i32) (w i64) (signed bool)] (-> i32)
+  (let [g (.g s)]
+    (cond
+      (and (= w 64) (= op cir/OP-ADDO))
+        (if signed (ir/saddo! (mut (.g s)) a b) (ir/uaddo! (mut (.g s)) a b))
+      (and (= w 64) (= op cir/OP-SUBO))
+        (if signed (ir/ssubo! (mut (.g s)) a b) (ir/usubo! (mut (.g s)) a b))
+      (and (= w 64) (= op cir/OP-MULO))
+        (if signed (ir/smulo! (mut (.g s)) a b) (ir/umulo! (mut (.g s)) a b))
+      :else
+        ; In 64 bits, with operands that are already extended: it fits if
+        ; extending the answer again leaves it as it is. A product can also
+        ; pass 64 bits, which its high half shows.
+        (let [t (cond (= op cir/OP-ADDO) (ir/add! (mut (.g s)) W a b)
+                      (= op cir/OP-SUBO) (ir/sub! (mut (.g s)) W a b)
+                      :else (ir/mul! (mut (.g s)) W a b))
+              narrow (ir/ne! (mut (.g s)) (extended (mut s) t w signed) t)]
+          (if (and (= op cir/OP-MULO) (> w 32))
+              (ir/or! (mut (.g s)) ir/T-BOOL narrow
+                      (if signed (ir/smulo! (mut (.g s)) a b) (ir/umulo! (mut (.g s)) a b)))
+              narrow)))))
+
+;;; A comparison of two words by CIR's predicate.
+(defn compare [(s (mut Adapter)) (predicate i64) (a i32) (b i32)] (-> i32)
+  (cond (= predicate cir/P-EQ) (ir/eq! (mut (.g s)) a b)
+        (= predicate cir/P-NE) (ir/ne! (mut (.g s)) a b)
+        (= predicate cir/P-SLT) (ir/lt! (mut (.g s)) a b)
+        (= predicate cir/P-SLE) (ir/le! (mut (.g s)) a b)
+        (= predicate cir/P-SGT) (ir/lt! (mut (.g s)) b a)
+        (= predicate cir/P-SGE) (ir/le! (mut (.g s)) b a)
+        (= predicate cir/P-ULT) (ir/ult! (mut (.g s)) a b)
+        (= predicate cir/P-ULE) (ir/ule! (mut (.g s)) a b)
+        (= predicate cir/P-UGT) (ir/ult! (mut (.g s)) b a)
+        (= predicate cir/P-UGE) (ir/ule! (mut (.g s)) b a)
+        :else (fail (.f s) "an integer comparison the backend does not know")))
+
+(defn both [(s (mut Adapter)) (a i32) (b i32)] (-> i32) (ir/and! (mut (.g s)) ir/T-BOOL a b))
+(defn either [(s (mut Adapter)) (a i32) (b i32)] (-> i32) (ir/or! (mut (.g s)) ir/T-BOOL a b))
+(defn negated [(s (mut Adapter)) (a i32)] (-> i32) (ir/not! (mut (.g s)) ir/T-BOOL a))
+
+;;; A comparison of two floating values by CIR's predicate. The nodes' own
+;;; comparisons are false when either side is not a number, but for FNE.
+(defn float-compare [(s (mut Adapter)) (predicate i64) (a i32) (b i32)] (-> i32)
+  (cond (= predicate cir/F-OEQ) (ir/feq! (mut (.g s)) a b)
+        (= predicate cir/F-ONE) (either (mut s) (ir/flt! (mut (.g s)) a b) (ir/flt! (mut (.g s)) b a))
+        (= predicate cir/F-OLT) (ir/flt! (mut (.g s)) a b)
+        (= predicate cir/F-OLE) (ir/fle! (mut (.g s)) a b)
+        (= predicate cir/F-OGT) (ir/flt! (mut (.g s)) b a)
+        (= predicate cir/F-OGE) (ir/fle! (mut (.g s)) b a)
+        (= predicate cir/F-UNE) (ir/fne! (mut (.g s)) a b)
+        (= predicate cir/F-UEQ) (negated (mut s) (either (mut s) (ir/flt! (mut (.g s)) a b) (ir/flt! (mut (.g s)) b a)))
+        (= predicate cir/F-ORD) (both (mut s) (ir/feq! (mut (.g s)) a a) (ir/feq! (mut (.g s)) b b))
+        (= predicate cir/F-UNO) (either (mut s) (ir/fne! (mut (.g s)) a a) (ir/fne! (mut (.g s)) b b))
+        (= predicate cir/F-ULT) (negated (mut s) (ir/fle! (mut (.g s)) b a))
+        (= predicate cir/F-ULE) (negated (mut s) (ir/flt! (mut (.g s)) b a))
+        (= predicate cir/F-UGT) (negated (mut s) (ir/fle! (mut (.g s)) a b))
+        (= predicate cir/F-UGE) (negated (mut s) (ir/flt! (mut (.g s)) a b))
+        :else (fail (.f s) "a floating comparison the backend does not know")))
+
+;; ---------------------------------------------------------------- 128-bit integers
+
+;;; A call of one of the library's routines for 128-bit division: (a, b) as
+;;; two pairs of words, each pair in registers together, and a pair back.
+(defn wide-divide! [(s (mut Adapter)) (v u32) (name (slice u8)) (a u32) (b u32)] (-> void)
+  (let [shape (graph/shape! (mut (.g s)) false)
+        routine (ir/symbol! (mut (.g s)) (cast u64 (asm/runtime-sym! (.ta s) name)))
+        call (ir/call-node! (mut (.g s)) shape (.c s) routine 4)]
+    (for i (range 0 4)
+      (graph/shape-arg! (mut (.g s)) shape (if (= (% i 2) 0) (| (: 1 u64) graph/PASS-ALIGN16) (: 0 u64))))
+    (graph/set-input! (mut (.g s)) call 2 (value (mut s) a))
+    (graph/set-input! (mut (.g s)) call 3 (value-high (mut s) a))
+    (graph/set-input! (mut (.g s)) call 4 (value (mut s) b))
+    (graph/set-input! (mut (.g s)) call 5 (value-high (mut s) b))
+    (set! (.c s) call)
+    (define-wide! (mut s) v (ir/result! (mut (.g s)) W 0 call) (ir/result! (mut (.g s)) W 1 call))))
+
+;;; A 128-bit shift: the count is taken within 128. Each half moves by the
+;;; count within 64, taking what the other half pushes its way; a count of 64
+;;; or more then moves one half into the other's place.
+(defn wide-shift! [(s (mut Adapter)) (v u32) (op i64) (a u32) (count u32)] (-> void)
+  (let [low (value (mut s) a)
+        high (value-high (mut s) a)
+        n (value (mut s) count)
+        by (ir/and! (mut (.g s)) W n (word (mut s) 63))
+        across (ir/sub! (mut (.g s)) W (word (mut s) 63) by)
+        one (word (mut s) 1)
+        far (ir/ne! (mut (.g s)) (ir/and! (mut (.g s)) W n (word (mut s) 64)) (word (mut s) 0))
+        zero (word (mut s) 0)]
+    (if (= op cir/OP-SHL)
+        (let [moved (ir/shl! (mut (.g s)) W low by)
+              pushed (ir/shr! (mut (.g s)) W (ir/shr! (mut (.g s)) W low one) across)
+              top (ir/or! (mut (.g s)) W (ir/shl! (mut (.g s)) W high by) pushed)]
+          (define-wide! (mut s) v
+                        (ir/cond! (mut (.g s)) W far zero moved)
+                        (ir/cond! (mut (.g s)) W far moved top)))
+        (let [signed (= op cir/OP-ASHR)
+              moved (if signed (ir/sar! (mut (.g s)) W high by) (ir/shr! (mut (.g s)) W high by))
+              pushed (ir/shl! (mut (.g s)) W (ir/shl! (mut (.g s)) W high one) across)
+              bottom (ir/or! (mut (.g s)) W (ir/shr! (mut (.g s)) W low by) pushed)
+              fill (if signed (ir/sar! (mut (.g s)) W high (word (mut s) 63)) zero)]
+          (define-wide! (mut s) v
+                        (ir/cond! (mut (.g s)) W far moved bottom)
+                        (ir/cond! (mut (.g s)) W far fill moved))))))
+
+;;; Whether a < b, as 128-bit integers signed or not.
+(defn wide-less [(s (mut Adapter)) (signed bool) (a u32) (b u32)] (-> i32)
+  (let [al (value (mut s) a)
+        ah (value-high (mut s) a)
+        bl (value (mut s) b)
+        bh (value-high (mut s) b)]
+    (either (mut s)
+            (if signed (ir/lt! (mut (.g s)) ah bh) (ir/ult! (mut (.g s)) ah bh))
+            (both (mut s) (ir/eq! (mut (.g s)) ah bh) (ir/ult! (mut (.g s)) al bl)))))
+
+(defn wide-compare [(s (mut Adapter)) (predicate i64) (a u32) (b u32)] (-> i32)
+  (let [same (ir/eq! (mut (.g s))
+                     (ir/or! (mut (.g s)) W
+                             (ir/xor! (mut (.g s)) W (value (mut s) a) (value (mut s) b))
+                             (ir/xor! (mut (.g s)) W (value-high (mut s) a) (value-high (mut s) b)))
+                     (word (mut s) 0))]
+    (cond (= predicate cir/P-EQ) same
+          (= predicate cir/P-NE) (negated (mut s) same)
+          (= predicate cir/P-SLT) (wide-less (mut s) true a b)
+          (= predicate cir/P-SLE) (negated (mut s) (wide-less (mut s) true b a))
+          (= predicate cir/P-SGT) (wide-less (mut s) true b a)
+          (= predicate cir/P-SGE) (negated (mut s) (wide-less (mut s) true a b))
+          (= predicate cir/P-ULT) (wide-less (mut s) false a b)
+          (= predicate cir/P-ULE) (negated (mut s) (wide-less (mut s) false b a))
+          (= predicate cir/P-UGT) (wide-less (mut s) false b a)
+          (= predicate cir/P-UGE) (negated (mut s) (wide-less (mut s) false a b))
+          :else (fail (.f s) "an integer comparison the backend does not know"))))
+
+;;; An instruction whose result is a 128-bit integer.
+(defn wide! [(s (mut Adapter)) (v u32)] (-> void)
+  (let [f (.f s)
+        x (cir/val f v)
+        op (cast i64 (.op x))
+        a (if (> (.nops x) (: 0 u32)) (cir/operand f x 0) (: 0 u32))
+        b (if (> (.nops x) (: 1 u32)) (cir/operand f x 1) (: 0 u32))]
+    (cond
+      (= op cir/OP-ADD)
+        (let [low (ir/add! (mut (.g s)) W (value (mut s) a) (value (mut s) b))]
+          (define-wide! (mut s) v low
+                        (ir/add! (mut (.g s)) W
+                                 (ir/add! (mut (.g s)) W (value-high (mut s) a) (value-high (mut s) b))
+                                 (carry (mut s) low (value (mut s) a)))))
+      (= op cir/OP-SUB)
+        (let [al (value (mut s) a)
+              bl (value (mut s) b)]
+          (define-wide! (mut s) v (ir/sub! (mut (.g s)) W al bl)
+                        (ir/sub! (mut (.g s)) W
+                                 (ir/sub! (mut (.g s)) W (value-high (mut s) a) (value-high (mut s) b))
+                                 (zext-bool (mut s) (ir/ult! (mut (.g s)) al bl)))))
+      (= op cir/OP-NEG)
+        (let [al (value (mut s) a)
+              zero (word (mut s) 0)]
+          (define-wide! (mut s) v (ir/sub! (mut (.g s)) W zero al)
+                        (ir/sub! (mut (.g s)) W
+                                 (ir/sub! (mut (.g s)) W zero (value-high (mut s) a))
+                                 (zext-bool (mut s) (ir/ne! (mut (.g s)) al zero)))))
+      (= op cir/OP-MUL)
+        (let [al (value (mut s) a)
+              bl (value (mut s) b)]
+          (define-wide! (mut s) v (ir/mul! (mut (.g s)) W al bl)
+                        (ir/add! (mut (.g s)) W
+                                 (ir/umulh! (mut (.g s)) W al bl)
+                                 (ir/add! (mut (.g s)) W
+                                          (ir/mul! (mut (.g s)) W al (value-high (mut s) b))
+                                          (ir/mul! (mut (.g s)) W (value-high (mut s) a) bl)))))
+      (= op cir/OP-AND)
+        (define-wide! (mut s) v (ir/and! (mut (.g s)) W (value (mut s) a) (value (mut s) b))
+                      (ir/and! (mut (.g s)) W (value-high (mut s) a) (value-high (mut s) b)))
+      (= op cir/OP-OR)
+        (define-wide! (mut s) v (ir/or! (mut (.g s)) W (value (mut s) a) (value (mut s) b))
+                      (ir/or! (mut (.g s)) W (value-high (mut s) a) (value-high (mut s) b)))
+      (= op cir/OP-XOR)
+        (define-wide! (mut s) v (ir/xor! (mut (.g s)) W (value (mut s) a) (value (mut s) b))
+                      (ir/xor! (mut (.g s)) W (value-high (mut s) a) (value-high (mut s) b)))
+      (= op cir/OP-NOT)
+        (define-wide! (mut s) v (ir/not! (mut (.g s)) W (value (mut s) a)) (ir/not! (mut (.g s)) W (value-high (mut s) a)))
+      (or (= op cir/OP-SHL) (= op cir/OP-LSHR) (= op cir/OP-ASHR)) (wide-shift! (mut s) v op a b)
+      (= op cir/OP-SDIV) (wide-divide! (mut s) v "__divti3" a b)
+      (= op cir/OP-UDIV) (wide-divide! (mut s) v "__udivti3" a b)
+      (= op cir/OP-SREM) (wide-divide! (mut s) v "__modti3" a b)
+      (= op cir/OP-UREM) (wide-divide! (mut s) v "__umodti3" a b)
+      (= op cir/OP-SEXT)
+        (define-wide! (mut s) v (value (mut s) a) (ir/sar! (mut (.g s)) W (value (mut s) a) (word (mut s) 63)))
+      (= op cir/OP-ZEXT) (define-wide! (mut s) v (value (mut s) a) (word (mut s) 0))
+      (= op cir/OP-PAIR) (define-wide! (mut s) v (value (mut s) a) (value (mut s) b))
+      (= op cir/OP-COPY) (define-wide! (mut s) v (value (mut s) a) (value-high (mut s) a))
+      (= op cir/OP-SELECT)
+        (let [c (condition (mut s) a)
+              y (cir/operand f x 2)]
+          (define-wide! (mut s) v (ir/cond! (mut (.g s)) W c (value (mut s) b) (value (mut s) y))
+                        (ir/cond! (mut (.g s)) W c (value-high (mut s) b) (value-high (mut s) y))))
+      (= op cir/OP-LOAD)
+        (let [at (address (mut s) a (.imm x))
+              low (ir/load-node! (mut (.g s)) W (volatile (mut s) v) (.c s) at)
+              high (ir/load-node! (mut (.g s)) W (volatile (mut s) v) low
+                                  (ir/add! (mut (.g s)) W at (word (mut s) 8)))]
+          (set! (.c s) high)
+          (define-wide! (mut s) v low high))
+      :else (fail f "a 128-bit operation the backend does not know"))))
+
+;; ---------------------------------------------------------------- memory
+
+;;; base + offset as an address.
+(defn address [(s (mut Adapter)) (base u32) (offset i64)] (-> i32)
+  (if (= offset 0)
+      (value (mut s) base)
+      (ir/add! (mut (.g s)) W (value (mut s) base) (word (mut s) (cast u64 offset)))))
+
+(defn volatile [(s (mut Adapter)) (v u32)] (-> u64)
+  (if (cir/volatile? (.f s) v) (: 1 u64) (: 0 u64)))
+
+(defn read! [(s (mut Adapter)) (v u32)] (-> void)
+  (let [f (.f s)
+        x (cir/val f v)
+        ty (cast i64 (.ty x))
+        bytes (& (.imm2 x) 255)
+        signed (!= (& (.imm2 x) 256) 0)
+        at (address (mut s) (cir/operand f x 0) (.imm x))
+        how (volatile (mut s) v)]
+    (cond
+      (= ty cir/T-I64)
+        (let [type (narrow-type (mut s) bytes signed)
+              read (ir/load-node! (mut (.g s)) type how (.c s) at)]
+          (set! (.c s) read)
+          (define! (mut s) v (cond (= bytes 8) read
+                                   signed (ir/sext! (mut (.g s)) W read)
+                                   :else (ir/zext! (mut (.g s)) W read))))
+      (= ty cir/T-V128)
+        (do (when (!= bytes 16) (fail f "a vector read from fewer than sixteen bytes"))
+            (let [read (ir/load-node! (mut (.g s)) ir/T-V128 how (.c s) at)]
+              (set! (.c s) read)
+              (define! (mut s) v read)))
+      :else
+        (let [read (ir/load-node! (mut (.g s)) (type-of (mut s) ty) how (.c s) at)]
+          (set! (.c s) read)
+          (define! (mut s) v read)))))
+
+(defn write! [(s (mut Adapter)) (v u32)] (-> void)
+  (let [f (.f s)
+        x (cir/val f v)
+        what (cir/operand f x 1)
+        ty (cast i64 (.ty (cir/val f what)))
+        bytes (.imm2 x)
+        at (address (mut s) (cir/operand f x 0) (.imm x))
+        how (volatile (mut s) v)]
+    (cond
+      (= ty cir/T-I128)
+        (let [low (ir/store-node! (mut (.g s)) how (.c s) at (value (mut s) what))]
+          (set! (.c s) (ir/store-node! (mut (.g s)) how low (ir/add! (mut (.g s)) W at (word (mut s) 8))
+                                       (value-high (mut s) what))))
+      (and (= ty cir/T-I64) (!= bytes 8))
+        (set! (.c s) (ir/store-node! (mut (.g s)) how (.c s) at
+                                     (ir/trunc! (mut (.g s)) (narrow-type (mut s) bytes false) (value (mut s) what))))
+      (and (= ty cir/T-V128) (!= bytes 16)) (fail f "a vector written to fewer than sixteen bytes")
+      :else (set! (.c s) (ir/store-node! (mut (.g s)) how (.c s) at (value (mut s) what))))))
+
+;;; A call of one of the C library's routines that take three words.
+(defn routine! [(s (mut Adapter)) (v u32) (name (slice u8))] (-> void)
+  (let [f (.f s)
+        x (cir/val f v)
+        call (ir/call-node! (mut (.g s)) 0 (.c s)
+                            (ir/symbol! (mut (.g s)) (cast u64 (asm/runtime-sym! (.ta s) name))) 3)]
+    (for i (range 0 3) (graph/set-input! (mut (.g s)) call (+ i 2) (value (mut s) (cir/operand f x (cast u32 i)))))
+    (set! (.c s) call)))
+
+;;; Something done to memory other threads share, on `bytes` bytes of it: the
+;;; operands cut to that width, and what was there carried up with zeros.
+(defn shared! [(s (mut Adapter)) (v u32)] (-> void)
+  (let [f (.f s)
+        x (cir/val f v)
+        op (cast i64 (.op x))
+        bytes (.imm2 x)
+        type (narrow-type (mut s) bytes false)
+        at (value (mut s) (cir/operand f x 0))
+        c (.c s)]
+    (cond
+      (= op cir/OP-ATOMIC-LOAD)
+        (let [read (ir/atomic-load! (mut (.g s)) type c at)]
+          (set! (.c s) read)
+          (define! (mut s) v (if (= bytes 8) read (ir/zext! (mut (.g s)) W read))))
+      (= op cir/OP-ATOMIC-STORE)
+        (let [what (value (mut s) (cir/operand f x 1))]
+          (set! (.c s) (ir/atomic-store! (mut (.g s)) c at (if (= bytes 8) what (ir/trunc! (mut (.g s)) type what)))))
+      (= op cir/OP-CMPXCHG)
+        (let [expected (value (mut s) (cir/operand f x 1))
+              new (value (mut s) (cir/operand f x 2))
+              was (ir/cas! (mut (.g s)) type c at
+                           (if (= bytes 8) expected (ir/trunc! (mut (.g s)) type expected))
+                           (if (= bytes 8) new (ir/trunc! (mut (.g s)) type new)))]
+          (set! (.c s) was)
+          (define! (mut s) v (if (= bytes 8) was (ir/zext! (mut (.g s)) W was))))
+      :else
+        (let [wide (value (mut s) (cir/operand f x 1))
+              what (if (= bytes 8) wide (ir/trunc! (mut (.g s)) type wide))
+              how (.imm x)
+              was (cond (= how 0) (ir/fetch-add! (mut (.g s)) type c at what)
+                        (= how 1) (ir/fetch-sub! (mut (.g s)) type c at what)
+                        (= how 2) (ir/fetch-and! (mut (.g s)) type c at what)
+                        (= how 3) (ir/fetch-or! (mut (.g s)) type c at what)
+                        (= how 4) (ir/fetch-xor! (mut (.g s)) type c at what)
+                        (= how 5) (ir/swap! (mut (.g s)) type c at what)
+                        (= how 6) (ir/fetch-smax! (mut (.g s)) type c at what)
+                        (= how 7) (ir/fetch-smin! (mut (.g s)) type c at what)
+                        (= how 8) (ir/fetch-umax! (mut (.g s)) type c at what)
+                        :else (ir/fetch-umin! (mut (.g s)) type c at what))]
+          (set! (.c s) was)
+          (define! (mut s) v (if (= bytes 8) was (ir/zext! (mut (.g s)) W was)))))))
+
+;; ---------------------------------------------------------------- one instruction
+
+(defn instruction! [(s (mut Adapter)) (v u32)] (-> void)
+  (let [f (.f s)
+        x (cir/val f v)
+        op (cast i64 (.op x))
+        ty (cast i64 (.ty x))
+        type (if (or (= ty cir/T-VOID) (= ty cir/T-V128)) W (type-of (mut s) ty))
+        a (if (> (.nops x) (: 0 u32)) (cir/operand f x 0) (: 0 u32))
+        b (if (> (.nops x) (: 1 u32)) (cir/operand f x 1) (: 0 u32))]
+    (cond
+      (= op cir/OP-CALL) (call-out! (mut s) v)
+      (= op cir/OP-STORE) (write! (mut s) v)
+      (and (= ty cir/T-I128) (!= op cir/OP-PHI) (!= op cir/OP-CALLRES)) (wide! (mut s) v)
+      (= op cir/OP-LOAD) (read! (mut s) v)
+      ; Words.
+      (= op cir/OP-ADD) (define! (mut s) v (ir/add! (mut (.g s)) W (value (mut s) a) (value (mut s) b)))
+      (= op cir/OP-SUB) (define! (mut s) v (ir/sub! (mut (.g s)) W (value (mut s) a) (value (mut s) b)))
+      (= op cir/OP-MUL) (define! (mut s) v (ir/mul! (mut (.g s)) W (value (mut s) a) (value (mut s) b)))
+      (= op cir/OP-AND) (define! (mut s) v (ir/and! (mut (.g s)) W (value (mut s) a) (value (mut s) b)))
+      (= op cir/OP-OR) (define! (mut s) v (ir/or! (mut (.g s)) W (value (mut s) a) (value (mut s) b)))
+      (= op cir/OP-XOR) (define! (mut s) v (ir/xor! (mut (.g s)) W (value (mut s) a) (value (mut s) b)))
+      (= op cir/OP-SHL) (define! (mut s) v (ir/shl! (mut (.g s)) W (value (mut s) a) (value (mut s) b)))
+      (= op cir/OP-LSHR) (define! (mut s) v (ir/shr! (mut (.g s)) W (value (mut s) a) (value (mut s) b)))
+      (= op cir/OP-ASHR) (define! (mut s) v (ir/sar! (mut (.g s)) W (value (mut s) a) (value (mut s) b)))
+      (= op cir/OP-SDIV) (define! (mut s) v (ir/sdiv! (mut (.g s)) W (value (mut s) a) (value (mut s) b)))
+      (= op cir/OP-UDIV) (define! (mut s) v (ir/udiv! (mut (.g s)) W (value (mut s) a) (value (mut s) b)))
+      (= op cir/OP-SREM) (define! (mut s) v (ir/srem! (mut (.g s)) W (value (mut s) a) (value (mut s) b)))
+      (= op cir/OP-UREM) (define! (mut s) v (ir/urem! (mut (.g s)) W (value (mut s) a) (value (mut s) b)))
+      (= op cir/OP-ROTL) (define! (mut s) v (rotate (mut s) true (value (mut s) a) (value (mut s) b) (.imm x)))
+      (= op cir/OP-ROTR) (define! (mut s) v (rotate (mut s) false (value (mut s) a) (value (mut s) b) (.imm x)))
+      (= op cir/OP-NEG) (define! (mut s) v (ir/neg! (mut (.g s)) W (value (mut s) a)))
+      (= op cir/OP-NOT) (define! (mut s) v (ir/not! (mut (.g s)) W (value (mut s) a)))
+      (= op cir/OP-SMULH) (define! (mut s) v (ir/smulh! (mut (.g s)) W (value (mut s) a) (value (mut s) b)))
+      (= op cir/OP-UMULH) (define! (mut s) v (ir/umulh! (mut (.g s)) W (value (mut s) a) (value (mut s) b)))
+      (= op cir/OP-SEXT) (define! (mut s) v (extended (mut s) (value (mut s) a) (.imm x) true))
+      (= op cir/OP-ZEXT) (define! (mut s) v (extended (mut s) (value (mut s) a) (.imm x) false))
+      (= op cir/OP-LO) (define! (mut s) v (value (mut s) a))
+      (= op cir/OP-HI) (define! (mut s) v (value-high (mut s) a))
+      ; Bits, within the low `imm` of them.
+      (= op cir/OP-CLZ)
+        (define! (mut s) v
+                 (ir/sub! (mut (.g s)) W
+                          (ir/clz! (mut (.g s)) W (extended (mut s) (value (mut s) a) (.imm x) false))
+                          (word (mut s) (cast u64 (- 64 (.imm x))))))
+      (= op cir/OP-CTZ)
+        (define! (mut s) v
+                 (ir/ctz! (mut (.g s)) W
+                          (if (>= (.imm x) 64)
+                              (value (mut s) a)
+                              (ir/or! (mut (.g s)) W (value (mut s) a) (word (mut s) (<< (: 1 u64) (cast u64 (.imm x))))))))
+      (= op cir/OP-POPCNT)
+        (define! (mut s) v (ir/popcnt! (mut (.g s)) W (extended (mut s) (value (mut s) a) (.imm x) false)))
+      (= op cir/OP-BSWAP)
+        (define! (mut s) v (ir/shr! (mut (.g s)) W (ir/bswap! (mut (.g s)) W (value (mut s) a))
+                                    (word (mut s) (cast u64 (- 64 (.imm x))))))
+      (= op cir/OP-BITREV)
+        (define! (mut s) v (ir/shr! (mut (.g s)) W (ir/bitrev! (mut (.g s)) W (value (mut s) a))
+                                    (word (mut s) (cast u64 (- 64 (.imm x))))))
+      (= op cir/OP-ICMP)
+        (define-truth! (mut s) v
+                       (if (wide? (mut s) a)
+                           (wide-compare (mut s) (.imm x) a b)
+                           (compare (mut s) (.imm x) (value (mut s) a) (value (mut s) b))))
+      (= op cir/OP-SELECT)
+        (define! (mut s) v (ir/cond! (mut (.g s)) type (condition (mut s) a) (value (mut s) b)
+                                     (value (mut s) (cir/operand f x 2))))
+      (or (= op cir/OP-ADDO) (= op cir/OP-SUBO) (= op cir/OP-MULO))
+        (define-truth! (mut s) v (overflow (mut s) op (value (mut s) a) (value (mut s) b) (.imm x) (!= (.imm2 x) 0)))
+      ; Floating point.
+      (= op cir/OP-FADD) (define! (mut s) v (ir/fadd! (mut (.g s)) type (value (mut s) a) (value (mut s) b)))
+      (= op cir/OP-FSUB) (define! (mut s) v (ir/fsub! (mut (.g s)) type (value (mut s) a) (value (mut s) b)))
+      (= op cir/OP-FMUL) (define! (mut s) v (ir/fmul! (mut (.g s)) type (value (mut s) a) (value (mut s) b)))
+      (= op cir/OP-FDIV) (define! (mut s) v (ir/fdiv! (mut (.g s)) type (value (mut s) a) (value (mut s) b)))
+      (= op cir/OP-FNEG) (define! (mut s) v (ir/fneg! (mut (.g s)) type (value (mut s) a)))
+      (= op cir/OP-FABS) (define! (mut s) v (ir/fabs! (mut (.g s)) type (value (mut s) a)))
+      (= op cir/OP-FSQRT) (define! (mut s) v (ir/fsqrt! (mut (.g s)) type (value (mut s) a)))
+      (= op cir/OP-FMIN) (define! (mut s) v (ir/fmin! (mut (.g s)) type (value (mut s) a) (value (mut s) b)))
+      (= op cir/OP-FMAX) (define! (mut s) v (ir/fmax! (mut (.g s)) type (value (mut s) a) (value (mut s) b)))
+      (= op cir/OP-FMINNM) (define! (mut s) v (ir/fmin-number! (mut (.g s)) type (value (mut s) a) (value (mut s) b)))
+      (= op cir/OP-FMAXNM) (define! (mut s) v (ir/fmax-number! (mut (.g s)) type (value (mut s) a) (value (mut s) b)))
+      (= op cir/OP-FRINT)
+        (define! (mut s) v
+                 (cond (= (.imm x) 0) (ir/round-even! (mut (.g s)) type (value (mut s) a))
+                       (= (.imm x) 1) (ir/round-up! (mut (.g s)) type (value (mut s) a))
+                       (= (.imm x) 2) (ir/round-down! (mut (.g s)) type (value (mut s) a))
+                       (= (.imm x) 3) (ir/round-zero! (mut (.g s)) type (value (mut s) a))
+                       :else (ir/round-away! (mut (.g s)) type (value (mut s) a))))
+      (= op cir/OP-FMA)
+        (define! (mut s) v (ir/fma! (mut (.g s)) type (value (mut s) a) (value (mut s) b)
+                                    (value (mut s) (cir/operand f x 2))))
+      (= op cir/OP-FCMP) (define-truth! (mut s) v (float-compare (mut s) (.imm x) (value (mut s) a) (value (mut s) b)))
+      (= op cir/OP-FPEXT) (define! (mut s) v (ir/fext! (mut (.g s)) ir/T-F64 (value (mut s) a)))
+      (= op cir/OP-FPTRUNC) (define! (mut s) v (ir/ftrunc! (mut (.g s)) ir/T-F32 (value (mut s) a)))
+      (= op cir/OP-SITOFP) (define! (mut s) v (ir/sitof! (mut (.g s)) type (value (mut s) a)))
+      (= op cir/OP-UITOFP) (define! (mut s) v (ir/uitof! (mut (.g s)) type (value (mut s) a)))
+      (= op cir/OP-FPTOSI)
+        (define! (mut s) v
+                 (if (= (.imm x) 32)
+                     (ir/sext! (mut (.g s)) W (ir/ftosi! (mut (.g s)) ir/T-I32 (value (mut s) a)))
+                     (ir/trunc! (mut (.g s)) W (ir/ftosi! (mut (.g s)) ir/T-I64 (value (mut s) a)))))
+      (= op cir/OP-FPTOUI)
+        (define! (mut s) v
+                 (if (= (.imm x) 32)
+                     (ir/zext! (mut (.g s)) W (ir/ftoui! (mut (.g s)) ir/T-U32 (value (mut s) a)))
+                     (ir/trunc! (mut (.g s)) W (ir/ftoui! (mut (.g s)) ir/T-U64 (value (mut s) a)))))
+      (= op cir/OP-BITCAST)
+        (let [from (cast i64 (.ty (cir/val f a)))]
+          (define! (mut s) v
+                   (cond (= from ty) (value (mut s) a)
+                         ; A word's low 32 bits are a single-precision value's.
+                         (= ty cir/T-F32)
+                           (ir/bitcast! (mut (.g s)) ir/T-F32 (ir/trunc! (mut (.g s)) ir/T-U32 (value (mut s) a)))
+                         (= from cir/T-F32)
+                           (ir/zext! (mut (.g s)) W (ir/bitcast! (mut (.g s)) ir/T-U32 (value (mut s) a)))
+                         (or (= ty cir/T-F64) (= from cir/T-F64)) (ir/bitcast! (mut (.g s)) type (value (mut s) a))
+                         :else (fail f "the bits of a value taken as a type the backend does not know"))))
+      (= op cir/OP-COPY) (define! (mut s) v (value (mut s) a))
+      ; Addresses and memory.
+      (= op cir/OP-PTRADD)
+        (let [scaled (if (= (.imm x) 0)
+                         (value (mut s) a)
+                         (ir/add! (mut (.g s)) W (value (mut s) a)
+                                  (ir/mul! (mut (.g s)) W (value (mut s) b) (word (mut s) (cast u64 (.imm x))))))]
+          (define! (mut s) v (if (= (.imm2 x) 0) scaled (ir/add! (mut (.g s)) W scaled (word (mut s) (cast u64 (.imm2 x)))))))
+      (= op cir/OP-ADDI) (define! (mut s) v (address (mut s) a (.imm x)))
+      (= op cir/OP-MEMCPY)
+        (set! (.c s) (ir/copy! (mut (.g s)) (cast u64 (.imm x)) (.c s) (value (mut s) a) (value (mut s) b)))
+      (= op cir/OP-MEMZERO)
+        (set! (.c s) (ir/fill! (mut (.g s)) (cast u64 (.imm x)) (.c s) (value (mut s) a)
+                               (ir/const! (mut (.g s)) ir/T-U8 0)))
+      (= op cir/OP-MEMCPYV) (routine! (mut s) v "memcpy")
+      (= op cir/OP-MEMMOVEV) (routine! (mut s) v "memmove")
+      (= op cir/OP-MEMSETV) (routine! (mut s) v "memset")
+      (= op cir/OP-DYNALLOCA)
+        (let [room (ir/reserve! (mut (.g s)) (.c s) (ir/trunc! (mut (.g s)) ir/T-U64 (value (mut s) a)))]
+          (set! (.c s) room)
+          (define! (mut s) v room))
+      (or (= op cir/OP-ATOMIC-RMW) (= op cir/OP-CMPXCHG) (= op cir/OP-ATOMIC-LOAD) (= op cir/OP-ATOMIC-STORE))
+        (shared! (mut s) v)
+      (= op cir/OP-FENCE) (set! (.c s) (ir/fence! (mut (.g s)) (.c s)))
+      (= op cir/OP-SHIMCALL) (fail f "a call with registers pinned by the caller, which the backend does not have yet")
+      :else (fail f "an operation the backend does not know"))))
+
+
 ;; ---------------------------------------------------------------- the end of a block
 
 (defn terminator! [(s (mut Adapter)) (b u32) (v u32)] (-> void)
@@ -554,11 +1046,18 @@
           (= name "gotpcrel") asm/R-GOTPCREL32
           :else (fail f "the assembler has no relocation of this kind"))))
 
+;;; Whether each graph is checked against the node set before it is compiled:
+;;; when DECLARATIVE_CHECK is set in the environment.
+(extern getenv :cc (cc/C) [(ptr i8)] (-> (ptr i8)))
+
+(defn checking? [] (-> bool)
+  (!= (primitive/cast u64 (getenv c"DECLARATIVE_CHECK")) 0))
+
 ;;; Compiles the graph and puts its code in the assembler's text, as `symbol`.
 (defn emit! [(s (mut Adapter)) (symbol u32) (level i32)] (-> void)
   (let [f (.f s)
         ta (.ta s)
-        problem (if (> (cast i64 level) 8) (ir/verify (.g s)) "")
+        problem (if (checking?) (ir/verify (.g s)) "")
         (mut cx) (st/create (.g s) (.a s))]
     (when (!= problem "") (fail f problem))
     (st/begin! (mut cx))
@@ -571,3 +1070,59 @@
         (asm/reloc! ta asm/SEC-TEXT (+ at (get (.reloc-at cx) i)) (cast u32 (get (.reloc-symbol cx) i))
                     (reloc-kind f (get (.reloc-op cx) i)) 0))
       (asm/sym-def! ta symbol asm/SEC-TEXT at (len code)))))
+
+;;; One function of the Coil compiler's, compiled into its assembler as
+;;; `symbol`. `level` is the optimization level asked for: below 2, selection
+;;; and allocation alone.
+(defn compile! [(f (ptr cir/Func)) (ta (ptr asm/Asm)) (symbol u32) (level i32)] (-> void)
+  (let [work (primitive/alloc-stack scratch/ScratchArena)]
+    (scratch/ScratchArena::init-with-capacity work (malloc-allocator) 65536)
+    (let [a (allocator work)
+          values (i64-of (cir/value-count f))
+          blocks (i64-of (cir/block-count f))
+          (mut s) (Adapter
+                    :f f :ta ta :g (graph/create a) :a a
+                    :node (ArrayList::new [i32] a) :high (ArrayList::new [i32] a) :truth (ArrayList::new [i32] a)
+                    :seen (ArrayList::new [u8] a) :first-out (ArrayList::new [i32] a)
+                    :targets (ArrayList::new [u32] a) :backward (ArrayList::new [bool] a)
+                    :forward-in (ArrayList::new [i32] a) :backward-in (ArrayList::new [i32] a)
+                    :forward-done (ArrayList::new [i32] a) :backward-done (ArrayList::new [i32] a)
+                    :merge (ArrayList::new [i32] a) :loop (ArrayList::new [i32] a) :enters (ArrayList::new [i32] a)
+                    :before (ArrayList::new [i32] a) :before-high (ArrayList::new [i32] a)
+                    :order (ArrayList::new [u32] a)
+                    :c 0 :params 0 :ints 0 :floats 0)]
+      (for _ (range 0 values)
+        (push! (mut (.node s)) 0)
+        (push! (mut (.high s)) 0)
+        (push! (mut (.truth s)) 0)
+        (push! (mut (.before s)) 0)
+        (push! (mut (.before-high s)) 0))
+      (for _ (range 0 blocks)
+        (push! (mut (.seen s)) 0)
+        (push! (mut (.forward-in s)) 0)
+        (push! (mut (.backward-in s)) 0)
+        (push! (mut (.forward-done s)) 0)
+        (push! (mut (.backward-done s)) 0)
+        (push! (mut (.merge s)) 0)
+        (push! (mut (.loop s)) 0)
+        (push! (mut (.enters s)) 0))
+      (walk! (mut s))
+      (let [start (ir/start! (mut (.g s)))]
+        (params! (mut s))
+        (heads! (mut s))
+        ; Control enters the first block from the start.
+        (if (!= (get (.loop s) 0) 0)
+            (graph/set-input! (mut (.g s)) (get (.loop s) 0) 0 start)
+            (set! (mut (.enters s)) 0 start))
+        (set! (mut (.forward-done s)) 0 1))
+      (for b (.order s)
+        (let [at (i64-of b)
+              bb (cir/blk f b)]
+          (set! (.c s) (cond (!= (get (.loop s) at) 0) (get (.loop s) at)
+                             (!= (get (.merge s) at) 0) (get (.merge s) at)
+                             :else (get (.enters s) at)))
+          (for i (range (i64-of (.ibegin bb)) (- (i64-of (.iend bb)) 1))
+            (instruction! (mut s) (get (.insts f) i)))
+          (terminator! (mut s) b (.term bb))))
+      (emit! (mut s) symbol level))
+    (close! work)))

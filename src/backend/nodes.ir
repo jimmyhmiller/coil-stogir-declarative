@@ -13,11 +13,15 @@ type u64 : 64 unsigned
 type ptr : 64 unsigned
 type f32 : 32 float
 type f64 : 64 float
+# Sixteen bytes that live in a floating register: read, written, passed and
+# returned whole, and nothing else.
+type v128 : 128 float
 
 set int = i8 i16 i32 i64 u8 u16 u32 u64 ptr
 set word = bool i8 i16 i32 i64 u8 u16 u32 u64 ptr
 set float = f32 f64
 set value = bool i8 i16 i32 i64 u8 u16 u32 u64 ptr f32 f64
+set stored = bool i8 i16 i32 i64 u8 u16 u32 u64 ptr f32 f64 v128
 set signed-wide = i32 i64
 set wide = i32 i64 u32 u64 ptr
 set unsigned-wide = u32 u64
@@ -53,7 +57,7 @@ node TAILCALL(c: ctrl, target: ptr, args...) : T  role tailcall  payload shape
 # a load is also the value it read. The width is the type's. One that is
 # `volatile` (not 0) happens exactly once, where it stands, whatever is known
 # of the memory.
-node LOAD(c: ctrl, addr: ptr) : T in value      role load   payload volatile
+node LOAD(c: ctrl, addr: ptr) : T in stored     role load   payload volatile
 node STORE(c: ctrl, addr: ptr, value) : ctrl    role store  payload volatile
 # `bytes` bytes from src to dst, which are apart or the same place; and `bytes`
 # bytes at dst each set to `value`.

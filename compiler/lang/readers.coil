@@ -2,7 +2,13 @@
 ;;; file's text to the text of a Coil module, read back here.
 (module lang.readers)
 (import "coil.primitive" :as primitive)
+(import "coil.cc" :as cc)
+(import "coil.alloc" :use [malloc-allocator])
+(import "coil.slice" :use [subslice])
+(import "coil.str" :as str)
+(import "coil.fs" :as fs)
 (import "lang.text" :as t)
+(import "lang.project" :as project)
 (import "lang.ir" :as ir)
 (import "lang.pass" :as pass)
 (import "lang.isa" :as isa)
@@ -15,8 +21,50 @@
 
 (reader-provider "lang.readers" read-any)
 
+(extern getenv :cc (cc/C) [(ptr i8)] (-> (ptr i8)))
+
+;;; Whether `line` begins with `prefix`.
+(defn begins? [(line (slice u8)) (prefix (slice u8))] (-> bool)
+  (and (>= (len line) (len prefix)) (= (subslice line 0 (len prefix)) prefix)))
+
+;;; `dir`/a/b.coil for module a.b; the directory a/ is made if it is not there.
+(defn expanded-path [(dir (slice u8)) (name (slice u8))] (-> (slice u8))
+  (let [(mut cut) 0]
+    (for i (range 0 (len name)) (when (= (get name i) #\.) (set! cut i)))
+    (let [inside (t/cat3 dir "/" (subslice name 0 cut))]
+      ; Either may be there already, which is no error here.
+      (fs/create-dir (malloc-allocator) dir 493)
+      (fs/create-dir (malloc-allocator) inside 493)
+      (t/cat4 inside "/" (subslice name (+ cut 1) (len name)) ".coil"))))
+
+;;; With DECLARATIVE_EXPAND naming a directory, each module read is also
+;;; written there as a Coil file of its own, `a64.unit` as a64/unit.coil: what
+;;; a project that cannot run the languages compiles instead (tools/expand.sh).
+(defn keep-expanded! [(context Code) (text (slice u8))] (-> void)
+  (let [to (getenv c"DECLARATIVE_EXPAND")]
+    (when (!= (primitive/cast u64 to) 0)
+      (let [path (t/path-of context)
+            name (project/module-of (project/open context) path)
+            (mut body) (t/out-new)
+            (mut start) 0]
+        (when (= name "") (t/fail-at path 1 1 "the manifest's [modules] does not name this file"))
+        (t/line! (mut body) (t/cat3 ";;; Written by the languages of coil-stogir-declarative from "
+                                    (project/last-part path) "."))
+        (t/line! (mut body) (t/cat3 "(module " name ")"))
+        ; What a reader says of the files it read is for the build that runs it.
+        (for i (range 0 (+ (len text) 1))
+          (when (or (= i (len text)) (= (get text i) #\newline))
+            (let [line (subslice text start i)]
+              (set! start (+ i 1))
+              (unless (begins? line "(depends-on") (t/line! (mut body) line)))))
+        (match (fs/write-file (malloc-allocator) (expanded-path (str/from-cstr to) name) (t/text-of (mut body)))
+          (Ok [_] 0)
+          (Err [_] (t/fail-at path 1 1 "cannot write the expanded module")))))))
+
 (defn read-any [(context Code)] (-> Code)
-  (primitive/code-read (module-text context) `(reader-config)))
+  (let [text (module-text context)]
+    (keep-expanded! context text)
+    (primitive/code-read text `(reader-config))))
 
 (defn module-text [(context Code)] (-> (slice u8))
   (let [path (t/path-of context)
