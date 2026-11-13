@@ -39,7 +39,7 @@
 
 (defstruct Gen
   [(g graph/Graph) (state u64) (control i32) (env (ArrayList i32)) (type i32) (budget i64)
-   (memory u64) (rich bool) (window i64) (object i32) (vars (ArrayList i32))])
+   (memory u64) (rich bool) (window i64) (object i32) (twin i32) (vars (ArrayList i32))])
 
 (defn next! [(r (mut Gen))] (-> u64)
   (let [(mut x) (.state r)]
@@ -261,7 +261,9 @@
   (let [size (/ (+ bits 7) 8)
         own (and (!= (.object r) 0) (= (below! (mut r) 3) 0))
         offset (* size (below! (mut r) (/ (if own 64 256) size)))
-        base (if own (.object r) (ir/const! (mut (.g r)) ir/T-PTR (.memory r)))]
+        base (cond (and own (!= (.twin r) 0) (= (below! (mut r) 2) 0)) (.twin r)
+                   own (.object r)
+                   :else (ir/const! (mut (.g r)) ir/T-PTR (.memory r)))]
     (if (and (not own) (= (below! (mut r) 5) 0))
         (ir/const! (mut (.g r)) ir/T-PTR (+ (.memory r) (cast u64 offset)))
         (ir/add! (mut (.g r)) ir/T-PTR base (ir/const! (mut (.g r)) ir/T-PTR (cast u64 offset))))))
@@ -570,6 +572,7 @@
                   :rich rich
                   :window window
                   :object 0
+                  :twin 0
                   :vars (ArrayList::new [i32] (malloc-allocator)))]
     (set! (.control r) (ir/start! (mut (.g r))))
     ; Half the rich programs have a frame object of 64 bytes, filled before use.
@@ -581,6 +584,15 @@
                               (ir/add! (mut (.g r)) ir/T-PTR (.object r)
                                        (ir/const! (mut (.g r)) ir/T-PTR (cast u64 (* i 8))))
                               (ir/const! (mut (.g r)) ir/T-U64 (cast u64 (* (+ i 1) 1000003)))))))
+    ; Half of those have a second object just like it: two objects, not one.
+    (when (and rich (= (% seed 4) 0))
+      (set! (.twin r) (ir/slot! (mut (.g r)) 64))
+      (for i (range 0 8)
+        (set! (.control r)
+              (ir/store-node! (mut (.g r)) 0 (.control r)
+                              (ir/add! (mut (.g r)) ir/T-PTR (.twin r)
+                                       (ir/const! (mut (.g r)) ir/T-PTR (cast u64 (* i 8))))
+                              (ir/const! (mut (.g r)) ir/T-U64 (cast u64 (* (+ i 3) 999983)))))))
     (for i (range 0 (if rich 10 4)) (push! (mut (.env r)) (ir/param! (mut (.g r)) type (cast u64 i))))
     ; Rich programs keep three variables in frame objects of their own, written
     ; before they are read: the kind a compiler turns into values.

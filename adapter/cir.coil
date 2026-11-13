@@ -14,6 +14,7 @@
 (import "coil.arraylist" :use [ArrayList])
 (import "coil.primitive" :as primitive)
 (import "coil.cc" :as cc)
+(import "coil.str" :as str)
 (import "coil.scratch" :as scratch)
 (import "tpde.cir" :as cir)
 (import "tpde.asm" :as asm)
@@ -1050,6 +1051,12 @@
 ;;; when DECLARATIVE_CHECK is set in the environment.
 (extern getenv :cc (cc/C) [(ptr i8)] (-> (ptr i8)))
 
+;;; Whether to print a function's graph, before and after the plan, and its
+;;; code: when DECLARATIVE_SHOW is the function's name.
+(defn showing? [(f (ptr cir/Func))] (-> bool)
+  (let [want (getenv c"DECLARATIVE_SHOW")]
+    (and (!= (primitive/cast u64 want) 0) (= (str/from-cstr want) (.name f)))))
+
 (defn checking? [] (-> bool)
   (!= (primitive/cast u64 (getenv c"DECLARATIVE_CHECK")) 0))
 
@@ -1063,7 +1070,16 @@
     (st/begin! (mut cx))
     (set! (.copy-routine cx) (+ (cast i64 (asm/runtime-sym! ta "memcpy")) 1))
     (set! (.fill-routine cx) (+ (cast i64 (asm/runtime-sym! ta "memset")) 1))
+    (when (showing? f)
+      (println "; {} as built" (.name f))
+      (ir/dump (.g cx)))
     (if (< (cast i64 level) 2) (plans/quick (mut cx)) (plans/default (mut cx)))
+    (when (showing? f)
+      (println "; {} as compiled" (.name f))
+      (ir/dump (.g cx))
+      (print "code:")
+      (for b (.code cx) (print " {:02x}" b))
+      (println ""))
     (let [code (.code cx)
           at (asm/sect-append! ta asm/SEC-TEXT (.data code) (len code) isa/ALIGN)]
       (for i (range 0 (len (.reloc-at cx)))
