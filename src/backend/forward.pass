@@ -1,0 +1,79 @@
+# What memory is known to hold. Down a block, and on into a block that only
+# it leads to, an address that was read or written is known to hold what was
+# read or written there, until something that might write memory comes by. A
+# load of an address whose value is known is that value, and the load goes.
+pass in unit
+use cfg as cfg
+
+column known-at: Block -> [Node]      # at a block's end: the addresses whose value is known,
+column known-as: Block -> [Node]      # and for each the value
+state at: [Node]                      # the same for the block being walked
+state as: [Node]
+state forwarded: Int
+
+# Something that may write memory this pass knows nothing of.
+fn clobbers?(n: Node) -> Bool =
+  n is CALL or n is COPY or n is FILL or n is ATOMIC-STORE or n is RESERVE or cfg.update?(n)
+
+# `l`, a load, is value `v`: what followed it in control follows what it
+# followed, and what read it reads `v`.
+fn replace(l: Node, v: Node) {
+  var users: [Node] = []
+  var slots: [Int] = []
+  for e in edges(l) {
+    users.push(edge-user(e))
+    slots.push(edge-slot(e))
+  }
+  for i in 0..users.len {
+    let u = users[i]
+    let k = slots[i]
+    if u is REGION or u is LOOP or (k == 0 and cfg.control?(u)) { set-input(u, k, l.in(0)) } else { set-input(u, k, v) }
+  }
+  drop(l)
+  forwarded = forwarded + 1
+}
+
+fn walk(b: Block) {
+  at.clear()
+  as.clear()
+  if b.preds.len == 1 and b.preds[0] != b {
+    let p = b.preds[0]
+    for i in 0..p.known-at.len {
+      at.push(p.known-at[i])
+      as.push(p.known-as[i])
+    }
+  }
+  var c = cfg.follower(b.head)
+  while c != none and cfg.chain?(c) {
+    let next = cfg.follower(c)
+    if c is LOAD and c.payload == 0 {
+      var found: Node = none
+      for i in 0..at.len { if at[i] == c.in(1) and as[i].type == c.type { found = as[i] } }
+      if found != none { replace(c, found) }
+      else if at.len < 24 {
+        at.push(c.in(1))
+        as.push(c)
+      }
+    } else if c is STORE {
+      # A store may write what any known address holds; what it wrote is known.
+      at.clear()
+      as.clear()
+      if c.payload == 0 {
+        at.push(c.in(1))
+        as.push(c.in(2))
+      }
+    } else if clobbers?(c) or c is LOAD {
+      at.clear()
+      as.clear()
+    }
+    c = next
+  }
+  for i in 0..at.len {
+    b.known-at.push(at[i])
+    b.known-as.push(as[i])
+  }
+}
+
+fn run() {
+  for b in order { walk(b) }
+}

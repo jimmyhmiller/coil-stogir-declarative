@@ -21,6 +21,7 @@ plan default {
   split.run
   cfg.build
   promote.run
+  forward.run
   start-over
   until-stable { simplify.run }
   facts.solve
