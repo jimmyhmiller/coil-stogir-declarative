@@ -25,6 +25,7 @@ plan default {
   forward.run
   start-over
   until-stable { simplify.run }
+  tails.run
   facts.solve
   until-stable { narrow.run  simplify.run }
   until-stable { forward.prune }

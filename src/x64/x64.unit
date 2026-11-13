@@ -12,6 +12,7 @@ pass x64.promote
 pass x64.forward
 pass x64.loops
 pass x64.switches
+pass x64.tails
 pass x64.schedule
 pass x64.mach
 lower x64.lower
