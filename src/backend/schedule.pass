@@ -121,7 +121,9 @@ fn sink-loads(b: Block) {
     var ok = l.uses > 1
     for u in users(l) {
       # Whatever reads the value, which may also be what follows the load.
-      let reads = any k in 1..u.arity: u.in(k) == l
+      # (A node in the flow of control has that flow as its first input, and
+      # any other node has a value there.)
+      let reads = any k in 0..u.arity: u.in(k) == l and (k > 0 or not cfg.control?(u))
       if reads and not (u is REGION) and not (u is LOOP) {
         let at = use-block(u, l)
         if at == none { ok = false } else { to = cfg.join(to, at) }

@@ -403,11 +403,17 @@
         test (if settled
                  (compare! (mut r) (below! (mut r) (tests (mut r) (.type r))) (constant! (mut r)) (constant! (mut r)))
                  (comparison! (mut r)))
+        ; One rich diamond in three reads memory just before it parts, a value
+        ; only the first way then sees: a load that can be made on that way alone.
+        early (if (and (.rich r) (= (below! (mut r) 3) 0)) (read! (mut r)) 0)
         branch (ir/if! (mut (.g r)) (.control r) test)
         base (len (.env r))
         yes (ir/true! (mut (.g r)) branch)
         no (ir/false! (mut (.g r)) branch)]
     (set! (.control r) yes)
+    (when (!= early 0)
+      (push! (mut (.env r)) early)
+      (push! (mut (.env r)) (ir/add! (mut (.g r)) (.type r) early (pick! (mut r)))))
     (statements! (mut r) (+ depth 1))
     (let [yes-end (.control r)
           yes-a (pick! (mut r))
