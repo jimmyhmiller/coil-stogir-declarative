@@ -1,11 +1,11 @@
 # Instruction selection: choose a rule for every node that must be computed,
 # then emit the rules' instructions block by block.
-pass in backend.unit
-use backend.cfg as cfg
-use backend.mach as mach
-use backend.a64-lower as lower
-import backend.a64 as isa
-import backend.a64-abi as abi
+pass in unit
+use cfg as cfg
+use mach as mach
+use lower as lower
+import target as isa
+import abi as abi
 
 fn choose(n: Node) {
   let rule = lower.select(n)

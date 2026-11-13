@@ -1,6 +1,6 @@
 [package]
 name = "backend"
-entry = "compiler/boot/hello.coil"
+entry = "tests/fuzz.coil"
 source-roots = ["compiler", "tests"]
 
 [readers]
@@ -17,18 +17,18 @@ source-roots = ["compiler", "tests"]
 
 [modules]
 "backend.nodes" = "src/backend/nodes.ir"
-"backend.unit" = "src/backend/backend.unit"
-"backend.simplify" = "src/backend/simplify.rewrite"
-"backend.facts" = "src/backend/facts.flow"
-"backend.narrow" = "src/backend/narrow.rewrite"
-"backend.cfg" = "src/backend/cfg.pass"
-"backend.schedule" = "src/backend/schedule.pass"
-"backend.a64" = "src/backend/a64.isa"
-"backend.a64-lower" = "src/backend/a64.lower"
-"backend.a64-abi" = "src/backend/a64.abi"
-"backend.macho" = "src/backend/macho.layout"
-"backend.mach" = "src/backend/mach.pass"
-"backend.select" = "src/backend/select.pass"
-"backend.alloc" = "src/backend/alloc.pass"
-"backend.emit" = "src/backend/emit.pass"
-"backend.plans" = "src/backend/backend.pipeline"
+"a64.unit" = "src/a64/a64.unit"
+"a64.target" = "src/a64/a64.isa"
+"a64.lower" = "src/a64/a64.lower"
+"a64.abi" = "src/a64/a64.abi"
+"a64.macho" = "src/a64/macho.layout"
+"a64.simplify" = "src/a64/simplify.rewrite"
+"a64.narrow" = "src/a64/narrow.rewrite"
+"a64.facts" = "src/a64/facts.flow"
+"a64.cfg" = "src/a64/cfg.pass"
+"a64.schedule" = "src/a64/schedule.pass"
+"a64.mach" = "src/a64/mach.pass"
+"a64.select" = "src/a64/select.pass"
+"a64.alloc" = "src/a64/alloc.pass"
+"a64.emit" = "src/a64/emit.pass"
+"a64.plans" = "src/a64/plans.pipeline"

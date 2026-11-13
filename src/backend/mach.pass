@@ -2,7 +2,7 @@
 # with up to five operands. A register operand is a virtual register (a positive
 # number: the node it holds, or a fresh one) or a machine register r, written
 # -(r + 1). What each operand is comes from the target's description.
-pass in backend.unit
+pass in unit
 
 entity Inst
 column inst-op: Inst -> Int

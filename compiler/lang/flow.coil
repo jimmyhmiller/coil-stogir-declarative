@@ -107,7 +107,7 @@
         (mut c) (t/cursor src path)]
     (t/expect! (mut c) "flow")
     (t/expect! (mut c) "in")
-    (let [unit (module-name! (mut c))
+    (let [unit (project/resolve p (module-name! (mut c)) 1 1)
           at (t/peek-at (mut c) 1)
           nodes-module (do (t/expect! (mut c) "nodes") (module-name! (mut c)))
           nodes-file (project/file-of p nodes-module (.line at) (.col at))

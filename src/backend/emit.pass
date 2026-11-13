@@ -4,12 +4,12 @@
 # frame is stored there as it is written. Copies to the same register and jumps
 # to the next block go away, the frame is opened and closed, and each
 # instruction is encoded.
-pass in backend.unit
-use backend.mach as mach
-use backend.alloc as alloc
-use backend.a64-lower as lower
-import backend.a64 as isa
-import backend.a64-abi as abi
+pass in unit
+use mach as mach
+use alloc as alloc
+use lower as lower
+import target as isa
+import abi as abi
 
 column final-first: Block -> Int      # a block's first final instruction
 state final-start: Int                # final instructions follow the selected ones

@@ -1,6 +1,6 @@
 # What a value may be replaced by. A node whose inputs are all constants is
 # folded by its meaning; these are the rest.
-rewrite in backend.unit
+rewrite in unit
 nodes backend.nodes
 
 # Identities.

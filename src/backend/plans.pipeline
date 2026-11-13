@@ -1,5 +1,5 @@
 # What a compile is, as plans.
-pipeline in backend.unit
+pipeline in unit
 
 # From a graph to code, with no optimization beyond what building the graph did.
 plan quick {

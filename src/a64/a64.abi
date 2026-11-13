@@ -1,5 +1,5 @@
 # The C calling convention on AArch64 for integers and floating point.
-target backend.a64
+target a64.target
 integers x0..x7
 result x0
 floats v0..v7

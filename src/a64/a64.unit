@@ -1,0 +1,16 @@
+# The AArch64 compiler: the shared node set, rules and passes, with this
+# directory's machine, convention and selection rules.
+unit
+nodes backend.nodes
+target a64.target
+abi a64.abi
+rewrite a64.simplify
+flow a64.facts
+rewrite a64.narrow
+pass a64.cfg
+pass a64.schedule
+pass a64.mach
+lower a64.lower
+pass a64.select
+pass a64.alloc
+pass a64.emit

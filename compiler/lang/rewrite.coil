@@ -397,11 +397,11 @@
         (mut c) (t/cursor (t/source-of context) path)]
     (t/expect! (mut c) "rewrite")
     (t/expect! (mut c) "in")
-    (let [unit (module-name! (mut c))
+    (let [unit (project/resolve p (module-name! (mut c)) 1 1)
           at (t/peek-at (mut c) 1)
           nodes-module (do (t/expect! (mut c) "nodes") (module-name! (mut c)))
           nodes-file (project/file-of p nodes-module (.line at) (.col at))
-          facts-module (if (t/accept! (mut c) "facts") (module-name! (mut c)) "")
+          facts-module (if (t/accept! (mut c) "facts") (project/resolve p (module-name! (mut c)) (.line at) (.col at)) "")
           (mut r) (R
                     :c c
                     :nodes (ir/parse (project/read-file nodes-file path) nodes-file)

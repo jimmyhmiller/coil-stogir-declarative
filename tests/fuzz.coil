@@ -14,8 +14,8 @@
 (import "rt.jit" :as jit)
 (import "backend.nodes" :as ir)
 (import "tests.gen" :as gen)
-(import "backend.unit" :as st)
-(import "backend.plans" :as plans)
+(import "a64.unit" :as st)
+(import "a64.plans" :as plans)
 
 (defstruct Stats [(spilled i64) (slots i64) (words i64) (nodes i64)])
 

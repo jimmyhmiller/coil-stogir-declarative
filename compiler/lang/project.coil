@@ -19,7 +19,7 @@
 
 (defn read-file [(path (slice u8)) (from (slice u8))] (-> (slice u8))
   (match (fs/read-file (malloc-allocator) path)
-    (Ok [bytes] bytes)
+    (Ok [bytes] (t/follow bytes path))
     (Err [_] (t/fail-at from 1 1 (t/cat2 "cannot read " path)))))
 
 ;;; The modules the manifest of the file being read names, with absolute files.
@@ -65,3 +65,38 @@
     (when (= name "")
       (for e (.entries p) (when (t/ends-with (.file e) file) (set! name (.name e)))))
     name))
+
+;;; The unit the file being read belongs to: the one in its directory.
+(defn unit-of [(p Project)] (-> (slice u8))
+  (let [here (dir-of (.path p))
+        (mut name) ""]
+    (for e (.entries p)
+      (when (and (t/ends-with (.file e) ".unit") (t/ends-with here (dir-of (.file e)))
+                 (t/ends-with (dir-of (.file e)) (last-part here)))
+        (set! name (.name e))))
+    (when (= name "") (t/fail-at (.path p) 1 1 "no unit in this file's directory"))
+    name))
+
+(defn last-part [(path (slice u8))] (-> (slice u8))
+  (let [(mut cut) -1]
+    (for i (range 0 (len path)) (when (= (get path i) #\/) (set! cut i)))
+    (subslice path (+ cut 1) (len path))))
+
+;;; A module named in a file: `unit` is the unit of the file's directory, a
+;;; dotted name is itself, and a short name is the module of that name in the
+;;; file's directory (`cfg` is `a64.cfg` in a file of a64's).
+(defn resolve [(p Project) (name (slice u8)) (line i64) (col i64)] (-> (slice u8))
+  (let [(mut dotted) false]
+    (for ch name (when (= ch #\.) (set! dotted true)))
+    (cond
+      (= name "unit") (unit-of p)
+      dotted name
+      :else
+        (let [here (last-part (dir-of (.path p)))
+              (mut found) ""]
+          (for e (.entries p)
+            (when (and (= (last-part (dir-of (.file e))) here) (t/ends-with (.name e) (t/cat2 "." name)))
+              (set! found (.name e))))
+          (when (= found "")
+            (t/fail-at (.path p) line col (t/cat2 "no module in this directory named " name)))
+          found))))

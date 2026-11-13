@@ -63,7 +63,7 @@
     (t/expect! (mut c) "pipeline")
     (t/expect! (mut c) "in")
     (let [at (t/peek (mut c))
-          unit (pass/module-name! (mut c))
+          unit (project/resolve project (pass/module-name! (mut c)) (.line at) (.col at))
           d (pass/load-unit project (project/file-of project unit (.line at) (.col at)) path)
           (mut p) (P :c c :d d
                      :plans (ArrayList::new [(slice u8)] (malloc-allocator))

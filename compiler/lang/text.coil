@@ -6,9 +6,30 @@
 (import "coil.arraylist" :use [ArrayList])
 (import "coil.slice" :use [subslice])
 (import "coil.str" :as str)
+(import "coil.fs" :as fs)
+
+(defn directory [(path (slice u8))] (-> (slice u8))
+  (let [(mut cut) -1]
+    (for i (range 0 (len path)) (when (= (get path i) #\/) (set! cut i)))
+    (if (< cut 0) "." (subslice path 0 cut))))
+
+;;; A file whose whole text is `same OTHER` stands for the file OTHER, named
+;;; from its own directory: how one source file serves several targets, each
+;;; of which needs a file of its own to be a module.
+(defn follow [(src (slice u8)) (path (slice u8))] (-> (slice u8))
+  (if (and (> (len src) 5) (= (subslice src 0 5) "same "))
+      (let [(mut end) 5]
+        (while (and (< end (len src)) (!= (get src end) #\newline)) (set! end (+ end 1)))
+        (let [(mut b) (str/StrBuf::new (malloc-allocator))]
+          (str/format! (mut b) "{}/{}" (directory path) (subslice src 5 end))
+          (let [other (finish! (mut b))]
+            (match (fs/read-file (malloc-allocator) other)
+              (Ok [bytes] (follow bytes other))
+              (Err [_] (do (primitive/error (cat2 "cannot read " other)) (unreachable)))))))
+      src))
 
 (defn source-of [(context Code)] (-> (slice u8))
-  (primitive/code-str (get context 2)))
+  (follow (primitive/code-str (get context 2)) (primitive/code-str (get context 1))))
 
 (defn path-of [(context Code)] (-> (slice u8))
   (primitive/code-str (get context 1)))

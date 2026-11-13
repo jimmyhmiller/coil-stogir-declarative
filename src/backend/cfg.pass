@@ -1,5 +1,5 @@
 # Blocks, from control nodes: who follows whom, dominators, loop depths.
-pass in backend.unit
+pass in unit
 
 entity Block
 column head: Block -> Node            # the control node a block starts at

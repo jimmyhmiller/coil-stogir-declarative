@@ -265,7 +265,7 @@
         (mut locals) (ArrayList::new [(slice u8)] (malloc-allocator))]
     (t/expect! (mut c) "lower")
     (t/expect! (mut c) "in")
-    (set! unit (module-name! (mut c)))
+    (set! unit (project/resolve p (module-name! (mut c)) 1 1))
     (let [(mut header) true]
       (while header
         (let [at (t/peek-at (mut c) 1)]
@@ -276,7 +276,7 @@
             (t/accept! (mut c) "target")
               (do (set! target-module (module-name! (mut c)))
                   (set! target-file (project/file-of p target-module (.line at) (.col at))))
-            (t/accept! (mut c) "emit") (set! mach-module (module-name! (mut c)))
+            (t/accept! (mut c) "emit") (set! mach-module (project/resolve p (module-name! (mut c)) (.line at) (.col at)))
             (t/accept! (mut c) "local") (push! (mut locals) (t/name! (mut c) "a node name"))
             :else (set! header false)))))
     (when (or (= nodes-file "") (= target-file "") (= mach-module ""))

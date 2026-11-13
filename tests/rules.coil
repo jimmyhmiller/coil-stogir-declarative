@@ -2,9 +2,9 @@
 (module tests.rules)
 (import "coil.alloc" :use [malloc-allocator])
 (import "rt.graph" :as graph)
-(import "backend.unit" :as st)
-(import "backend.simplify" :as simplify)
-(import "backend.narrow" :as narrow)
+(import "a64.unit" :as st)
+(import "a64.simplify" :as simplify)
+(import "a64.narrow" :as narrow)
 
 (defn main [] (-> i64)
   (let [(mut cx) (st/create (graph/create (malloc-allocator)) (malloc-allocator))

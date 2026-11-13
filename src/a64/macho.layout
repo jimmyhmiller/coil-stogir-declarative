@@ -1,6 +1,6 @@
 # A Mach-O relocatable object for arm64: one segment with one section of code,
 # its relocations, the symbols and their names.
-target backend.a64
+target a64.target
 symbols defined first
 prefix "_"
 

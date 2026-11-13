@@ -43,6 +43,8 @@
    (files (ArrayList (slice u8)))
    (passes (ArrayList (slice u8)))
    (nodes-module (slice u8))
+   (target-module (slice u8))
+   (abi-module (slice u8))
    (unit-module (slice u8))
    (spec ir/Spec)])
 
@@ -191,6 +193,8 @@
                   :files (ArrayList::new [(slice u8)] (malloc-allocator))
                   :passes (ArrayList::new [(slice u8)] (malloc-allocator))
                   :nodes-module ""
+                  :target-module ""
+                  :abi-module ""
                   :unit-module (project/module-of p file)
                   :spec (ir/parse "" file))]
     (push! (mut (.files d)) file)
@@ -205,6 +209,9 @@
               (set! (.nodes-module d) name)
               (set! (.spec d) (ir/parse (project/read-file nodes-file file) nodes-file))
               (push! (mut (.files d)) nodes-file))
+          ; The machine and its convention, which passes ask for as `target` and `abi`.
+          (t/tok-is? tok "target") (set! (.target-module d) (module-name! (mut c)))
+          (t/tok-is? tok "abi") (set! (.abi-module d) (module-name! (mut c)))
           (t/tok-is? tok "pass")
             (let [name (module-name! (mut c))
                   pass-file (project/file-of p name (.line at) (.col at))]
@@ -1082,7 +1089,7 @@
     (t/expect! (mut c) "pass")
     (t/expect! (mut c) "in")
     (let [at (t/peek (mut c))
-          unit (module-name! (mut c))
+          unit (project/resolve p (module-name! (mut c)) (.line at) (.col at))
           d (load-unit p (project/file-of p unit (.line at) (.col at)) path)
           (mut k) (K
                     :c c
@@ -1106,13 +1113,17 @@
         (let [tok (t/advance! (mut (.c k)))]
           (cond
             (t/tok-is? tok "use")
-              (let [module (module-name! (mut (.c k)))]
+              (let [module (project/resolve p (module-name! (mut (.c k))) (.line tok) (.col tok))]
                 (t/expect! (mut (.c k)) "as")
                 (let [alias (t/name! (mut (.c k)) "a name")]
                   (push! (mut (.aliases k)) (Field :name alias :type module))
                   (t/line! (mut o) (cat5 "(import \"" module "\" :as " alias ")"))))
             (t/tok-is? tok "import")
-              (let [module (module-name! (mut (.c k)))]
+              (let [named (module-name! (mut (.c k)))
+                    module (cond (= named "target") (.target-module d)
+                                 (= named "abi") (.abi-module d)
+                                 :else named)]
+                (when (= module "") (t/die (mut (.c k)) tok (t/cat2 "the unit names no " named)))
                 (t/expect! (mut (.c k)) "as")
                 (let [alias (t/name! (mut (.c k)) "a name")]
                   (push! (mut (.raws k)) alias)

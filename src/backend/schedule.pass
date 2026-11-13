@@ -1,8 +1,8 @@
 # Where each floating node goes, and in what order a block computes its nodes.
 # Click's global code motion: as early as its inputs allow, as late as its uses
 # allow, and between those the block in the fewest loops.
-pass in backend.unit
-use backend.cfg as cfg
+pass in unit
+use cfg as cfg
 
 column early-done: Node -> Bool
 column late-done: Node -> Bool

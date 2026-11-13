@@ -1,8 +1,8 @@
 # Which AArch64 instructions compute each node.
-lower in backend.unit
+lower in unit
 nodes backend.nodes
-target backend.a64
-emit backend.mach
+target a64.target
+emit mach
 
 # A constant is built again in each block that needs it in a register.
 local CONST

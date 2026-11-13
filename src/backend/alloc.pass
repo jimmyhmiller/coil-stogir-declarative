@@ -12,10 +12,10 @@
 #
 # A value that ever waits in the frame is stored there each time it is written,
 # so leaving a register costs nothing and coming back costs one load.
-pass in backend.unit
-use backend.cfg as cfg
-use backend.mach as mach
-import backend.a64 as isa
+pass in unit
+use cfg as cfg
+use mach as mach
+import target as isa
 
 entity Vreg
 column first-piece: Vreg -> Piece

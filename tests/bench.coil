@@ -14,9 +14,9 @@
 (import "coil.time" :as time)
 (import "rt.graph" :as graph)
 (import "backend.nodes" :as ir)
-(import "backend.unit" :as st)
-(import "backend.plans" :as plans)
-(import "backend.a64" :as isa)
+(import "a64.unit" :as st)
+(import "a64.plans" :as plans)
+(import "a64.target" :as isa)
 (import "tests.gen" :as gen)
 
 (defn now-ns [] (-> i64)
