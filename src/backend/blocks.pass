@@ -128,8 +128,83 @@ fn known-call(n: Node) {
   known-calls = known-calls + 1
 }
 
+# Whether all that is asked of `v` is whether it is zero.
+fn zero-tested?(v: Node, deep: Int) -> Bool {
+  for e in edges(v) {
+    let u = edge-user(e)
+    if u is EQ or u is NE {
+      let other = if u.in(0) == v then u.in(1) else u.in(0)
+      if not (other is CONST and other.payload == word(0)) { return false }
+    } else if (u is TRUNC or u is ZEXT or u is SEXT) and u.bits >= 8 and deep < 3 {
+      if not zero-tested?(u, deep + 1) { return false }
+    } else { return false }
+  }
+  true
+}
+
+# A call of the C library's memcmp for a known few bytes, of which all that is
+# asked is whether they were the same, is those bytes read and compared: the
+# answer is 0 if they were and 1 if not.
+fn compare(n: Node) {
+  if routine(n) != 5 or not (n.in(4) is CONST) or n.in(4).payload > word(16) { return }
+  var result: Node = none
+  for u in users(n) {
+    if u is RESULT {
+      if result != none { return }
+      result = u
+    }
+  }
+  if result != none and (int(result.payload) != 0 or result.float or not zero-tested?(result, 0)) { return }
+  let bytes = int(n.in(4).payload)
+  var control = n.in(0)
+  var differ = ir.make-const!(mut graph, ir.T-PTR, word(0))
+  if bytes > 0 {
+    var width = 8
+    while width > bytes { width = width / 2 }
+    var offsets: [Int] = []
+    var done = 0
+    while done + width <= bytes {
+      offsets.push(done)
+      done = done + width
+    }
+    if done < bytes { offsets.push(bytes - width) }
+    for o in offsets {
+      let a = ir.load-node!(mut graph, id(piece(width)), word(0), control, at(n.in(2), o))
+      let b = ir.load-node!(mut graph, id(piece(width)), word(0), a, at(n.in(3), o))
+      control = b
+      let x = ir.xor!(mut graph, a.type, a, b)
+      differ = ir.or!(mut graph, ir.T-PTR, differ, if width == 8 then x else ir.zext!(mut graph, ir.T-PTR, x))
+    }
+  }
+  grow-nodes()
+  if result != none {
+    replace-uses(result, ir.zext!(mut graph, result.type, ir.ne!(mut graph, differ, ir.make-const!(mut graph, ir.T-PTR, word(0)))))
+    drop(result)
+  }
+  grow-nodes()
+  replace-uses(n, control)
+  drop(n)
+  known-calls = known-calls + 1
+}
+
+# The calls of known routines whose sizes have become known since `run`.
+fn again() -> Int {
+  if inline-bytes == 0 { inline-bytes = 128 }
+  let was = known-calls
+  for n in Node {
+    if not n.dead and n is CALL {
+      if routine(n) == 5 { compare(n) } else { known-call(n) }
+    }
+  }
+  known-calls - was
+}
+
 fn run() {
   if inline-bytes == 0 { inline-bytes = 128 }
   for n in Node { if not n.dead and (n is COPY or n is FILL) { expand(n) } }
-  for n in Node { if not n.dead and n is CALL { known-call(n) } }
+  for n in Node {
+    if not n.dead and n is CALL {
+      if routine(n) == 5 { compare(n) } else { known-call(n) }
+    }
+  }
 }

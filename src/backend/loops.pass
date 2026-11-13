@@ -6,6 +6,7 @@
 # the loop.
 pass in unit
 use cfg as cfg
+use blocks as blocks
 
 column member: Block -> Int            # == `serial`: in the loop in hand
 column touched: Block -> Bool          # changed by a turn since blocks were last found
@@ -35,6 +36,7 @@ state side-meet: [Node]                # and where they meet, if several
 state goes: [Int]                      # for each way into the region in hand: the side it goes to
 state way: [Node]                      # and the control it comes by
 state parted: Int
+state learned: Int
 state turned: Int
 state hoisted: Int
 
@@ -433,6 +435,45 @@ fn part(h: Block) {
   parted = parted + 1
 }
 
+# ---------------------------------------------------------------- what a branch taken says
+
+# In block `b` and every block it dominates, `x` is the constant `k`: what
+# stays where it is there and reads `x` reads `k`.
+fn known-in(b: Block, x: Node, k: Node) {
+  if x is CONST { return }
+  var users: [Node] = []
+  var slots: [Int] = []
+  for e in edges(x) {
+    let u = edge-user(e)
+    let s = edge-slot(e)
+    if pinned?(u) and not (u is PHI and s == 0) and not (cfg.control?(u) and s == 0) {
+      let at = use-block(u, s)
+      if at != none and cfg.dominates(b, at) {
+        users.push(u)
+        slots.push(s)
+      }
+    }
+  }
+  for i in 0..users.len { set-input(users[i], slots[i], k) }
+  learned = learned + users.len
+}
+
+# The side of a test of whether a value is some constant on which it is, and
+# the case of a switch, say what the value is from there on.
+fn learn(b: Block) {
+  let h = b.head
+  if h is TRUE or h is FALSE {
+    let c = h.in(0).in(1)
+    if (h is TRUE and c is EQ) or (h is FALSE and c is NE) {
+      if c.in(1) is CONST { known-in(b, c.in(0), c.in(1)) }
+      else if c.in(0) is CONST { known-in(b, c.in(1), c.in(0)) }
+    }
+  } else if h is CASE {
+    let x = h.in(0).in(1)
+    known-in(b, x, ir.make-const!(mut graph, x.type, h.payload))
+  }
+}
+
 # ---------------------------------------------------------------- loads made once
 
 # Whether `n` is the same every time round the loop in hand.
@@ -508,6 +549,13 @@ fn hoist(h: Block) {
 # How much was changed: blocks must be found again after any of it.
 fn round() -> Int {
   let was = turned + hoisted + parted
+  # First, while the blocks are as they were found.
+  let knew = learned
+  for b in order { learn(b) }
+  if learned > knew {
+    grow-nodes()
+    blocks.again()
+  }
   for h in order { if h.head is LOOP { hoist(h) } }
   for h in order { if h.head is LOOP { turn(h) } }
   if trial { for h in order { if h.head is REGION { part(h) } } }
