@@ -1,5 +1,6 @@
 # The whole compile, in order.
 pass in backend.unit
+use backend.simplify as simplify
 use backend.cfg as cfg
 use backend.schedule as schedule
 use backend.select as select
@@ -7,6 +8,7 @@ use backend.alloc as alloc
 use backend.emit as emit
 
 fn compile() {
+  simplify.run()
   cfg.build()
   schedule.build()
   select.run()

@@ -240,7 +240,14 @@
                   (push! (mut (.funcs d))
                          (Func :module name :name (get template 0) :params params :result "Void"))))
               (push! (mut (.files d)) lower-file))
-          :else (t/die (mut c) tok (t/cat2 "expected nodes, pass or lower, found " (.text tok))))))
+          ; A .rewrite file gives the passes `run`, which answers how much it changed.
+          (t/tok-is? tok "rewrite")
+            (let [name (module-name! (mut c))]
+              (push! (mut (.funcs d))
+                     (Func :module name :name "run" :params (ArrayList::new [Field] (malloc-allocator))
+                           :result "Int"))
+              (push! (mut (.files d)) (project/file-of p name (.line at) (.col at))))
+          :else (t/die (mut c) tok (t/cat2 "expected nodes, pass, lower or rewrite, found " (.text tok))))))
     (for column (.columns d)
       (unless (entity? d (.key column))
         (t/fail-at file 1 1 (t/cat4 "column " (.name column) " is over no entity: " (.key column))))
@@ -289,7 +296,7 @@
         (t/emit! (mut o) (t/cat4 "(" (.name f) " " (t/cat2 (coil-type d (.type f) "") ") "))))
       (t/line! (mut o) "])"))
     ; The state: the graph, a count per entity, a column per column, a cell per state.
-    (t/line! (mut o) "(defstruct State [(g graph/Graph) (alc (dyn Allocator))")
+    (t/line! (mut o) "(defstruct State [(g graph/Graph) (alc (dyn Allocator)) (fired i64)")
     (for e (.entities d) (t/line! (mut o) (t/cat3 "  (" (t/lower e) "-count i32)")))
     (for column (.columns d)
       (t/line! (mut o)
@@ -301,7 +308,7 @@
       (t/line! (mut o) (t/cat4 "  (" (.name cell) " " (t/cat2 (coil-type d (.type cell) "") ")"))))
     (t/line! (mut o) "])")
     (t/line! (mut o) "(defn create [(g graph/Graph) (a (dyn Allocator))] (-> State)")
-    (t/line! (mut o) "  (State :g g :alc a")
+    (t/line! (mut o) "  (State :g g :alc a :fired 0")
     (for e (.entities d) (t/line! (mut o) (t/cat3 "    :" (t/lower e) "-count 0")))
     (for column (.columns d)
       (t/line! (mut o)

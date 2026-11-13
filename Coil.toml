@@ -10,10 +10,12 @@ source-roots = ["compiler", "tests"]
 ".isa" = "lang.readers"
 ".lower" = "lang.readers"
 ".abi" = "lang.readers"
+".rewrite" = "lang.readers"
 
 [modules]
 "backend.nodes" = "src/backend/nodes.ir"
 "backend.unit" = "src/backend/backend.unit"
+"backend.simplify" = "src/backend/simplify.rewrite"
 "backend.cfg" = "src/backend/cfg.pass"
 "backend.schedule" = "src/backend/schedule.pass"
 "backend.a64" = "src/backend/a64.isa"

@@ -58,9 +58,9 @@ node UREM(a: T, b: T) : T in int                = urem(a, b)
 node SREM(a: T, b: T) : T in int                = srem(a, b)
 
 # Between widths. TRUNC keeps the low bits; ZEXT and SEXT fill the new ones.
-node ZEXT(a: S) : T in int, S in word           = a
-node SEXT(a: S) : T in int, S in int            = sext(a)
-node TRUNC(a: S) : T in word, S in int          = a
+node ZEXT(a: S) : T in int, S in word, bits(S) < bits(T)   = a
+node SEXT(a: S) : T in int, S in int, bits(S) < bits(T)    = sext(a)
+node TRUNC(a: S) : T in word, S in int, bits(T) <= bits(S) = a
 
 # One of two values.
 node COND(c: bool, a: T, b: T) : T in word      = select(c, a, b)

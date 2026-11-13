@@ -1,0 +1,12 @@
+;;; Every rewrite rule, checked against the meanings of the nodes it rewrites.
+(module tests.rules)
+(import "coil.alloc" :use [malloc-allocator])
+(import "rt.graph" :as graph)
+(import "backend.unit" :as st)
+(import "backend.simplify" :as simplify)
+
+(defn main [] (-> i64)
+  (let [(mut cx) (st/create (graph/create (malloc-allocator)) (malloc-allocator))
+        bad (simplify/check-rules (mut cx) 4000)]
+    (println "{} rules, {} wrong or never seen to apply" simplify/RULES bad)
+    (if (= bad 0) 0 1)))

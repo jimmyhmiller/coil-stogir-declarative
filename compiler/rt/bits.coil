@@ -73,3 +73,13 @@
     (cond (= b 0) v
           (= b -1) (: 0 u64)
           :else (primitive/cast u64 (% a b)))))
+
+;;; Exactly one bit set, taking the value as a signed number's bits.
+(defn pow2? [(v i64)] (-> bool)
+  (and (> v 0) (= (& v (- v 1)) 0)))
+
+(defn shl-signed [(v i64) (n i64)] (-> i64)
+  (if (or (< n 0) (>= n 64)) 0 (primitive/cast i64 (<< (primitive/cast u64 v) (primitive/cast u64 n)))))
+
+(defn sar-signed [(v i64) (n i64)] (-> i64)
+  (>> v (if (or (< n 0) (>= n 64)) 63 n)))

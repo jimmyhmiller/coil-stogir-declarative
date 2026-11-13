@@ -1,0 +1,545 @@
+;;; The `.rewrite` language: what a node may be replaced by.
+;;;
+;;;   rule add-zero : ADD(x, CONST 0)                  => x
+;;;   rule sub-self : SUB(x, x)                        => 0
+;;;   rule mul-pow2 : MUL(x, CONST k) when pow2(k)     => SHL(x, log2(k))
+;;;   rule reassoc  : ADD(ADD(x, CONST a), CONST b)    => ADD(x, a + b)
+;;;
+;;; A pattern names nodes; a name used twice means the same node; `CONST k`
+;;; binds a constant's value and `CONST 0` matches one. A commutative node whose
+;;; operands differ in shape is tried both ways round. The right side is built
+;;; with the node set's builders, so it is value-numbered as it is made.
+;;;
+;;; From the rules: `simplify`, one decision per root operation; folding of any
+;;; node whose inputs are all constants, from the node's meaning; and `run`,
+;;; which applies both to a fixed point over a worklist, keeps commutative
+;;; operands in order, merges nodes that have become equal and removes what
+;;; nothing uses.
+(module lang.rewrite)
+(import "coil.alloc" :use [malloc-allocator])
+(import "coil.arraylist" :use [ArrayList])
+(import "lang.text" :as t)
+(import "lang.ir" :as ir)
+(import "lang.project" :as project)
+
+;;; node: a node's name, or "". var: a variable, `_`, or `self`. literal: for
+;;; `CONST 5`, that the payload must equal `value`. payload: the name bound to it.
+(defstruct Pat
+  [(node (slice u8)) (var (slice u8)) (payload (slice u8)) (literal bool) (value i64)
+   (kids (ArrayList Pat)) (tok t/Tok)])
+
+(defstruct Binding [(name (slice u8)) (code (slice u8)) (is-node bool)])
+
+(defstruct R
+  [(c t/Cur) (nodes ir/Spec) (bindings (ArrayList Binding))])
+
+(defn parse-pattern [(r (mut R))] (-> Pat)
+  (let [tok (t/peek (mut (.c r)))
+        name (if (t/accept! (mut (.c r)) "_") "_" (t/name! (mut (.c r)) "a pattern"))
+        (mut kids) (ArrayList::new [Pat] (malloc-allocator))]
+    (if (!= (ir/node-number (.nodes r) name) 0)
+        (let [(mut payload) ""
+              (mut literal) false
+              (mut value) 0]
+          (cond
+            (and (t/at? (mut (.c r)) "(") (.glued (t/peek (mut (.c r)))))
+              (do (t/advance! (mut (.c r)))
+                  (unless (t/at? (mut (.c r)) ")")
+                    (push! (mut kids) (parse-pattern (mut r)))
+                    (while (t/accept! (mut (.c r)) ",") (push! (mut kids) (parse-pattern (mut r)))))
+                  (t/expect! (mut (.c r)) ")"))
+            (and (t/at-num? (mut (.c r))) (not (t/at-line-start? (mut (.c r)))))
+              (do (set! literal true)
+                  (set! value (cast i64 (.value (t/advance! (mut (.c r)))))))
+            (and (t/at? (mut (.c r)) "-") (= (.kind (t/peek-at (mut (.c r)) 1)) t/T-NUM))
+              (do (t/advance! (mut (.c r)))
+                  (set! literal true)
+                  (set! value (- 0 (cast i64 (.value (t/advance! (mut (.c r))))))))
+            (and (t/at-ident? (mut (.c r))) (not (t/at-line-start? (mut (.c r))))
+                 (not (t/at? (mut (.c r)) "when")))
+              (set! payload (t/name! (mut (.c r)) "a payload name"))
+            :else 0)
+          (Pat :node name :var "" :payload payload :literal literal :value value :kids kids :tok tok))
+        (Pat :node "" :var name :payload "" :literal false :value 0 :kids kids :tok tok))))
+
+(defn binding-of [(r (mut R)) (name (slice u8))] (-> i64)
+  (let [(mut found) -1]
+    (for i (range 0 (len (.bindings r)))
+      (when (= (.name (get (.bindings r) i)) name) (set! found i)))
+    found))
+
+;;; The tests a pattern makes of the node `at`, and the names it binds.
+(defn match-text! [(r (mut R)) (p Pat) (at (slice u8)) (tests (mut t/Out)) (swap bool) (root bool)]
+  (-> void)
+  (cond
+    (= (.var p) "_") 0
+    (= (.var p) "self") (t/emit! (mut tests) (t/cat3 " (= " at " n)"))
+    (= (.node p) "")
+      (let [seen (binding-of (mut r) (.var p))]
+        (if (>= seen 0)
+            (t/emit! (mut tests) (t/cat4 " (= " at " " (t/cat2 (.code (get (.bindings r) seen)) ")")))
+            (push! (mut (.bindings r)) (Binding :name (.var p) :code at :is-node true))))
+    :else
+      (do (unless root
+            (t/emit! (mut tests) (t/cat4 " (= (graph/op (.g cx) " at ") ir/" (t/cat2 (.node p) ")"))))
+          (when (.literal p)
+            (t/emit! (mut tests) (t/cat4 " (= (payload-value (mut cx) " at ") " (t/cat2 (t/int-text (.value p)) ")"))))
+          (when (!= (.payload p) "")
+            (push! (mut (.bindings r))
+                   (Binding :name (.payload p) :code (t/cat3 "(payload-value (mut cx) " at ")")
+                            :is-node false)))
+          (for i (range 0 (len (.kids p)))
+            (let [slot (if (and swap (= (len (.kids p)) 2)) (- 1 i) i)]
+              (match-text! (mut r) (get (.kids p) i)
+                           (t/cat4 "(graph/input (.g cx) " at " " (t/cat2 (t/int-text slot) ")"))
+                           (mut tests) false false))))))
+
+;; ---------------------------------------------------------------- values
+
+(defn value-level [(op (slice u8))] (-> i64)
+  (cond (= op "or") 1
+        (= op "and") 2
+        (or (= op "==") (= op "!=") (= op "<") (= op "<=") (= op ">") (= op ">=")) 3
+        (= op "|") 4
+        (= op "^") 5
+        (= op "&") 6
+        (or (= op "<<") (= op ">>")) 7
+        (or (= op "+") (= op "-")) 8
+        (= op "*") 9
+        :else 0))
+
+;;; Arithmetic over constants' values, as signed 64-bit numbers.
+(defn value-primary [(r (mut R))] (-> (slice u8))
+  (let [tok (t/advance! (mut (.c r)))
+        name (.text tok)
+        call (and (t/at? (mut (.c r)) "(") (.glued (t/peek (mut (.c r)))))]
+    (cond
+      (= (.kind tok) t/T-NUM) (t/int-text (cast i64 (.value tok)))
+      (t/tok-is? tok "(")
+        (let [e (value-expr (mut r) 0)]
+          (t/expect! (mut (.c r)) ")")
+          e)
+      (t/tok-is? tok "-") (t/cat3 "(primitive/isub 0 " (value-primary (mut r)) ")")
+      (t/tok-is? tok "~") (t/cat3 "(^ " (value-primary (mut r)) " -1)")
+      (t/tok-is? tok "not") (t/cat3 "(not " (value-primary (mut r)) ")")
+      (!= (.kind tok) t/T-IDENT) (t/die (mut (.c r)) tok (t/cat2 "expected a value, found " name))
+      call
+        (do (t/advance! (mut (.c r)))
+            (let [x (value-expr (mut r) 0)]
+              (t/expect! (mut (.c r)) ")")
+              (cond
+                (= name "pow2") (t/cat3 "(bv/pow2? " x ")")
+                (= name "log2") (t/cat3 "(bv/lowest (primitive/cast u64 " x "))")
+                (= name "bits") (t/cat3 "(ir/type-bits (graph/ty (.g cx) (primitive/cast i32 " x ")))")
+                (= name "uses") (t/cat3 "(graph/use-count (.g cx) (primitive/cast i32 " x "))")
+                (= name "signed") (t/cat3 "(ir/type-signed? (graph/ty (.g cx) (primitive/cast i32 " x ")))")
+                :else (t/die (mut (.c r)) tok (t/cat2 "no function named " name)))))
+      (= name "width") "(ir/type-bits (graph/ty (.g cx) n))"
+      (>= (binding-of (mut r) name) 0)
+        (let [b (get (.bindings r) (binding-of (mut r) name))]
+          (if (.is-node b) (t/cat3 "(cast i64 " (.code b) ")") (.code b)))
+      :else (t/die (mut (.c r)) tok (t/cat2 "no such name in this rule: " name)))))
+
+(defn value-expr [(r (mut R)) (min i64)] (-> (slice u8))
+  (let [(mut left) (value-primary (mut r))
+        (mut going) true]
+    (while going
+      (let [tok (t/peek (mut (.c r)))
+            level (if (.first tok) 0 (value-level (.text tok)))]
+        (if (and (> level 0) (> level min))
+            (do (t/advance! (mut (.c r)))
+                (let [right (value-expr (mut r) level)
+                      op (.text tok)]
+                  (set! left
+                        (cond (= op "==") (t/cat4 "(= " left " " (t/cat2 right ")"))
+                              (= op "+") (t/cat4 "(primitive/iadd " left " " (t/cat2 right ")"))
+                              (= op "-") (t/cat4 "(primitive/isub " left " " (t/cat2 right ")"))
+                              (= op "*") (t/cat4 "(primitive/imul " left " " (t/cat2 right ")"))
+                              (= op "<<") (t/cat4 "(bv/shl-signed " left " " (t/cat2 right ")"))
+                              (= op ">>") (t/cat4 "(bv/sar-signed " left " " (t/cat2 right ")"))
+                              :else (t/cat4 (t/cat3 "(" op " ") left " " (t/cat2 right ")"))))))
+            (set! going false))))
+    left))
+
+;;; The right side: a node the pattern named, a node to build, or a constant.
+;;; `type` is the Coil expression for the type a constant or a typed node
+;;; built here takes.
+(defn build-text [(r (mut R)) (type (slice u8))] (-> (slice u8))
+  (let [tok (t/peek (mut (.c r)))
+        name (.text tok)
+        next (t/peek-at (mut (.c r)) 1)
+        number (if (= (.kind tok) t/T-IDENT) (ir/node-number (.nodes r) name) 0)]
+    (cond
+      ; A node to build, with the node set's builder.
+      (and (!= number 0) (t/tok-is? next "(") (.glued next))
+        (let [node (get (.nodes (.nodes r)) (- number 1))
+              typed (and (!= (.result node) "") (= (ir/type-number (.nodes r) (.result node)) 0))
+              (mut args) (ArrayList::new [(slice u8)] (malloc-allocator))
+              (mut o) (t/out-new)]
+          (t/advance! (mut (.c r)))
+          (t/advance! (mut (.c r)))
+          (when (ir/variadic? node)
+            (t/die (mut (.c r)) tok "a rule cannot build a node with a variable number of operands"))
+          ; An untyped node's operands take their type from the first operand
+          ; that is a node the pattern named.
+          (let [start (.pos (.c r))
+                (mut inner) type]
+            (unless typed
+              (let [first (t/peek (mut (.c r)))
+                    index (binding-of (mut r) (.text first))]
+                (when (and (>= index 0) (.is-node (get (.bindings r) index)))
+                  (set! inner (t/cat3 "(graph/ty (.g cx) " (.code (get (.bindings r) index)) ")")))))
+            (set! (.pos (.c r)) start)
+            (unless (t/at? (mut (.c r)) ")")
+              (push! (mut args) (build-text (mut r) inner))
+              (while (t/accept! (mut (.c r)) ",") (push! (mut args) (build-text (mut r) inner)))))
+          (t/expect! (mut (.c r)) ")")
+          (when (!= (len args) (ir/fixed-count node))
+            (t/die (mut (.c r)) tok (t/cat4 name " takes " (t/int-text (ir/fixed-count node)) " operands")))
+          (t/emit! (mut o) (t/cat3 "(ir/" (ir/builder-name name) " (mut (.g cx))"))
+          (when typed (t/emit! (mut o) (t/cat2 " " type)))
+          (for arg args (t/emit! (mut o) (t/cat2 " " arg)))
+          (t/emit! (mut o) ")")
+          (t/text-of (mut o)))
+      ; A node the pattern named.
+      (and (= (.kind tok) t/T-IDENT) (>= (binding-of (mut r) name) 0)
+           (.is-node (get (.bindings r) (binding-of (mut r) name))))
+        (do (t/advance! (mut (.c r)))
+            (.code (get (.bindings r) (binding-of (mut r) name))))
+      ; Otherwise a constant, of the type this place has.
+      :else (t/cat4 "(make-const (mut cx) " type " " (t/cat2 (value-expr (mut r) 0) ")")))))
+
+;; ---------------------------------------------------------------- checking the rules
+
+;;; Whether a pattern can be built as a value of parameters and constants: no
+;;; `self`, and only nodes that are values of their inputs.
+(defn checkable? [(r (mut R)) (p Pat)] (-> bool)
+  (cond (= (.var p) "self") false
+        (= (.node p) "") true
+        :else
+          (let [node (get (.nodes (.nodes r)) (- (ir/node-number (.nodes r) (.node p)) 1))
+                (mut ok) (and (ir/pure? node) (not (ir/variadic? node)) (!= (.role node) "param"))]
+            (for kid (.kids p) (unless (checkable? (mut r) kid) (set! ok false)))
+            ok)))
+
+;;; Coil that builds a pattern: each variable a parameter, each constant one of
+;;; a few telling values, each type the trial's main type or, now and then,
+;;; another. `vars` gathers the variables' names, whose parameters are bound
+;;; around the whole.
+(defn instance-text [(r (mut R)) (p Pat) (vars (mut (ArrayList (slice u8))))] (-> (slice u8))
+  (cond
+    (= (.var p) "_")
+      (do (push! (mut vars) "_")
+          (t/cat2 "v*" (t/int-text (- (len vars) 1))))
+    (= (.node p) "")
+      (do (when (< (t/index-of vars (.var p)) 0) (push! (mut vars) (.var p)))
+          (t/cat2 "v*" (t/int-text (t/index-of vars (.var p)))))
+    :else
+      (let [node (get (.nodes (.nodes r)) (- (ir/node-number (.nodes r) (.node p)) 1))
+            typed (and (!= (.result node) "") (= (ir/type-number (.nodes r) (.result node)) 0))
+            (mut o) (t/out-new)]
+        (if (= (.role node) "const")
+            (t/cat3 "(let [t* (deviate! (mut rnd) main)] (ir/const! (mut (.g cx)) t* (bv/cut "
+                    (if (.literal p)
+                        (t/cat3 "(primitive/cast u64 " (t/int-text (.value p)) ")")
+                        "(interesting! (mut rnd))")
+                    " (ir/type-bits t*))))")
+            (do (t/emit! (mut o) (t/cat3 "(ir/" (ir/builder-name (.node p)) " (mut (.g cx))"))
+                (when typed (t/emit! (mut o) " (deviate! (mut rnd) main)"))
+                (for kid (.kids p) (t/emit! (mut o) (t/cat2 " " (instance-text (mut r) kid (mut vars)))))
+                (t/emit! (mut o) ")")
+                (t/text-of (mut o)))))))
+
+;;; `(defn instance-K …)`: rule K's pattern as a graph, or 0 if it cannot be checked.
+(defn instance-defn [(r (mut R)) (rule i64) (p Pat)] (-> (slice u8))
+  (let [(mut vars) (ArrayList::new [(slice u8)] (malloc-allocator))
+        (mut o) (t/out-new)]
+    (t/line! (mut o) (t/cat3 "(defn instance-" (t/int-text rule)
+                             " [(cx (mut st/State)) (rnd (mut Rnd)) (main i32)] (-> i32)"))
+    (if (not (checkable? (mut r) p))
+        (t/line! (mut o) "  0)")
+        (let [body (instance-text (mut r) p (mut vars))]
+          (t/emit! (mut o) "  (let [")
+          (for i (range 0 (len vars))
+            (t/emit! (mut o)
+                     (t/cat4 "v*" (t/int-text i) " (ir/param! (mut (.g cx)) (deviate! (mut rnd) main) "
+                             (t/cat2 (t/int-text i) ") "))))
+          (t/line! (mut o) (t/cat3 "] " body "))"))))
+    (t/text-of (mut o))))
+
+;;; The checker, the same for every rule set but for the dispatch to instances.
+(defn emit-checker! [(o (mut t/Out)) (rules i64)] (-> void)
+  (t/line! (mut o) "(defstruct Rnd [(state u64)])")
+  (t/line! (mut o) "(defn roll! [(rnd (mut Rnd))] (-> u64)")
+  (t/line! (mut o) "  (let [(mut x) (.state rnd)]")
+  (t/line! (mut o) "    (set! x (^ x (<< x 13))) (set! x (^ x (>> x 7))) (set! x (^ x (<< x 17)))")
+  (t/line! (mut o) "    (set! (.state rnd) x)")
+  (t/line! (mut o) "    x))")
+  (t/line! (mut o) "(defn value-type! [(rnd (mut Rnd))] (-> i32)")
+  (t/line! (mut o) "  (let [(mut type) (: 0 i32)]")
+  (t/line! (mut o) "    (while (not (ir/value-type? type))")
+  (t/line! (mut o) "      (set! type (cast i32 (+ 1 (cast i64 (% (roll! (mut rnd)) (cast u64 ir/TYPES)))))))")
+  (t/line! (mut o) "    type))")
+  (t/line! (mut o) ";;; The trial's main type, or one time in three some other.")
+  (t/line! (mut o) "(defn deviate! [(rnd (mut Rnd)) (main i32)] (-> i32)")
+  (t/line! (mut o) "  (if (= (% (roll! (mut rnd)) 3) 0) (value-type! (mut rnd)) main))")
+  (t/line! (mut o) ";;; Values that find mistakes: zero, one, the edges of every width, and noise.")
+  (t/line! (mut o) "(defn interesting! [(rnd (mut Rnd))] (-> u64)")
+  (t/line! (mut o) "  (let [k (% (roll! (mut rnd)) 16)]")
+  (t/line! (mut o) "    (cond (= k 0) (: 0 u64) (= k 1) (: 1 u64) (= k 2) (: 0xFFFFFFFFFFFFFFFF u64)")
+  (t/line! (mut o) "          (= k 3) (: 2 u64) (= k 4) (: 0x7F u64) (= k 5) (: 0x80 u64) (= k 6) (: 0xFF u64)")
+  (t/line! (mut o) "          (= k 7) (: 0x7FFF u64) (= k 8) (: 0x8000 u64) (= k 9) (: 0x7FFFFFFF u64)")
+  (t/line! (mut o) "          (= k 10) (: 0x80000000 u64) (= k 11) (: 0x8000000000000000 u64)")
+  (t/line! (mut o) "          (= k 12) (<< (: 1 u64) (% (roll! (mut rnd)) 64))")
+  (t/line! (mut o) "          (= k 13) (% (roll! (mut rnd)) 64)")
+  (t/line! (mut o) "          :else (roll! (mut rnd)))))")
+  (t/line! (mut o) "(defn instance [(cx (mut st/State)) (rnd (mut Rnd)) (rule i64) (main i32)] (-> i32)")
+  (t/line! (mut o) "  (match rule")
+  (for k (range 1 (+ rules 1))
+    (t/line! (mut o) (t/cat4 "    (" (t/int-text k) " (instance-" (t/cat2 (t/int-text k) " (mut cx) (mut rnd) main))"))))
+  (t/line! (mut o) "    (_ 0)))")
+  (t/line! (mut o) ";;; Every rule against the nodes' meanings: its pattern is built over")
+  (t/line! (mut o) ";;; parameters with `tries` choices of types and constants, and wherever a")
+  (t/line! (mut o) ";;; rule applies, the node and its replacement must have one type and one")
+  (t/line! (mut o) ";;; value for 64 choices of the parameters. Prints what is wrong and returns")
+  (t/line! (mut o) ";;; how many rules are wrong or were never seen to apply.")
+  (t/line! (mut o) "(defn check-rules [(cx (mut st/State)) (tries i64)] (-> i64)")
+  (t/line! (mut o) "  (let [(mut rnd) (Rnd :state (: 0x9E3779B97F4A7C15 u64))")
+  (t/line! (mut o) "        (mut applied) (ArrayList::new [i64] (.alc cx))")
+  (t/line! (mut o) "        (mut wrong) (ArrayList::new [bool] (.alc cx))")
+  (t/line! (mut o) "        (mut args) (ArrayList::new [u64] (.alc cx))")
+  (t/line! (mut o) "        (mut bad) 0]")
+  (t/line! (mut o) "    (for _ (range 0 (+ RULES 1)) (push! (mut applied) 0) (push! (mut wrong) false))")
+  (t/line! (mut o) "    (for _ (range 0 8) (push! (mut args) 0))")
+  (t/line! (mut o) "    (for rule (range 1 (+ RULES 1))")
+  (t/line! (mut o) "      (let [(mut checkable) true]")
+  (t/line! (mut o) "        (for _ (range 0 tries)")
+  (t/line! (mut o) "          (when checkable")
+  (t/line! (mut o) "            (graph/release! (mut (.g cx)))")
+  (t/line! (mut o) "            (set! (.g cx) (graph/create (.alc cx)))")
+  (t/line! (mut o) "            (let [main (value-type! (mut rnd))")
+  (t/line! (mut o) "                  root (instance (mut cx) (mut rnd) rule main)]")
+  (t/line! (mut o) "              (if (= root 0)")
+  (t/line! (mut o) "                  (set! checkable false)")
+  (t/line! (mut o) "                  (when (= (ir/verify (.g cx)) \"\")")
+  (t/line! (mut o) "                    (set! (.fired cx) 0)")
+  (t/line! (mut o) "                    (let [new (simplify (mut cx) root)")
+  (t/line! (mut o) "                          fired (.fired cx)]")
+  (t/line! (mut o) "                      (when (and (!= new 0) (> fired 0) (not (get wrong fired)))")
+  (t/line! (mut o) "                        (set! (mut applied) fired (+ (get applied fired) 1))")
+  (t/line! (mut o) "                        (cond")
+  (t/line! (mut o) "                          (!= (graph/ty (.g cx) new) (graph/ty (.g cx) root))")
+  (t/line! (mut o) "                            (do (println \"  WRONG {}: a {} becomes a {}\" (rule-name fired)")
+  (t/line! (mut o) "                                         (ir/type-name (graph/ty (.g cx) root))")
+  (t/line! (mut o) "                                         (ir/type-name (graph/ty (.g cx) new)))")
+  (t/line! (mut o) "                                (set! (mut wrong) fired true))")
+  (t/line! (mut o) "                          (!= (ir/verify (.g cx)) \"\")")
+  (t/line! (mut o) "                            (do (println \"  WRONG {}: it builds a node that is not well formed: {}\"")
+  (t/line! (mut o) "                                         (rule-name fired) (ir/verify (.g cx)))")
+  (t/line! (mut o) "                                (set! (mut wrong) fired true))")
+  (t/line! (mut o) "                          :else")
+  (t/line! (mut o) "                            (for _ (range 0 64)")
+  (t/line! (mut o) "                              (unless (get wrong fired)")
+  (t/line! (mut o) "                                (for i (range 0 8) (set! (mut args) i (interesting! (mut rnd))))")
+  (t/line! (mut o) "                                (let [before (ir/eval-node (.g cx) (slice args) root)")
+  (t/line! (mut o) "                                      after (ir/eval-node (.g cx) (slice args) new)]")
+  (t/line! (mut o) "                                  (when (!= before after)")
+  (t/line! (mut o) "                                    (println \"  WRONG {}: on a {} with parameters {:x} {:x} {:x}, {:x} became {:x}\"")
+  (t/line! (mut o) "                                             (rule-name fired) (ir/type-name (graph/ty (.g cx) root))")
+  (t/line! (mut o) "                                             (get args 0) (get args 1) (get args 2) before after)")
+  (t/line! (mut o) "                                    (set! (mut wrong) fired true)))))))))))))")
+  (t/line! (mut o) "        (unless checkable")
+  (t/line! (mut o) "          (println \"  not checked, its pattern is not a value of its inputs alone: {}\" (rule-name rule))")
+  (t/line! (mut o) "          (set! (mut applied) rule -1))))")
+  (t/line! (mut o) "    (for rule (range 1 (+ RULES 1))")
+  (t/line! (mut o) "      (when (get wrong rule) (set! bad (+ bad 1)))")
+  (t/line! (mut o) "      (when (= (get applied rule) 0)")
+  (t/line! (mut o) "        (println \"  never seen to apply: {}\" (rule-name rule))")
+  (t/line! (mut o) "        (set! bad (+ bad 1))))")
+  (t/line! (mut o) "    bad))"))
+
+;; ---------------------------------------------------------------- the module
+
+(defn module-name! [(c (mut t/Cur))] (-> (slice u8))
+  (let [(mut name) (t/name! (mut c) "a module name")]
+    (while (and (t/at? (mut c) ".") (.glued (t/peek (mut c))))
+      (t/advance! (mut c))
+      (set! name (t/cat3 name "." (t/name! (mut c) "a module name"))))
+    name))
+
+(defn module-text [(context Code)] (-> (slice u8))
+  (let [p (project/open context)
+        path (t/path-of context)
+        (mut c) (t/cursor (t/source-of context) path)]
+    (t/expect! (mut c) "rewrite")
+    (t/expect! (mut c) "in")
+    (let [unit (module-name! (mut c))
+          at (t/peek-at (mut c) 1)
+          nodes-module (do (t/expect! (mut c) "nodes") (module-name! (mut c)))
+          nodes-file (project/file-of p nodes-module (.line at) (.col at))
+          (mut r) (R
+                    :c c
+                    :nodes (ir/parse (project/read-file nodes-file path) nodes-file)
+                    :bindings (ArrayList::new [Binding] (malloc-allocator)))
+          (mut groups) (ArrayList::new [(slice u8)] (malloc-allocator))
+          (mut texts) (ArrayList::new [(slice u8)] (malloc-allocator))
+          (mut names) (t/out-new)
+          (mut instances) (t/out-new)
+          (mut o) (t/out-new)
+          (mut rule) 0]
+      (t/emit! (mut names) "(def RULE-NAMES [\"folding\"")
+      (while (not (t/eof? (mut (.c r))))
+        (let [tok (t/advance! (mut (.c r)))]
+          (unless (t/tok-is? tok "rule")
+            (t/die (mut (.c r)) tok (t/cat2 "expected rule, found " (.text tok))))
+          (let [name (t/name! (mut (.c r)) "a rule name")]
+            (t/expect! (mut (.c r)) ":")
+            (let [pattern (parse-pattern (mut r))
+                  commutative (and (!= (.node pattern) "")
+                                   (= (len (.kids pattern)) 2)
+                                   (.commutative (get (.nodes (.nodes r))
+                                                      (- (ir/node-number (.nodes r) (.node pattern)) 1)))
+                                   (!= (.node (get (.kids pattern) 0)) "")
+                                   (= (.node (get (.kids pattern) 1)) ""))
+                  start (.pos (.c r))
+                  (mut group) -1]
+              (when (= (.node pattern) "")
+                (t/die (mut (.c r)) tok "a rule's pattern starts at a node"))
+              (set! group (t/index-of groups (.node pattern)))
+              (when (< group 0)
+                (push! (mut groups) (.node pattern))
+                (push! (mut texts) "")
+                (set! group (- (len groups) 1)))
+              (set! rule (+ rule 1))
+              (t/emit! (mut names) (t/cat3 " \"" name "\""))
+              (t/emit! (mut instances) (instance-defn (mut r) rule pattern))
+              (for way (range 0 (if commutative 2 1))
+                (set! (.pos (.c r)) start)
+                (clear! (mut (.bindings r)))
+                (let [(mut tests) (t/out-new)]
+                  (match-text! (mut r) pattern "n" (mut tests) (= way 1) true)
+                  (when (t/accept! (mut (.c r)) "when")
+                    (t/emit! (mut tests) (t/cat2 " " (value-expr (mut r) 0))))
+                  (t/expect! (mut (.c r)) "=>")
+                  (let [built (build-text (mut r) "(graph/ty (.g cx) n)")]
+                    (set! (mut texts) group
+                          (t/cat4 (get texts group) "        (and true" (t/text-of (mut tests))
+                                  (t/cat4 ") (do (set! (.fired cx) " (t/int-text rule) ") "
+                                          (t/cat2 built ")\n")))))))))))
+      (t/line! (mut names) "])")
+      (t/line! (mut o) (t/cat3 "(depends-on \"" nodes-file "\")"))
+      (t/line! (mut o) "(import \"coil.primitive\" :as primitive)")
+      (t/line! (mut o) "(import \"coil.arraylist\" :use [ArrayList])")
+      (t/line! (mut o) "(import \"rt.graph\" :as graph)")
+      (t/line! (mut o) "(import \"rt.bits\" :as bv)")
+      (t/line! (mut o) (t/cat3 "(import \"" unit "\" :as st)"))
+      (t/line! (mut o) (t/cat3 "(import \"" nodes-module "\" :as ir)"))
+      (t/emit! (mut o) (t/text-of (mut names)))
+      (t/line! (mut o) (t/cat3 "(const RULES " (t/int-text rule) ")"))
+      (t/line! (mut o) "(defn rule-name [(rule i64)] (-> (slice u8)) (get RULE-NAMES rule))")
+      (t/line! (mut o) "(defn payload-value [(cx (mut st/State)) (n i32)] (-> i64)")
+      (t/line! (mut o) "  (if (ir/type-signed? (graph/ty (.g cx) n))")
+      (t/line! (mut o) "      (bv/signed (graph/payload (.g cx) n) (ir/type-bits (graph/ty (.g cx) n)))")
+      (t/line! (mut o) "      (primitive/cast i64 (graph/payload (.g cx) n))))")
+      (t/line! (mut o) "(defn make-const [(cx (mut st/State)) (type i32) (v i64)] (-> i32)")
+      (t/line! (mut o) "  (ir/const! (mut (.g cx)) type (bv/cut (primitive/cast u64 v) (ir/type-bits type))))")
+      (t/line! (mut o) ";;; What `n` may be replaced by, or 0. `(.fired cx)` is the rule that said so.")
+      (t/line! (mut o) "(defn simplify [(cx (mut st/State)) (n i32)] (-> i32)")
+      (t/line! (mut o) "  (match (graph/op (.g cx) n)")
+      (for i (range 0 (len groups))
+        (t/line! (mut o) (t/cat3 "    (" (t/int-text (ir/node-number (.nodes r) (get groups i))) " (cond"))
+        (t/emit! (mut o) (get texts i))
+        (t/line! (mut o) "        :else 0))"))
+      (t/line! (mut o) "    (_ 0)))")
+      (emit-engine! (mut o) (.nodes r))
+      (t/emit! (mut o) (t/text-of (mut instances)))
+      (emit-checker! (mut o) rule)
+      (t/text-of (mut o)))))
+
+(defn const-name [(spec ir/Spec)] (-> (slice u8))
+  (let [(mut name) ""]
+    (for node (.nodes spec) (when (= (.role node) "const") (set! name (.name node))))
+    name))
+
+;;; Folding and the worklist: the same for every rule set.
+(defn emit-engine! [(o (mut t/Out)) (spec ir/Spec)] (-> void)
+  (let [k (const-name spec)]
+    (t/line! (mut o) ";;; A node whose inputs are all constants is the constant its meaning gives.")
+    (t/line! (mut o) "(defn fold [(cx (mut st/State)) (n i32)] (-> i32)")
+    (t/line! (mut o) "  (let [operation (graph/op (.g cx) n)")
+    (t/line! (mut o) "        count (graph/arity (.g cx) n)]")
+    (t/line! (mut o) "    (if (or (not (ir/foldable? operation)) (= count 0) (> count 3))")
+    (t/line! (mut o) "        0")
+    (t/line! (mut o) "        (let [a (graph/input (.g cx) n 0)")
+    (t/line! (mut o) "              b (if (> count 1) (graph/input (.g cx) n 1) a)")
+    (t/line! (mut o) "              c (if (> count 2) (graph/input (.g cx) n 2) a)]")
+    (t/line! (mut o) (t/cat3 "          (if (and (= (graph/op (.g cx) a) ir/" k ")"))
+    (t/line! (mut o) (t/cat3 "                   (= (graph/op (.g cx) b) ir/" k ")"))
+    (t/line! (mut o) (t/cat3 "                   (= (graph/op (.g cx) c) ir/" k "))"))
+    (t/line! (mut o) "              (do (set! (.fired cx) 0)")
+    (t/line! (mut o) "                  (ir/const! (mut (.g cx)) (graph/ty (.g cx) n)")
+    (t/line! (mut o) "                             (ir/eval operation (ir/type-bits (graph/ty (.g cx) n))")
+    (t/line! (mut o) "                                      (ir/type-bits (graph/ty (.g cx) a))")
+    (t/line! (mut o) "                                      (graph/payload (.g cx) a) (graph/payload (.g cx) b)")
+    (t/line! (mut o) "                                      (graph/payload (.g cx) c))))")
+    (t/line! (mut o) "              0)))))")
+    (t/line! (mut o) "(defn enqueue! [(work (mut (ArrayList i32))) (queued (mut (ArrayList bool))) (n i32)] (-> void)")
+    (t/line! (mut o) "  (while (<= (len queued) (cast i64 n)) (push! (mut queued) false))")
+    (t/line! (mut o) "  (unless (get queued (cast i64 n))")
+    (t/line! (mut o) "    (set! (mut queued) (cast i64 n) true)")
+    (t/line! (mut o) "    (push! (mut work) n)))")
+    (t/line! (mut o) ";;; Every use of `old` becomes a use of `new`; the users are looked at again,")
+    (t/line! (mut o) ";;; and `old` goes, with whatever only it was using.")
+    (t/line! (mut o) "(defn replace! [(cx (mut st/State)) (work (mut (ArrayList i32))) (queued (mut (ArrayList bool)))")
+    (t/line! (mut o) "                (old i32) (new i32)] (-> void)")
+    (t/line! (mut o) "  (let [(mut e) (graph/first-use (.g cx) old)]")
+    (t/line! (mut o) "    (while (>= e 0)")
+    (t/line! (mut o) "      (enqueue! (mut work) (mut queued) (graph/user (.g cx) e))")
+    (t/line! (mut o) "      (set! e (graph/next-use (.g cx) e))))")
+    (t/line! (mut o) "  (graph/replace-uses! (mut (.g cx)) old new)")
+    (t/line! (mut o) "  (enqueue! (mut work) (mut queued) new)")
+    (t/line! (mut o) "  (when (ir/pure? (graph/op (.g cx) old)) (graph/kill! (mut (.g cx)) old ir/PURE))")
+    (t/line! (mut o) "  (do))")
+    (t/line! (mut o) ";;; Apply folding and the rules until nothing changes. Returns how many")
+    (t/line! (mut o) ";;; replacements were made; `counts`, if not empty, gets one more per rule fired.")
+    (t/line! (mut o) "(defn run-counting [(cx (mut st/State)) (counts (mut (ArrayList i64)))] (-> i64)")
+    (t/line! (mut o) "  (let [(mut work) (ArrayList::new [i32] (.alc cx))")
+    (t/line! (mut o) "        (mut queued) (ArrayList::new [bool] (.alc cx))")
+    (t/line! (mut o) "        (mut changes) 0]")
+    (t/line! (mut o) "    (for i (range 1 (graph/size (.g cx)))")
+    (t/line! (mut o) "      (let [n (cast i32 (- (graph/size (.g cx)) i))]")
+    (t/line! (mut o) "        (unless (graph/dead? (.g cx) n) (enqueue! (mut work) (mut queued) n))))")
+    (t/line! (mut o) "    (while (> (len work) 0)")
+    (t/line! (mut o) "      (let [n (get work (- (len work) 1))]")
+    (t/line! (mut o) "        (pop! (mut work))")
+    (t/line! (mut o) "        (set! (mut queued) (cast i64 n) false)")
+    (t/line! (mut o) "        (unless (graph/dead? (.g cx) n)")
+    (t/line! (mut o) "          (let [operation (graph/op (.g cx) n)]")
+    (t/line! (mut o) "            (if (and (ir/pure? operation) (= (graph/use-count (.g cx) n) 0))")
+    (t/line! (mut o) "                (do (graph/kill! (mut (.g cx)) n ir/PURE) (do))")
+    (t/line! (mut o) "                (do")
+    (t/line! (mut o) "                  ; A commutative node keeps its operands in the builder's order.")
+    (t/line! (mut o) "                  (when (and (ir/commutative? operation) (= (graph/arity (.g cx) n) 2))")
+    (t/line! (mut o) "                    (let [a (graph/input (.g cx) n 0)")
+    (t/line! (mut o) "                          b (graph/input (.g cx) n 1)]")
+    (t/line! (mut o) "                      (when (ir/swap? (.g cx) a b)")
+    (t/line! (mut o) "                        (graph/set-input! (mut (.g cx)) n 0 b)")
+    (t/line! (mut o) "                        (graph/set-input! (mut (.g cx)) n 1 a))))")
+    (t/line! (mut o) "                  (let [folded (fold (mut cx) n)")
+    (t/line! (mut o) "                        simpler (if (!= folded 0) folded (simplify (mut cx) n))")
+    (t/line! (mut o) "                        ; Unchanged by any rule: it may now equal a node already there.")
+    (t/line! (mut o) "                        other (if (and (= simpler 0) (ir/pure? operation))")
+    (t/line! (mut o) "                                  (graph/canonical! (mut (.g cx)) n)")
+    (t/line! (mut o) "                                  simpler)]")
+    (t/line! (mut o) "                    (when (and (!= other 0) (!= other n))")
+    (t/line! (mut o) "                      (when (and (!= simpler 0) (> (len counts) (.fired cx)))")
+    (t/line! (mut o) "                        (set! (mut counts) (.fired cx) (+ (get counts (.fired cx)) 1)))")
+    (t/line! (mut o) "                      (set! changes (+ changes 1))")
+    (t/line! (mut o) "                      (replace! (mut cx) (mut work) (mut queued) n other)))))))))")
+    (t/line! (mut o) "    (free! (mut work))")
+    (t/line! (mut o) "    (free! (mut queued))")
+    (t/line! (mut o) "    (st/grow-nodes! (mut cx))")
+    (t/line! (mut o) "    changes))")
+    (t/line! (mut o) "(defn run [(cx (mut st/State))] (-> i64)")
+    (t/line! (mut o) "  (let [(mut none) (ArrayList::new [i64] (.alc cx))]")
+    (t/line! (mut o) "    (run-counting (mut cx) (mut none))))")))

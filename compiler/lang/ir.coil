@@ -27,12 +27,16 @@
 
 (defstruct Constraint [(var (slice u8)) (set (slice u8))])
 
+;;; `bits(narrow) < bits(wide)`, or `<=` when `strict` is false.
+(defstruct Width [(narrow (slice u8)) (wide (slice u8)) (strict bool)])
+
 ;;; meaning: the Coil expression for the node's value over a, b, c, or "".
 (defstruct Node
   [(name (slice u8))
    (operands (ArrayList Operand))
    (result (slice u8))
    (constraints (ArrayList Constraint))
+   (widths (ArrayList Width))
    (role (slice u8))
    (commutative bool)
    (payload (slice u8))
@@ -247,6 +251,7 @@
                      :operands (ArrayList::new [Operand] (malloc-allocator))
                      :result ""
                      :constraints (ArrayList::new [Constraint] (malloc-allocator))
+                     :widths (ArrayList::new [Width] (malloc-allocator))
                      :role "pure"
                      :commutative false
                      :payload ""
@@ -271,9 +276,20 @@
         (push! (mut (.constraints node))
                (Constraint :var (.result node) :set (t/name! (mut c) "a set"))))
       (while (t/accept! (mut c) ",")
-        (let [var (t/name! (mut c) "a type variable")]
-          (t/expect! (mut c) "in")
-          (push! (mut (.constraints node)) (Constraint :var var :set (t/name! (mut c) "a set"))))))
+        (if (and (t/at? (mut c) "bits") (t/tok-is? (t/peek-at (mut c) 1) "("))
+            ; `bits(S) < bits(T)`: how two of the node's types compare in width.
+            (do (t/advance! (mut c)) (t/advance! (mut c))
+                (let [narrow (t/name! (mut c) "a type variable")]
+                  (t/expect! (mut c) ")")
+                  (let [strict (if (t/accept! (mut c) "<") true (do (t/expect! (mut c) "<=") false))]
+                    (t/expect! (mut c) "bits")
+                    (t/expect! (mut c) "(")
+                    (push! (mut (.widths node))
+                           (Width :narrow narrow :wide (t/name! (mut c) "a type variable") :strict strict))
+                    (t/expect! (mut c) ")"))))
+            (let [var (t/name! (mut c) "a type variable")]
+              (t/expect! (mut c) "in")
+              (push! (mut (.constraints node)) (Constraint :var var :set (t/name! (mut c) "a set")))))))
     (for k (.constraints node)
       (unless (set-declared? spec (.set k)) (t/die (mut c) at (t/cat2 "no set named " (.set k)))))
     (let [(mut going) true]
@@ -334,6 +350,7 @@
         (t/cat3 "(graph/ty g (graph/input g n " (t/int-text first) "))"))))
 
 (defn emit-numbers! [(o (mut t/Out)) (spec Spec)] (-> void)
+  (t/line! (mut o) (t/cat3 "(const TYPES " (t/int-text (len (.types spec))) ")"))
   (for i (range 0 (len (.types spec)))
     (t/line! (mut o)
              (t/cat4 "(const T-" (t/upper (.name (get (.types spec) i))) " "
@@ -507,6 +524,13 @@
         (bad! (mut o)
              (t/cat4 "(not (in-" (.set k) "? " (t/cat2 (type-text spec node (.var k)) "))"))
              (.name node) (t/cat4 "type " (.var k) " is not in " (.set k))))
+      (for w (.widths node)
+        (bad! (mut o)
+              (t/cat4 (if (.strict w) "(>= (type-bits " "(> (type-bits ")
+                      (type-text spec node (.narrow w)) ") (type-bits "
+                      (t/cat2 (type-text spec node (.wide w)) "))"))
+              (.name node)
+              (t/cat4 (.narrow w) (if (.strict w) " is not narrower than " " is wider than ") (.wide w) "")))
       (t/line! (mut o) "        :else \"\"))")))
   (t/line! (mut o) "      (_ \"\"))))")
   (t/line! (mut o) ";;; The first thing wrong with any node, or \"\".")
@@ -532,6 +556,20 @@
 ;;; The reference interpreter, the same text for every node set: it reads only
 ;;; roles, the type table and `eval`.
 (defn emit-interpreter! [(o (mut t/Out))] (-> void)
+  (t/line! (mut o) ";;; The value of a node that depends only on parameters and constants.")
+  (t/line! (mut o) "(defn eval-node [(g graph/Graph) (args (slice u64)) (n i32)] (-> u64)")
+  (t/line! (mut o) "  (let [operation (graph/op g n)")
+  (t/line! (mut o) "        r (get ROLES (cast i64 operation))]")
+  (t/line! (mut o) "    (cond")
+  (t/line! (mut o) "      (= r 10) (graph/payload g n)")
+  (t/line! (mut o) "      (= r 9) (bv/cut (get args (cast i64 (graph/payload g n))) (type-bits (graph/ty g n)))")
+  (t/line! (mut o) "      :else")
+  (t/line! (mut o) "        (let [k (graph/arity g n)")
+  (t/line! (mut o) "              a (if (> k 0) (eval-node g args (graph/input g n 0)) (: 0 u64))")
+  (t/line! (mut o) "              b (if (> k 1) (eval-node g args (graph/input g n 1)) (: 0 u64))")
+  (t/line! (mut o) "              c (if (> k 2) (eval-node g args (graph/input g n 2)) (: 0 u64))")
+  (t/line! (mut o) "              bits (if (> k 0) (type-bits (graph/ty g (graph/input g n 0))) 0)]")
+  (t/line! (mut o) "          (eval operation (type-bits (graph/ty g n)) bits a b c)))))")
   (t/line! (mut o) ";;; A reference interpreter: what a graph computes, straight from the nodes'")
   (t/line! (mut o) ";;; meanings. Control is followed from START; a region's phis take their values")
   (t/line! (mut o) ";;; together as it is entered.")

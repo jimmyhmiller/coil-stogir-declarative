@@ -8,6 +8,7 @@
 (import "lang.isa" :as isa)
 (import "lang.lower" :as lower)
 (import "lang.abi" :as abi)
+(import "lang.rewrite" :as rewrite)
 
 (reader-provider "lang.readers" read-any)
 
@@ -23,4 +24,5 @@
           (t/ends-with path ".isa") (isa/module-text src path)
           (t/ends-with path ".lower") (lower/module-text context)
           (t/ends-with path ".abi") (abi/module-text context)
+          (t/ends-with path ".rewrite") (rewrite/module-text context)
           :else (t/fail-at path 1 1 "no language reads a file with this extension"))))

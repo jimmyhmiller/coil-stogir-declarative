@@ -267,3 +267,31 @@
         (set! (.interned g) (+ (.interned g) 1))
         (set! found n)))
     found))
+
+;;; A node that is the same as `n` in operation, type, payload and inputs and is
+;;; not `n`, or 0. If there is none, `n` is now the one later lookups find. For
+;;; a node that is a value of its inputs alone, after its inputs changed.
+(defn canonical! [(g (mut Graph)) (n i32)] (-> i32)
+  (let [count (arity g n)]
+    (if (> count 3)
+        0
+        (do
+          (when (> (* (.interned g) 2) (len (.table g))) (grow-table! (mut g)))
+          (let [a (if (> count 0) (input g n 0) 0)
+                b (if (> count 1) (input g n 1) 0)
+                c (if (> count 2) (input g n 2) 0)
+                mask (cast u64 (- (len (.table g)) 1))
+                (mut at) (cast i64 (& (hash-node (op g n) (ty g n) (payload g n) a b c) mask))
+                (mut found) (: 0 i32)
+                (mut present) false]
+            (while (and (= found 0) (!= (get (.table g) at) 0))
+              (let [x (get (.table g) at)]
+                (cond (= x n) (set! present true)
+                      (and (not (dead? g x)) (same? g x (op g n) (ty g n) (payload g n) count a b c))
+                        (set! found x)
+                      :else 0)
+                (set! at (cast i64 (& (cast u64 (+ at 1)) mask)))))
+            (when (and (= found 0) (not present))
+              (set! (mut (.table g)) at n)
+              (set! (.interned g) (+ (.interned g) 1)))
+            found)))))
