@@ -71,7 +71,9 @@
                  (not (t/at? (mut (.c l)) "when")))
               (set! payload (t/name! (mut (.c l)) "a payload name"))
             :else 0)
-          (Pat :node name :var "" :payload payload :kids kids :once once :tok tok))
+          ; `… as v` names the node the pattern matched, for a guard to ask of.
+          (Pat :node name :var (if (t/accept! (mut (.c l)) "as") (t/name! (mut (.c l)) "a name for the node") "")
+               :payload payload :kids kids :once once :tok tok))
         (Pat :node "" :var name :payload "" :kids kids :once false :tok tok))))
 
 ;;; The tests a pattern makes of the node `at`, and the names it binds.
@@ -80,6 +82,8 @@
       (unless (= (.var p) "_")
         (push! (mut (.bindings l)) (Binding :name (.var p) :code at :is-node true)))
       (do (t/emit! (mut tests) (t/cat4 " (= (graph/op (.g cx) " at ") ir/" (t/cat2 (.node p) ")")))
+          (when (!= (.var p) "")
+            (push! (mut (.bindings l)) (Binding :name (.var p) :code at :is-node true)))
           ; `once`: only where the pass that stores machine code says this node
           ; may be computed as part of the rule's root.
           (when (.once p) (t/emit! (mut tests) (t/cat3 " (mach/fusable (mut cx) " at " n)")))
@@ -398,7 +402,7 @@
                 ; `is copy`: its instruction copies its second parameter to its
                 ; first. `is jump`: it only goes to its label. `is return`: it
                 ; leaves the function.
-                (let [kind (if (t/accept! (mut (.c l)) "is") (t/name! (mut (.c l)) "copy, jump or return") "")
+                (let [kind (if (t/accept! (mut (.c l)) "is") (t/name! (mut (.c l)) "what the template is") "")
                       guard (if (t/accept! (mut (.c l)) "when") (value-expr (mut l) 0 false) "true")]
                   (t/expect! (mut (.c l)) "=")
                   (let [body (sequence-text (mut l))
@@ -407,8 +411,19 @@
                                              (t/cat2 (get (.params l) 1) ")"))
                                    (= kind "jump") " (mach/mark-jump (mut cx))"
                                    (= kind "return") " (mach/mark-return (mut cx))"
+                                   ; A frame object read into, written from or its
+                                   ; address given to the first parameter; the second
+                                   ; says how far below the frame record, the third how
+                                   ; many bytes. What the instruction is is settled when
+                                   ; the frame is laid out.
+                                   (or (= kind "object-read") (= kind "object-write") (= kind "object-address"))
+                                     (t/cat4 (t/cat3 " (mach/mark-object (mut cx) "
+                                                     (cond (= kind "object-read") "8" (= kind "object-write") "9" :else "10")
+                                                     " ")
+                                             (get (.params l) 0) " "
+                                             (t/cat4 (get (.params l) 1) " " (get (.params l) 2) ")"))
                                    (= kind "") ""
-                                   :else (t/die (mut (.c l)) tok "a template is copy, jump or return"))]
+                                   :else (t/die (mut (.c l)) tok "a template is copy, jump, return, object-read, object-write or object-address"))]
                     ; A template's `$t` is a new virtual register each time it is used.
                     (let [(mut fresh) (t/out-new)]
                       (for temp (.temps l)

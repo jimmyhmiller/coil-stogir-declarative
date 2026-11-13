@@ -59,6 +59,32 @@ template from-stack-float(d, base, at, bytes) when at >= 4096 = add-imm-hi(1, x1
 template from-stack-float(d, base, at, bytes) when bytes == 16 = ldr-q(d, base, at / 16)
 template from-stack-float(d, base, at, bytes) when bytes == 8 = ldr-d(d, base, at / 8)
 template from-stack-float(d, base, at, bytes)                 = ldr-s(d, base, at / 4)
+# A frame object, `at` bytes above the base: its address; `bytes` bytes of it
+# read and written, directly where the offset is one the instruction can
+# hold, and through its address where not.
+template frame-address(d, base, at) when at < 4096 = add-imm(1, d, base, at)
+template frame-address(d, base, at)                = add-imm(1, d, base, at % 4096) ; add-imm-hi(1, d, d, at / 4096)
+template to-bytes(s, base, at, bytes) when bytes == 8 = str(s, base, at / 8)
+template to-bytes(s, base, at, bytes) when bytes == 4 = strw(s, base, at / 4)
+template to-bytes(s, base, at, bytes) when bytes == 2 = strh(s, base, at / 2)
+template to-bytes(s, base, at, bytes)                 = strb(s, base, at)
+template to-bytes-float(s, base, at, bytes) when bytes == 8 = str-d(s, base, at / 8)
+template to-bytes-float(s, base, at, bytes)                 = str-s(s, base, at / 4)
+template from-object(d, base, at, bytes) when at % bytes != 0 or at / bytes >= 4096 = frame-address(x17, base, at) ; from-stack(d, x17, 0, bytes)
+template from-object(d, base, at, bytes)                                            = from-stack(d, base, at, bytes)
+template from-object-float(d, base, at, bytes) when at % bytes != 0 or at / bytes >= 4096 = frame-address(x17, base, at) ; from-stack-float(d, x17, 0, bytes)
+template from-object-float(d, base, at, bytes)                                            = from-stack-float(d, base, at, bytes)
+template to-object(s, base, at, bytes) when at % bytes != 0 or at / bytes >= 4096 = frame-address(x17, base, at) ; to-bytes(s, x17, 0, bytes)
+template to-object(s, base, at, bytes)                                            = to-bytes(s, base, at, bytes)
+template to-object-float(s, base, at, bytes) when at % bytes != 0 or at / bytes >= 4096 = frame-address(x17, base, at) ; to-bytes-float(s, x17, 0, bytes)
+template to-object-float(s, base, at, bytes)                                            = to-bytes-float(s, base, at, bytes)
+# What stands for these until the frame is laid out.
+template read-object(d, below, bytes) is object-read      = ldr(d, sp, 0)
+template read-object-float(d, below, bytes) is object-read = ldr-d(d, sp, 0)
+template write-object(s, below, bytes) is object-write    = str(s, sp, 0)
+template write-object-float(s, below, bytes) is object-write = str-d(s, sp, 0)
+template object-address(d, below, bytes) is object-address = add-imm(1, d, sp, 0)
+
 # In a function that moves the stack pointer as it runs: where the frame is,
 # kept and given back; the stack pointer down by the bytes in n, to a multiple
 # of 16; and the address n bytes above it.
@@ -112,8 +138,7 @@ rule RESERVE => nothing
 rule PARAM   => nothing
 
 # A frame object's address: so far below the frame record.
-rule SLOT when object < 4096     => sub-imm(1, out, x29, object)
-rule SLOT                        => sub-imm-hi(1, out, x29, object / 4096) ; sub-imm(1, out, out, object % 4096)
+rule SLOT                        => object-address(out, object, 0)
 
 # The address of something in this image, and of something outside it, which
 # is read from the table of addresses.
@@ -154,12 +179,18 @@ rule AND(once NEG(a), CONST k) when width == 64 and k == 4294967295    => sub(0,
 rule AND(once SHL(a, CONST s), CONST k) when width == 64 and k == 4294967295 and s > 0 and s < 32 => ubfm(0, out, a, 32 - s, 31 - s)
 rule AND(x, CONST k) when width == 64 and logical(k)           => and-imm(1, out, x, logical(k))
 rule AND(x, CONST k) when width < 64 and logical(repeat32(k))  => and-imm(0, out, x, logical(repeat32(k)))
+rule AND(x, once SHL(y, CONST s)) when width >= 32 and s > 0 and s < width => and-lsl(sf, out, x, y, s)
+rule AND(x, once SHR(y, CONST s)) when width >= 32 and s > 0 and s < width => and-lsr(sf, out, x, y, s)
 rule AND(x, y)                     => and(sf, out, x, y)
 rule OR(x, CONST k) when width == 64 and logical(k)            => orr-imm(1, out, x, logical(k))
 rule OR(x, CONST k) when width < 64 and logical(repeat32(k))   => orr-imm(0, out, x, logical(repeat32(k)))
+rule OR(x, once SHL(y, CONST s)) when width >= 32 and s > 0 and s < width => orr-lsl(sf, out, x, y, s)
+rule OR(x, once SHR(y, CONST s)) when width >= 32 and s > 0 and s < width => orr-lsr(sf, out, x, y, s)
 rule OR(x, y)                      => orr(sf, out, x, y)
 rule XOR(x, CONST k) when width == 64 and logical(k)           => eor-imm(1, out, x, logical(k))
 rule XOR(x, CONST k) when width < 64 and logical(repeat32(k))  => eor-imm(0, out, x, logical(repeat32(k)))
+rule XOR(x, once SHL(y, CONST s)) when width >= 32 and s > 0 and s < width => eor-lsl(sf, out, x, y, s)
+rule XOR(x, once SHR(y, CONST s)) when width >= 32 and s > 0 and s < width => eor-lsr(sf, out, x, y, s)
 rule XOR(x, y)                     => eor(sf, out, x, y)
 rule NEG(x)                        => sub(sf, out, zr, x)
 rule NOT(x) when width == 1        => movz(0, $one, 1, 0) ; eor(0, out, x, $one)
@@ -305,6 +336,30 @@ rule LOAD(_, p) when width == 64   => ldr(out, p, 0)
 rule LOAD(_, p) when width == 32   => ldrw(out, p, 0)
 rule LOAD(_, p) when width == 16   => ldrh(out, p, 0)
 rule LOAD(_, p)                    => ldrb(out, p, 0)
+# A frame object further off, and a place inside one, is read and written
+# from the base, at an offset settled when the frame is laid out.
+rule LOAD(_, p) when width <= 64 and slot(p) and float            => read-object-float(out, object(p), width / 8)
+rule LOAD(_, p) when width <= 64 and slot(p)                      => read-object(out, object(p), (width + 7) / 8)
+rule LOAD(_, ADD(p, CONST k)) when width <= 64 and slot(p) and k >= 0 and k < object(p) and float => read-object-float(out, object(p) - k, width / 8)
+rule LOAD(_, ADD(p, CONST k)) when width <= 64 and slot(p) and k >= 0 and k < object(p)           => read-object(out, object(p) - k, (width + 7) / 8)
+rule STORE(_, p, CONST z as v) when z == 0 and not float(v) and bits(v) <= 64 and slot(p) => write-object(zr, object(p), (bits(v) + 7) / 8)
+rule STORE(_, ADD(p, CONST k), CONST z as v) when z == 0 and not float(v) and bits(v) <= 64 and slot(p) and k >= 0 and k < object(p) => write-object(zr, object(p) - k, (bits(v) + 7) / 8)
+rule STORE(_, p, v) when bits(v) <= 64 and slot(p) and float(v)   => write-object-float(v, object(p), bits(v) / 8)
+rule STORE(_, p, v) when bits(v) <= 64 and slot(p)                => write-object(v, object(p), (bits(v) + 7) / 8)
+rule STORE(_, ADD(p, CONST k), v) when bits(v) <= 64 and slot(p) and k >= 0 and k < object(p) and float(v) => write-object-float(v, object(p) - k, bits(v) / 8)
+rule STORE(_, ADD(p, CONST k), v) when bits(v) <= 64 and slot(p) and k >= 0 and k < object(p)              => write-object(v, object(p) - k, (bits(v) + 7) / 8)
+
+# Zero is stored from the register that is always zero.
+rule STORE(_, p, CONST z as v) when z == 0 and not float(v) and slot(p) and object(p) <= 256 => stur(log2((bits(v) + 7) / 8), zr, x29, (512 - object(p)) & 511)
+rule STORE(_, ADD(p, CONST k), CONST z as v) when z == 0 and not float(v) and slot(p) and k >= 0 and k < object(p) and object(p) - k <= 256 => stur(log2((bits(v) + 7) / 8), zr, x29, (512 - (object(p) - k)) & 511)
+rule STORE(_, ADD(p, CONST k), CONST z as v) when z == 0 and bits(v) == 64 and not float(v) and k >= 0 and k < 32768 and k & 7 == 0 => str(zr, p, k >> 3)
+rule STORE(_, ADD(p, CONST k), CONST z as v) when z == 0 and bits(v) == 32 and not float(v) and k >= 0 and k < 16384 and k & 3 == 0 => strw(zr, p, k >> 2)
+rule STORE(_, ADD(p, CONST k), CONST z as v) when z == 0 and bits(v) == 16 and k >= 0 and k < 8192 and k & 1 == 0 => strh(zr, p, k >> 1)
+rule STORE(_, ADD(p, CONST k), CONST z as v) when z == 0 and bits(v) <= 8 and k >= 0 and k < 4096 => strb(zr, p, k)
+rule STORE(_, p, CONST z as v) when z == 0 and bits(v) == 64 and not float(v) => str(zr, p, 0)
+rule STORE(_, p, CONST z as v) when z == 0 and bits(v) == 32 and not float(v) => strw(zr, p, 0)
+rule STORE(_, p, CONST z as v) when z == 0 and bits(v) == 16 => strh(zr, p, 0)
+rule STORE(_, p, CONST z as v) when z == 0 and bits(v) <= 8  => strb(zr, p, 0)
 rule STORE(_, ADD(p, CONST k), v) when bits(v) == 64 and k >= 0 and k < 32768 and k & 7 == 0 => str(v, p, k >> 3)
 rule STORE(_, ADD(p, CONST k), v) when bits(v) == 32 and k >= 0 and k < 16384 and k & 3 == 0 => strw(v, p, k >> 2)
 rule STORE(_, ADD(p, CONST k), v) when bits(v) == 16 and k >= 0 and k < 8192 and k & 1 == 0  => strh(v, p, k >> 1)

@@ -283,6 +283,19 @@ fn rewrite(i: Inst, next: Int) {
     let at = i.copy-from + frame + abi.RETURN-SLOTS * 8
     if floating?(0 - d - 1) { lower.from-stack-float(d, base(), at, i.caller-bytes) }
     else { lower.from-stack(d, base(), at, i.caller-bytes) }
+  } else if i.kind == 8 {
+    # A frame object, now that it is known how far above the base it is.
+    let d = placed(i.copy-to, 2 * int(i) + 1)
+    let at = record-slot() * 8 - i.copy-from
+    if floating?(0 - d - 1) { lower.from-object-float(d, base(), at, i.caller-bytes) }
+    else { lower.from-object(d, base(), at, i.caller-bytes) }
+  } else if i.kind == 9 {
+    let r = placed(i.copy-to, 2 * int(i))
+    let at = record-slot() * 8 - i.copy-from
+    if floating?(0 - r - 1) { lower.to-object-float(r, base(), at, i.caller-bytes) }
+    else { lower.to-object(r, base(), at, i.caller-bytes) }
+  } else if i.kind == 10 {
+    lower.frame-address(placed(i.copy-to, 2 * int(i) + 1), base(), record-slot() * 8 - i.copy-from)
   } else if i.kind == 6 {
     # The frame register is where the record is, which is known from the base;
     # in a function that moves the stack pointer, the base must have survived.

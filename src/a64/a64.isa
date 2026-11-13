@@ -75,6 +75,14 @@ inst csinc(sf: u1, rd: def gpr, rn: use gpr, rm: use gpr, cond: u4) = sf 0 0 110
 inst add-shifted(sf: u1, rd: def gpr, rn: use gpr, rm: use gpr, amount: u6) = sf 0 0 01011 00 0 rm amount rn rd
 inst sub-shifted(sf: u1, rd: def gpr, rn: use gpr, rm: use gpr, amount: u6) = sf 1 0 01011 00 0 rm amount rn rd
 
+# And, or and exclusive-or with the second operand shifted left or right by `amount`.
+inst and-lsl(sf: u1, rd: def gpr, rn: use gpr, rm: use gpr, amount: u6) = sf 00 01010 00 0 rm amount rn rd
+inst and-lsr(sf: u1, rd: def gpr, rn: use gpr, rm: use gpr, amount: u6) = sf 00 01010 01 0 rm amount rn rd
+inst orr-lsl(sf: u1, rd: def gpr, rn: use gpr, rm: use gpr, amount: u6) = sf 01 01010 00 0 rm amount rn rd
+inst orr-lsr(sf: u1, rd: def gpr, rn: use gpr, rm: use gpr, amount: u6) = sf 01 01010 01 0 rm amount rn rd
+inst eor-lsl(sf: u1, rd: def gpr, rn: use gpr, rm: use gpr, amount: u6) = sf 10 01010 00 0 rm amount rn rd
+inst eor-lsr(sf: u1, rd: def gpr, rn: use gpr, rm: use gpr, amount: u6) = sf 10 01010 01 0 rm amount rn rd
+
 # A logical immediate: a run of `ones` one-bits, turned right by `rotate`
 # within an element of `size` bits, the element repeated to fill the register.
 immediate logical(size in 2 4 8 16 32 64, ones in 1..size - 1, rotate in 0..size - 1) = repeat(rotate-right(low-ones(ones), rotate, size), size) encoded (size == 64) << 12 | rotate << 6 | (~(size * 2 - 1)) & 63 | (ones - 1)

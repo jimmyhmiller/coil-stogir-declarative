@@ -22,6 +22,13 @@ template to-frame(s, base, slot)         = store(1, s, base, slot * 8)
 template from-frame-float(d, base, slot) = loadf(1, d, base, slot * 8)
 template to-frame-float(s, base, slot)   = storef(1, s, base, slot * 8)
 # Sixteen bytes, in two slots.
+# A frame object `at` bytes above the base: this target's rules reach frame
+# objects from the frame register and ask for none of these.
+template frame-address(d, base, at)              = lea(d, base, at)
+template from-object(d, base, at, bytes)         = from-stack(d, base, at, bytes)
+template from-object-float(d, base, at, bytes)   = from-stack-float(d, base, at, bytes)
+template to-object(s, base, at, bytes)           = store(1, s, base, at)
+template to-object-float(s, base, at, bytes)     = storef(1, s, base, at)
 # Two registers to and from two slots next to each other: one after the other.
 template to-frame-pair(a, b, base, slot)         = to-frame(a, base, slot) ; to-frame(b, base, slot + 1)
 template from-frame-pair(a, b, base, slot)       = from-frame(a, base, slot) ; from-frame(b, base, slot + 1)

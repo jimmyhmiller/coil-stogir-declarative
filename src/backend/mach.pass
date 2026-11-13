@@ -145,6 +145,18 @@ fn mark-restore(which: Int) {
   id(Inst.count).kind = which
 }
 
+# The instruction just emitted stands for reading (8) or writing (9) `bytes`
+# bytes of a frame object `below` bytes under the frame record, into or from
+# register `r`, or for giving `r` that address (10): the instruction it becomes
+# is known only when the frame is laid out.
+fn mark-object(kind: Int, r: Int, below: Int, bytes: Int) {
+  let i = id(Inst.count)
+  i.kind = kind
+  i.copy-to = r
+  i.copy-from = below
+  i.caller-bytes = bytes
+}
+
 fn mark-jump() {
   id(Inst.count).kind = 2
 }
