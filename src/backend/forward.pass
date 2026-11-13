@@ -9,7 +9,9 @@ column known-at: Block -> [Node]      # at a block's end: the addresses whose va
 column known-as: Block -> [Node]      # and for each the value
 state at: [Node]                      # the same for the block being walked
 state as: [Node]
+state open: [Node]                    # the stores of the block being walked that nothing has read since
 state forwarded: Int
+state overwritten: Int
 
 # Something that may write memory this pass knows nothing of.
 fn clobbers?(n: Node) -> Bool =
@@ -67,9 +69,35 @@ fn replace(l: Node, v: Node) {
   forwarded = forwarded + 1
 }
 
+# Store `s` is written over before anything reads it: it is not made.
+fn unwrite(s: Node) {
+  var users: [Node] = []
+  var slots: [Int] = []
+  for e in edges(s) {
+    users.push(edge-user(e))
+    slots.push(edge-slot(e))
+  }
+  for i in 0..users.len { set-input(users[i], slots[i], s.in(0)) }
+  drop(s)
+  overwritten = overwritten + 1
+}
+
+# Load `l` stays: the stores it may read are read.
+fn reads(l: Node) {
+  var kept = 0
+  for i in 0..open.len {
+    if apart?(open[i].in(1), type-bytes(open[i].in(2).type), l.in(1), l) {
+      open[kept] = open[i]
+      kept = kept + 1
+    }
+  }
+  while open.len > kept { open.pop() }
+}
+
 fn walk(b: Block) {
   at.clear()
   as.clear()
+  open.clear()
   if b.preds.len == 1 and b.preds[0] != b {
     let p = b.preds[0]
     for i in 0..p.known-at.len {
@@ -84,20 +112,40 @@ fn walk(b: Block) {
       var found: Node = none
       for i in 0..at.len { if at[i] == c.in(1) and as[i].type == c.type { found = as[i] } }
       if found != none { replace(c, found) }
-      else if at.len < 24 {
-        at.push(c.in(1))
-        as.push(c)
+      else {
+        reads(c)
+        if at.len < 24 {
+          at.push(c.in(1))
+          as.push(c)
+        }
       }
     } else if c is STORE {
+      # A store nothing has read, to the same place and as wide, is written over.
+      if c.payload == 0 {
+        var kept = 0
+        for i in 0..open.len {
+          let s = open[i]
+          if s.in(1) == c.in(1) and type-bytes(s.in(2).type) == type-bytes(c.in(2).type) { unwrite(s) } else {
+            open[kept] = s
+            kept = kept + 1
+          }
+        }
+        while open.len > kept { open.pop() }
+        if open.len < 24 { open.push(c) }
+      } else { open.clear() }
       # What the store may have written is known no longer; what it wrote is known.
       written(c.in(1), type-bytes(c.in(2).type))
       if c.payload == 0 and at.len < 24 {
         at.push(c.in(1))
         as.push(c.in(2))
       }
-    } else if clobbers?(c) or c is LOAD {
-      at.clear()
-      as.clear()
+    } else {
+      # Anything else may read whatever was stored.
+      open.clear()
+      if clobbers?(c) or c is LOAD {
+        at.clear()
+        as.clear()
+      }
     }
     c = next
   }

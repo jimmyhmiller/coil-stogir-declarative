@@ -17,6 +17,7 @@ plan quick {
 # Then what the facts allow, and what that opens up.
 plan default {
   atomics.run
+  until-stable { simplify.run }
   blocks.run
   split.run
   cfg.build

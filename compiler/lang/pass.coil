@@ -770,6 +770,9 @@
         (and (= name "copy") (= n 1)) (t/cat3 "(graph/copy! (mut (.g cx)) " a ")")
         ; Whether a call of this symbol is known to write no memory.
         (and (= name "reads-only") (= n 1)) (t/cat3 "(graph/reads-only? (.g cx) " a ")")
+        ; What else is known of the routine a symbol is: 0 nothing, 1 it only
+        ; reads, 2 memcpy, 3 memmove, 4 memset, 5 memcmp.
+        (and (= name "routine-kind") (= n 1)) (t/cat3 "(graph/routine-kind (.g cx) " a ")")
         (and (= name "set-input") (= n 3))
           (cat6 "(graph/set-input! (mut (.g cx)) " a " " b " " (t/cat2 (get args 2) ")"))
         ; An edge is one use of a node: who uses it, and as which input.
