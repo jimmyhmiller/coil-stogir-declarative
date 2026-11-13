@@ -31,6 +31,6 @@ plan default {
   until-stable { forward.prune }
   loops.run
   switches.run
-  until-stable { simplify.run }
+  until-stable { simplify.run  selects.run }
   quick
 }
