@@ -143,6 +143,15 @@ rule SUB(x, y)                     => sub(sf, out, x, y)
 rule MUL(x, y)                     => madd(sf, out, x, y, zr)
 # A mask that is a logical immediate needs no register. Below 64 bits it is
 # the 32-bit pattern, which as an immediate is the pattern twice.
+# Arithmetic kept to its low 32 bits is the 32-bit instruction, which leaves
+# zeros above them.
+rule AND(once ADD(a, CONST c), CONST k) when width == 64 and k == 4294967295 and u12(c)  => add-imm(0, out, a, c)
+rule AND(once ADD(a, CONST c), CONST k) when width == 64 and k == 4294967295 and u12(-c) => sub-imm(0, out, a, -c)
+rule AND(once ADD(a, b), CONST k) when width == 64 and k == 4294967295 => add(0, out, a, b)
+rule AND(once SUB(a, b), CONST k) when width == 64 and k == 4294967295 => sub(0, out, a, b)
+rule AND(once MUL(a, b), CONST k) when width == 64 and k == 4294967295 => madd(0, out, a, b, zr)
+rule AND(once NEG(a), CONST k) when width == 64 and k == 4294967295    => sub(0, out, zr, a)
+rule AND(once SHL(a, CONST s), CONST k) when width == 64 and k == 4294967295 and s > 0 and s < 32 => ubfm(0, out, a, 32 - s, 31 - s)
 rule AND(x, CONST k) when width == 64 and logical(k)           => and-imm(1, out, x, logical(k))
 rule AND(x, CONST k) when width < 64 and logical(repeat32(k))  => and-imm(0, out, x, logical(repeat32(k)))
 rule AND(x, y)                     => and(sf, out, x, y)
@@ -343,6 +352,9 @@ rule ULE(a, b)  => subs(sf(a), zr, zx(a), zx(b)) ; csinc(0, out, zr, zr, hi)
 # this way only if the constant is not negative: a negative one is held as its
 # low bits, which is not the number.
 # A branch on a comparison uses its flags directly.
+# Whether the low 32 bits are zero.
+rule IF(_, EQ(AND(x, CONST m), CONST k)) when k == 0 and m == 4294967295 and bits(x) == 64 => cbz(0, x, then) ; jump(else)
+rule IF(_, NE(AND(x, CONST m), CONST k)) when k == 0 and m == 4294967295 and bits(x) == 64 => cbnz(0, x, then) ; jump(else)
 rule IF(_, EQ(a, CONST k)) when k == 0  => cbz(sf(a), zx(a), then) ; jump(else)
 rule IF(_, NE(a, CONST k)) when k == 0  => cbnz(sf(a), zx(a), then) ; jump(else)
 rule IF(_, EQ(a, CONST k)) when u12(k)  => subs-imm(sf(a), zr, zx(a), k) ; b-cond(eq, then) ; jump(else)
