@@ -171,6 +171,8 @@
       (= name "out") "out"
       (= name "width") "(ir/type-bits (graph/ty (.g cx) n))"
       (= name "sf") "(if (= (ir/type-bits (graph/ty (.g cx) n)) 64) 1 0)"
+      ; `object`: how far below the frame record the frame object `n` lies.
+      (= name "object") "(mach/object-offset (mut cx) n)"
       (= name "then") (t/cat3 "(" "mach/target" " (mut cx) n 1)")
       (= name "else") (t/cat3 "(" "mach/target" " (mut cx) n 0)")
       (>= (t/index-of (.params l) name) 0) name

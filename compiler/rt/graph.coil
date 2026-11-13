@@ -2,6 +2,9 @@
 ;;; ordered inputs, and the uses of every node kept as each edge is written.
 ;;; It names no operation. A node set written in `.ir` gives the numbers meaning.
 ;;;
+;;; `addresses` is for whoever runs the graph without linking it: the address
+;;; of each symbol a node names by number.
+;;;
 ;;; A node is a positive i32; 0 is "no node". An edge is an input slot: edge e of
 ;;; user U refers to definition D. The uses of D are a doubly linked list threaded
 ;;; through its edges, so writing or clearing an input costs the same few stores
@@ -28,6 +31,9 @@
 (const ROLE-RESULT 12)
 (const ROLE-LOAD 13)
 (const ROLE-STORE 14)
+(const ROLE-OBJECT 15)
+(const ROLE-SYMBOL 16)
+(const ROLE-EXTERN 17)
 
 (defstruct Graph
   [(ops (ArrayList u16))
@@ -44,6 +50,7 @@
    (table (ArrayList i32))
    (interned i64)
    (start i32)
+   (addresses (ArrayList u64))
    (alc (dyn Allocator))])
 
 (defn create [(a (dyn Allocator))] (-> Graph)
@@ -62,6 +69,7 @@
                   :table (ArrayList::new [i32] a)
                   :interned 0
                   :start 0
+                  :addresses (ArrayList::new [u64] a)
                   :alc a)]
     ; Node 0 is "no node".
     (push! (mut (.ops g)) 0)
@@ -86,7 +94,8 @@
   (free! (mut (.use-prev g)))
   (free! (mut (.use-head g)))
   (free! (mut (.use-count g)))
-  (free! (mut (.table g))))
+  (free! (mut (.table g)))
+  (free! (mut (.addresses g))))
 
 ;;; One past the largest node: the size of a column over nodes.
 (defn size [(g Graph)] (-> i64)

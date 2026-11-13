@@ -149,30 +149,42 @@ fn encoded(i: Inst, k: Int) -> Int {
 }
 
 # The frame, from the stack pointer up: arguments for calls, values that have
-# no register, then the registers the caller expects back. A function that
-# calls keeps a frame record, x29 and the return address side by side, there.
-fn saved-slot() -> Int = out-slots + slots
+# no register, frame objects, then the frame record (x29 and the return
+# address, side by side, with x29 pointing at it) and the other registers the
+# caller expects back. Frame objects end at the frame record, so each is a
+# fixed distance below x29.
+fn record-slot() -> Int = out-slots + slots + object-bytes / 8
+
+fn keeps-record?() -> Bool = has-bit(saved, abi.FRAME)
 
 fn enter() {
   if frame % 4096 != 0 { lower.grow-stack(frame % 4096) }
   if frame >= 4096 { lower.grow-pages(frame / 4096) }
-  var rest = saved
-  var at = saved-slot()
+  var at = record-slot()
+  if keeps-record?() {
+    lower.to-frame(marker(abi.FRAME), at)
+    lower.to-frame(marker(abi.LINK), at + 1)
+    lower.frame-record(at * 8 % 4096)
+    if at * 8 >= 4096 { lower.frame-pages(at * 8 / 4096) }
+    at = at + 2
+  }
+  var rest = clear-bit(clear-bit(saved, abi.FRAME), abi.LINK)
   while rest != word(0) {
     let r = lowest-bit(rest)
     lower.to-frame(marker(r), at)
-    if r == abi.FRAME {
-      lower.frame-record(at * 8 % 4096)
-      if at * 8 >= 4096 { lower.frame-pages(at * 8 / 4096) }
-    }
     at = at + 1
     rest = clear-bit(rest, r)
   }
 }
 
 fn leave() {
-  var rest = saved
-  var at = saved-slot()
+  var at = record-slot()
+  if keeps-record?() {
+    lower.from-frame(marker(abi.FRAME), at)
+    lower.from-frame(marker(abi.LINK), at + 1)
+    at = at + 2
+  }
+  var rest = clear-bit(clear-bit(saved, abi.FRAME), abi.LINK)
   while rest != word(0) {
     let r = lowest-bit(rest)
     lower.from-frame(marker(r), at)
@@ -185,8 +197,11 @@ fn leave() {
 
 fn run() {
   saved = used & isa.CALLEE-SAVED
-  if calls { saved = set-bit(set-bit(saved, abi.FRAME), abi.LINK) }
-  frame = ((out-slots + slots + bit-count(saved)) * 8 + 15) / 16 * 16
+  if calls or object-bytes > 0 { saved = set-bit(set-bit(saved, abi.FRAME), abi.LINK) }
+  # The frame record sits a multiple of 16 above the stack pointer, so that
+  # objects aligned below it are aligned in memory.
+  if (out-slots + slots) % 2 == 1 { slots = slots + 1 }
+  frame = ((out-slots + slots + bit-count(saved)) * 8 + object-bytes + 15) / 16 * 16
   final-start = Inst.count
   if frame > 0 { enter() }
   for index in 0..order.len {

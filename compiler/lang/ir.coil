@@ -62,6 +62,9 @@
         (= role "result") 12
         (= role "load") 13
         (= role "store") 14
+        (= role "object") 15
+        (= role "symbol") 16
+        (= role "extern") 17
         :else -1))
 
 ;;; A type's number; 0 is "no type". Numbers follow declaration order from 1.
@@ -106,7 +109,8 @@
 
 ;;; A value of its inputs alone: interned when built, removed when unused.
 (defn pure? [(node Node)] (-> bool)
-  (or (= (.role node) "pure") (= (.role node) "const") (= (.role node) "param")))
+  (or (= (.role node) "pure") (= (.role node) "const") (= (.role node) "param")
+      (= (.role node) "object") (= (.role node) "symbol") (= (.role node) "extern")))
 
 ;; ---------------------------------------------------------------- meanings
 
@@ -441,7 +445,8 @@
                    (!= (type-number spec (.result node)) 0) (t/cat2 "T-" (t/upper (.result node)))
                    :else "type")
         data (if (= (.payload node) "") "0" (.payload node))
-        interned (and (pure? node) (not (variadic? node)) (<= fixed 3))]
+        ; Two frame objects of one size are still two objects.
+        interned (and (pure? node) (not (variadic? node)) (<= fixed 3) (!= (.role node) "object"))]
     (t/emit! (mut o) (t/cat3 "(defn " (builder-name (.name node)) " [(g (mut graph/Graph))"))
     (when (= type "type") (t/emit! (mut o) " (type i32)"))
     (when (!= (.payload node) "") (t/emit! (mut o) (t/cat3 " (" (.payload node) " u64)")))
@@ -583,6 +588,12 @@
   (t/line! (mut o) "      (= r 10) (graph/payload g n)")
   (t/line! (mut o) "      (= r 9) (bv/cut (get args (cast i64 (graph/payload g n))) (type-bits (graph/ty g n)))")
   (t/line! (mut o) "      (or (= r 8) (= r 13)) (get (.phi it) at)")
+  (t/line! (mut o) "      ; A frame object is memory of its own, made the first time it is asked for.")
+  (t/line! (mut o) "      (= r 15)")
+  (t/line! (mut o) "        (do (when (= (get (.phi it) at) 0)")
+  (t/line! (mut o) "              (set! (mut (.phi it)) at (memory/allocate (graph/payload g n))))")
+  (t/line! (mut o) "            (get (.phi it) at))")
+  (t/line! (mut o) "      (or (= r 16) (= r 17)) (get (.addresses g) (cast i64 (graph/payload g n)))")
   (t/line! (mut o) "      (= r 12) (bv/cut (get (.phi it) (cast i64 (graph/input g n 0))) (type-bits (graph/ty g n)))")
   (t/line! (mut o) "      (= (get (.stamp it) at) (.epoch it)) (get (.val it) at)")
   (t/line! (mut o) "      :else")

@@ -32,6 +32,12 @@ node RESULT(call: ctrl) : T                     role result
 node LOAD(c: ctrl, addr: ptr) : T in word       role load
 node STORE(c: ctrl, addr: ptr, value) : ctrl    role store
 
+# Addresses. SLOT is a frame object of `size` bytes, its own for each call of
+# the function. SYMBOL is something in the same image, EXTERN something outside.
+node SLOT : ptr                                 role object  payload size
+node SYMBOL : ptr                               role symbol  payload symbol
+node EXTERN : ptr                               role extern  payload symbol
+
 # Values that come from outside the graph.
 node PARAM : T                                  role param  payload index
 node CONST : T                                  role const  payload value

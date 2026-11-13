@@ -22,6 +22,8 @@ column local-reg: Node -> Int         # for a node computed per block: its regis
 column local-block: Node -> Block
 state emitting: Block                 # the block whose instructions are being emitted
 state next-vreg: Int
+column object-at: Node -> Int         # a frame object's distance below the frame record
+state object-bytes: Int               # bytes of frame objects, a multiple of 16
 state out-slots: Int                  # frame slots for arguments passed on the stack
 state calls: Bool                     # the function calls another
 state worklist: [Node]
@@ -81,4 +83,16 @@ fn implicit(reads: Word, writes: Word) {
 # The instruction just emitted names a slot of the caller's frame.
 fn from-caller() {
   id(Inst.count).above-frame = true
+}
+
+# How far below the frame record a frame object lies. Objects up to 8 bytes
+# are aligned to 8, larger ones to 16.
+fn object-offset(n: Node) -> Int {
+  if n.object-at == 0 {
+    let size = max(int(n.payload), 1)
+    let align = if size > 8 then 16 else 8
+    object-bytes = (object-bytes + size + align - 1) / align * align
+    n.object-at = object-bytes
+  }
+  n.object-at
 }

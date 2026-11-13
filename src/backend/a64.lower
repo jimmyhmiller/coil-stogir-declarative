@@ -6,6 +6,7 @@ emit backend.mach
 
 # A constant is built again in each block that needs it in a register.
 local CONST
+local SLOT
 
 # What the allocator and the emitter ask for by name.
 template move(d, s)        = orr(1, d, zr, s)
@@ -38,6 +39,9 @@ rule CALL    => nothing
 rule RESULT  => nothing
 
 rule PARAM   => nothing
+
+# A frame object's address: so far below the frame record.
+rule SLOT when object < 4096     => sub-imm(1, out, x29, object)
 rule RETURN(_, v)                => orr(1, x0, zr, ex(v)) ; ret(x30)
 
 # Constants, by how many sixteen-bit pieces they need.
