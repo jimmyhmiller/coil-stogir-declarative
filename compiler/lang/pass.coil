@@ -362,10 +362,10 @@
       (when (= (.key column) "Node")
         (t/line! (mut o)
                  (if (list-type? (.type column))
-                     (t/cat4 "  (while (< (len (.head (." (.name column) " cx))) n) (lists/add-key! (mut (."
-                             (t/cat2 (.name column) " cx))))"))
-                     (t/cat4 "  (while (< (len (." (.name column) " cx)) n) (push! (mut (."
-                             (t/cat4 (.name column) " cx)) " (default-text d (.type column)) "))"))))))
+                     (t/cat3 "  (lists/keys! (mut (." (.name column) " cx)) n)")
+                     ; Every default is all zero bits, so a column grows by a run of zeros.
+                     (t/cat4 "  (when (< (len (." (.name column) " cx)) n) (extend-zeroed! (mut (."
+                             (t/cat4 (.name column) " cx)) (- n (len (." (.name column) " cx)))))"))))))
     (t/line! (mut o) "  0))")
     ; Start over: no entities, every column empty, node columns sized to the graph.
     (t/line! (mut o) "(defn begin! [(cx (mut State))] (-> void)")
