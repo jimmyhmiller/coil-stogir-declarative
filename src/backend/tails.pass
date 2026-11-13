@@ -9,7 +9,7 @@ use loops as loops
 setting self-symbol: Int               # one more than the function's own symbol; 0 if not known
 state site-call: [Node]                # each such call,
 state site-never: [Node]               # and the test, never true, that parts it from the return
-state looped: Int
+tally looped: Int
 
 # Whether address `a`, of or into a frame object, is only read and written through.
 fn private?(a: Node) -> Bool {

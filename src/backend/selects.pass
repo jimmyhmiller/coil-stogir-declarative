@@ -6,7 +6,7 @@ pass in unit
 use cfg as cfg
 use loops as loops
 
-state chosen: Int
+tally chosen: Int
 
 # What computing `v` costs that would not be computed anyway: nothing for a
 # value others read too or that stays where it is, one for each node only this

@@ -9,7 +9,7 @@ setting copy-routine: Int              # one more than the symbols of routines o
 setting fill-routine: Int              # copy and fill any number of bytes; 0 if there is none
 setting near-routines: Bool            # they are called as the image's own functions are, not
                                        # through the table of addresses
-state known-calls: Int                 # calls of the C library's routines done here instead
+tally known-calls: Int                 # calls of the C library's routines done here instead
 state inline-bytes: Int               # the most bytes done by loads and stores
 
 fn at(p: Node, offset: Int) -> Node =

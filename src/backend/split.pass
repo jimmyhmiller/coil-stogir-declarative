@@ -9,7 +9,7 @@ state part-object: [Node]             # and the object it becomes
 state accesses: [Node]                # the loads and stores of the object in hand,
 state access-at: [Int]                # where each is,
 state access-bytes: [Int]             # and how many bytes
-state split: Int                      # how many objects were taken apart
+tally split: Int                      # how many objects were taken apart
 
 # The part at `at` of `bytes` bytes, made if it is new; -1 if it overlaps
 # another part without being it.

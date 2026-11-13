@@ -122,7 +122,10 @@ fn needs-frame?(b: Block) -> Bool {
 # Selection planned to open the frame at `frame-at`, going by the nodes. If an
 # instruction before there needs the frame after all, the plan is dropped.
 fn check-frame-plan() {
-  if frame-at != none and (any b in order: not b.framed and needs-frame?(b)) { frame-at = none }
+  if frame-at != none and (any b in order: not b.framed and needs-frame?(b)) {
+    frame-at = none
+    unplanned = unplanned + 1
+  }
 }
 
 # ---------------------------------------------------------------- liveness

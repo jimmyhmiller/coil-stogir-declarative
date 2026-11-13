@@ -7,8 +7,8 @@ use loops as loops
 use cfg as cfg
 import target as isa
 
-state halved: Int
-state settled: Int
+tally halved: Int
+tally settled: Int
 
 # How many cases a switch may have and still be compared with each in turn.
 fn few() -> Int = 4

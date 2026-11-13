@@ -15,6 +15,7 @@ column final-first: Block -> Int      # a block's first final instruction
 column onward: Block -> Block         # for a block that is only a jump: where it jumps
 state final-start: Int                # final instructions follow the selected ones
 state frame: Int                      # bytes of frame, a multiple of 16
+tally unplanned: Int                  # a plan to open the frame late that did not hold, here or in alloc
 state saved: Word                     # the registers the caller expects back unchanged
 state move-to: [Int]                  # moves to make together: the registers written
 state move-from: [Int]                # and read; -(slot + 1) for a value in the frame
@@ -538,6 +539,7 @@ fn run() {
   frame = ((out-slots + slots + bit-count(saved) + abi.RETURN-SLOTS) * 8 + object-bytes + 15) / 16 * 16 - abi.RETURN-SLOTS * 8
   final-start = Inst.count
   if frame-at != none and (frame == 0 or not plan-holds?()) {
+    if frame > 0 { unplanned = unplanned + 1 }
     frame-at = none
     for b in order { b.framed = true }
   }

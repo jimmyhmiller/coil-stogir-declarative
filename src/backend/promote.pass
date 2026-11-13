@@ -11,7 +11,7 @@ column store-mark: Block -> Int
 column entry-value: Block -> Node      # and the object's value on entry to the block
 column entry-mark: Block -> Int
 state serial: Int
-state promoted: Int
+tally promoted: Int
 
 fn number-chains() {
   for b in Block {

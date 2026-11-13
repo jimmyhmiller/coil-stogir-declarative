@@ -14,6 +14,8 @@ column pair-second: Node -> Bool      # the second of such a two,
 column pair-first: Node -> Node       # and its first
 column pair-base: Node -> Node        # for the first: the address both are offsets from,
 column pair-at: Node -> Int           # and the first's offset
+tally paired: Int                     # how many such twos there were
+tally tabled: Int                     # how many switches went by a table
 
 # What address `a` is an offset from, and the offset.
 fn address-base(a: Node) -> Node =
@@ -41,6 +43,7 @@ fn pair-up(b: Block) {
         c.pair-at = at
         next.pair-second = true
         next.pair-first = c
+        paired = paired + 1
       }
     }
     c = next
@@ -335,6 +338,7 @@ fn reserve(n: Node) {
 # value from the lowest case to the highest, where that value goes.
 fn table-switch(n: Node, low: Int, high: Int) {
   if isa.TABLES == 0 { panic("a switch by table on a machine whose description has none") }
+  tabled = tabled + 1
   let v = n.in(1)
   let otherwise = first u in users(n): u is DEFAULT
   lower.table-jump(if v.bits == 64 then 1 else 0, lower.extended(v, 0), low, high - low, int(otherwise.block-of))

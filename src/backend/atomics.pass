@@ -5,7 +5,7 @@ pass in unit
 use cfg as cfg
 use lower as lower
 
-state expanded: Int
+tally expanded: Int
 
 # What `n` leaves in memory, from what was there.
 fn left(n: Node, old: Node, v: Node) -> Node {

@@ -5,7 +5,7 @@
 pass in unit
 use cfg as cfg
 
-state elided: Int
+tally elided: Int
 state copy-reads: [Node]                  # the loads of the frame object in hand, as they are met
 
 # What address `a` is an offset from.

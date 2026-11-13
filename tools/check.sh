@@ -26,8 +26,4 @@ for t in variadic results passing; do
   out/$t
 done
 build fuzz
-# In chunks under a time limit, so that generated code that never returns fails the check.
-count=${1:-2000}
-for first in $(seq 1 250 $count); do
-  /usr/bin/perl -e 'alarm 300; exec @ARGV' out/fuzz 250 $first | tail -2 | head -1
-done
+tools/fuzz-chunks.sh out/fuzz ${1:-2000}

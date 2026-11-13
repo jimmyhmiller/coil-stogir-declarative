@@ -10,8 +10,8 @@ column known-as: Block -> [Node]      # and for each the value
 state at: [Node]                      # the same for the block being walked
 state as: [Node]
 state open: [Node]                    # the stores of the block being walked that nothing has read since
-state forwarded: Int
-state overwritten: Int
+tally forwarded: Int
+tally overwritten: Int
 
 # Something that may write memory this pass knows nothing of.
 fn clobbers?(n: Node) -> Bool =

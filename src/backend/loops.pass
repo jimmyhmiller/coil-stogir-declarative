@@ -35,16 +35,16 @@ state side-one: [Int]                  # one of them,
 state side-meet: [Node]                # and where they meet, if several
 state goes: [Int]                      # for each way into the region in hand: the side it goes to
 state way: [Node]                      # and the control it comes by
-state reduced: Int
+tally reduced: Int
 state group-base: [Node]               # for the counter in hand: each base its addresses are offsets from,
 state group-step: [Int]                # how far apart the addresses of one round and the next are,
 state group-next: [Node]               # and the address the next round has
 state spots: [Node]                    # the addresses computed from the counter,
 state spot-group: [Int]                # and which of those each belongs to
-state parted: Int
-state learned: Int
-state turned: Int
-state hoisted: Int
+tally parted: Int
+tally learned: Int
+tally turned: Int
+tally hoisted: Int
 
 fn pinned?(n: Node) -> Bool = cfg.control?(n) or n is PHI or n is PARAM or n is RESULT
 
@@ -246,9 +246,13 @@ fn turn(h: Block) {
   follow(leave, loop-after)
   set-input(l, 0, enter)
   set-input(l, 1, again)
+  let old-cond = test.in(1)
   drop(stay)
   drop(leave)
   drop(test)
+  # The old test's condition goes with it if nothing else reads it: else it
+  # would stay a use of the loop's values that nothing needs.
+  if old-cond.uses == 0 and not pinned?(old-cond) { drop(old-cond) }
   for b in h.loop-blocks { b.touched = true }
   loop-exit.touched = true
   for p in h.preds { p.touched = true }
