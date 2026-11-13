@@ -24,6 +24,8 @@ rule shr-zero      : SHR(x, CONST 0)                   => x
 rule sar-zero      : SAR(x, CONST 0)                   => x
 rule udiv-one      : UDIV(x, CONST 1)                  => x
 rule sdiv-one      : SDIV(x, CONST 1)                  => x
+rule add-then-sub  : SUB(ADD(x, y), y)                 => x
+rule sub-then-add  : ADD(SUB(x, y), y)                 => x
 rule neg-neg       : NEG(NEG(x))                       => x
 rule not-not       : NOT(NOT(x))                       => x
 
