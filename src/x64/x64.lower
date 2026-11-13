@@ -126,6 +126,12 @@ rule ADD(x, y)                     => move(out, x) ; add(sf, out, y)
 rule SUB(x, CONST k) when s32(k)   => move(out, x) ; sub-imm(sf, out, k)
 rule SUB(x, y)                     => move(out, x) ; sub(sf, out, y)
 rule MUL(x, y)                     => move(out, x) ; imul(sf, out, y)
+# Arithmetic kept to its low 32 bits is the 32-bit instruction, which leaves
+# zeros above them.
+rule AND(once ADD(a, CONST c), CONST k) when width == 64 and k == 4294967295 and s32(c) => move(out, a) ; add-imm(0, out, c)
+rule AND(once ADD(a, b), CONST k) when width == 64 and k == 4294967295 => move(out, a) ; add(0, out, b)
+rule AND(once SUB(a, b), CONST k) when width == 64 and k == 4294967295 => move(out, a) ; sub(0, out, b)
+rule AND(once MUL(a, b), CONST k) when width == 64 and k == 4294967295 => move(out, a) ; imul(0, out, b)
 # A mask of the low 32, 16 or 8 bits is the move that fills the rest with zeros.
 rule AND(x, CONST k) when width == 64 and k == 4294967295 => mov(0, out, x)
 rule AND(x, CONST k) when width == 64 and k == 65535      => movzx16(out, x)
@@ -270,7 +276,24 @@ rule TRUNC(x) when width == 1      => mov(0, out, x) ; and-imm(0, out, 1)
 rule TRUNC(x)                      => x
 rule BITCAST(x) when not float and not float(x) => x
 
-# Memory.
+# Memory. A frame object, and a place inside one, is read and written from
+# the frame register: no address is computed.
+rule LOAD(_, p) when not float and width == 64 and slot(p)  => load(1, out, rbp, 0 - object(p))
+rule LOAD(_, p) when not float and width == 32 and slot(p)  => load(0, out, rbp, 0 - object(p))
+rule LOAD(_, p) when not float and width == 16 and slot(p)  => load16(out, rbp, 0 - object(p))
+rule LOAD(_, p) when not float and width <= 8 and slot(p)   => load8(out, rbp, 0 - object(p))
+rule LOAD(_, ADD(p, CONST k)) when not float and width == 64 and slot(p) and k >= 0 and k < object(p) => load(1, out, rbp, k - object(p))
+rule LOAD(_, ADD(p, CONST k)) when not float and width == 32 and slot(p) and k >= 0 and k < object(p) => load(0, out, rbp, k - object(p))
+rule LOAD(_, ADD(p, CONST k)) when not float and width == 16 and slot(p) and k >= 0 and k < object(p) => load16(out, rbp, k - object(p))
+rule LOAD(_, ADD(p, CONST k)) when not float and width <= 8 and slot(p) and k >= 0 and k < object(p)  => load8(out, rbp, k - object(p))
+rule STORE(_, p, v) when not float(v) and bits(v) == 64 and slot(p) => store(1, v, rbp, 0 - object(p))
+rule STORE(_, p, v) when not float(v) and bits(v) == 32 and slot(p) => store(0, v, rbp, 0 - object(p))
+rule STORE(_, p, v) when not float(v) and bits(v) == 16 and slot(p) => store16(v, rbp, 0 - object(p))
+rule STORE(_, p, v) when not float(v) and bits(v) <= 8 and slot(p)  => store8(v, rbp, 0 - object(p))
+rule STORE(_, ADD(p, CONST k), v) when not float(v) and bits(v) == 64 and slot(p) and k >= 0 and k < object(p) => store(1, v, rbp, k - object(p))
+rule STORE(_, ADD(p, CONST k), v) when not float(v) and bits(v) == 32 and slot(p) and k >= 0 and k < object(p) => store(0, v, rbp, k - object(p))
+rule STORE(_, ADD(p, CONST k), v) when not float(v) and bits(v) == 16 and slot(p) and k >= 0 and k < object(p) => store16(v, rbp, k - object(p))
+rule STORE(_, ADD(p, CONST k), v) when not float(v) and bits(v) <= 8 and slot(p) and k >= 0 and k < object(p)  => store8(v, rbp, k - object(p))
 rule LOAD(_, ADD(p, CONST k)) when not float and width == 64 and s32(k) => load(1, out, p, k)
 rule LOAD(_, ADD(p, CONST k)) when not float and width == 32 and s32(k) => load(0, out, p, k)
 rule LOAD(_, ADD(p, CONST k)) when not float and width == 16 and s32(k) => load16(out, p, k)
@@ -288,7 +311,20 @@ rule STORE(_, p, v) when not float(v) and bits(v) == 32 => store(0, v, p, 0)
 rule STORE(_, p, v) when not float(v) and bits(v) == 16 => store16(v, p, 0)
 rule STORE(_, p, v) when not float(v)                   => store8(v, p, 0)
 
-# One of two values.
+# One of two values, by a comparison's flags: the flags first, since copying a
+# register leaves them be, and the copy may then take a register the comparison read.
+rule COND(EQ(a, CONST k), x, y) when not float and s32(k) => cmp-imm(sf(a), zx(a), k) ; move(out, y) ; cmov(sf, equal, out, x)
+rule COND(NE(a, CONST k), x, y) when not float and s32(k) => cmp-imm(sf(a), zx(a), k) ; move(out, y) ; cmov(sf, not-equal, out, x)
+rule COND(LT(a, CONST k), x, y) when not float and s32(k) and (bits(a) >= 32 or k < 128) => cmp-imm(sf(a), sx(a), k) ; move(out, y) ; cmov(sf, less, out, x)
+rule COND(LE(a, CONST k), x, y) when not float and s32(k) and (bits(a) >= 32 or k < 128) => cmp-imm(sf(a), sx(a), k) ; move(out, y) ; cmov(sf, less-equal, out, x)
+rule COND(ULT(a, CONST k), x, y) when not float and s32(k) and (k >= 0 or bits(a) == 64) => cmp-imm(sf(a), zx(a), k) ; move(out, y) ; cmov(sf, below, out, x)
+rule COND(ULE(a, CONST k), x, y) when not float and s32(k) and (k >= 0 or bits(a) == 64) => cmp-imm(sf(a), zx(a), k) ; move(out, y) ; cmov(sf, below-equal, out, x)
+rule COND(EQ(a, b), x, y) when not float => cmp(sf(a), zx(a), zx(b)) ; move(out, y) ; cmov(sf, equal, out, x)
+rule COND(NE(a, b), x, y) when not float => cmp(sf(a), zx(a), zx(b)) ; move(out, y) ; cmov(sf, not-equal, out, x)
+rule COND(LT(a, b), x, y) when not float => cmp(sf(a), sx(a), sx(b)) ; move(out, y) ; cmov(sf, less, out, x)
+rule COND(LE(a, b), x, y) when not float => cmp(sf(a), sx(a), sx(b)) ; move(out, y) ; cmov(sf, less-equal, out, x)
+rule COND(ULT(a, b), x, y) when not float => cmp(sf(a), zx(a), zx(b)) ; move(out, y) ; cmov(sf, below, out, x)
+rule COND(ULE(a, b), x, y) when not float => cmp(sf(a), zx(a), zx(b)) ; move(out, y) ; cmov(sf, below-equal, out, x)
 rule COND(c, x, y) when not float  => move(out, y) ; test(0, c, c) ; cmov(sf, not-equal, out, x)
 
 # A comparison as a value: the flags, then 1 where the condition holds.
@@ -309,7 +345,17 @@ rule ULE(a, b)  => cmp(sf(a), zx(a), zx(b)) ; setcc(below-equal, $t) ; movzx8(ou
 # A signed comparison of a value narrower than 32 bits with a constant takes
 # this way only if the constant is not negative: a negative one is held as its
 # low bits, which is not the number.
-# A branch on a comparison uses its flags directly.
+# A branch on a comparison uses its flags directly. Against zero the value is
+# tested with itself; with the constant first, the comparison is the other
+# way round; and the low 32 bits of a value are compared as they are.
+rule IF(_, EQ(AND(x, CONST m), CONST k)) when m == 4294967295 and bits(x) == 64 and s32(k) and k >= 0 => cmp-imm(0, x, k) ; jcc(equal, then) ; jump(else)
+rule IF(_, NE(AND(x, CONST m), CONST k)) when m == 4294967295 and bits(x) == 64 and s32(k) and k >= 0 => cmp-imm(0, x, k) ; jcc(not-equal, then) ; jump(else)
+rule IF(_, EQ(a, CONST k)) when k == 0 and bits(a) >= 32 => test(sf(a), a, a) ; jcc(equal, then) ; jump(else)
+rule IF(_, NE(a, CONST k)) when k == 0 and bits(a) >= 32 => test(sf(a), a, a) ; jcc(not-equal, then) ; jump(else)
+rule IF(_, LT(CONST k, a)) when s32(k) and (bits(a) >= 32 or k < 128)  => cmp-imm(sf(a), sx(a), k) ; jcc(greater, then) ; jump(else)
+rule IF(_, LE(CONST k, a)) when s32(k) and (bits(a) >= 32 or k < 128)  => cmp-imm(sf(a), sx(a), k) ; jcc(greater-equal, then) ; jump(else)
+rule IF(_, ULT(CONST k, a)) when s32(k) and (k >= 0 or bits(a) == 64) => cmp-imm(sf(a), zx(a), k) ; jcc(above, then) ; jump(else)
+rule IF(_, ULE(CONST k, a)) when s32(k) and (k >= 0 or bits(a) == 64) => cmp-imm(sf(a), zx(a), k) ; jcc(above-equal, then) ; jump(else)
 rule IF(_, EQ(a, CONST k)) when s32(k)  => cmp-imm(sf(a), zx(a), k) ; jcc(equal, then) ; jump(else)
 rule IF(_, NE(a, CONST k)) when s32(k)  => cmp-imm(sf(a), zx(a), k) ; jcc(not-equal, then) ; jump(else)
 rule IF(_, LT(a, CONST k)) when s32(k) and (bits(a) >= 32 or k < 128)  => cmp-imm(sf(a), sx(a), k) ; jcc(less, then) ; jump(else)
