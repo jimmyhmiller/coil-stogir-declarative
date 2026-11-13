@@ -25,6 +25,16 @@ state reach-at: [Block]
 state reach-as: [Node]                 # the phi's value there
 state stores: [Node]                   # the stores of the loop in hand
 state unknown: Bool                    # something in it may write memory this knows nothing of
+state changing: [Node]                 # the values found to change, as they are found
+column side-mark: Block -> Int         # == `loop-serial`: where a side of the branch in hand begins,
+column side-index: Block -> Int        # and which side
+state sides: [Node]                    # the sides of the branch in hand,
+state side-count: [Int]                # how many ways go to each,
+state side-one: [Int]                  # one of them,
+state side-meet: [Node]                # and where they meet, if several
+state goes: [Int]                      # for each way into the region in hand: the side it goes to
+state way: [Node]                      # and the control it comes by
+state parted: Int
 state turned: Int
 state hoisted: Int
 
@@ -70,6 +80,7 @@ fn spread(n: Node) -> Bool {
       }
     } else if u.varies != loop-serial {
       u.varies = loop-serial
+      changing.push(u)
       if not spread(u) { return false }
     }
   }
@@ -193,6 +204,7 @@ fn turn(h: Block) {
   use-of.clear()
   use-slot.clear()
   use-at.clear()
+  changing.clear()
   for u in users(l) {
     if of-loop?(u) and not spread(u) { return }
   }
@@ -233,6 +245,192 @@ fn turn(h: Block) {
   loop-exit.touched = true
   for p in h.preds { p.touched = true }
   turned = turned + 1
+}
+
+# ---------------------------------------------------------------- ways that meet only to part
+
+# Whether the way from the sides of the branch in hand to block `b` passes only
+# blocks that are as they were when blocks were last found.
+fn open-way?(b: Block) -> Bool {
+  if b.side-mark == loop-serial { return true }
+  if b.way-walked == way-walk { return true }
+  b.way-walked = way-walk
+  if b.touched or b.preds.len == 0 or b.member == loop-serial { return false }
+  all p in b.preds: open-way?(p)
+}
+
+# The value in block `b` of `p`, a phi of the region in hand: on a side one
+# way goes to, what that way brought; on a side several go to, a phi of what
+# they brought; further on, what the block before has, or a phi where ways meet.
+fn arriving(p: Node, b: Block) -> Node {
+  for i in 0..reach-phi.len {
+    if reach-phi[i] == p and reach-at[i] == b { return reach-as[i] }
+  }
+  var v: Node = none
+  let side = b.side-mark == loop-serial
+  if side {
+    let k = b.side-index
+    if side-count[k] == 0 { v = ir.make-const!(mut graph, p.type, word(0)) }
+    else if side-count[k] == 1 { v = p.in(side-one[k] + 1) }
+    else {
+      v = ir.phi!(mut graph, p.type, side-meet[k], side-count[k])
+      grow-nodes()
+      var at = 1
+      for i in 0..goes.len {
+        if goes[i] == k {
+          set-input(v, at, p.in(i + 1))
+          at = at + 1
+        }
+      }
+    }
+  } else if b.preds.len == 1 {
+    v = arriving(p, b.preds[0])
+  } else {
+    v = ir.phi!(mut graph, p.type, b.head, b.preds.len)
+    grow-nodes()
+  }
+  reach-phi.push(p)
+  reach-at.push(b)
+  reach-as.push(v)
+  if not side and b.preds.len > 1 {
+    var i = 1
+    for q in b.preds {
+      set-input(v, i, arriving(p, q))
+      i = i + 1
+    }
+  }
+  v
+}
+
+# `n` as it is in block `b`, past the branch in hand.
+fn arrived(n: Node, b: Block) -> Node {
+  if of-loop?(n) { return arriving(n, b) }
+  if n.varies != loop-serial { return n }
+  let c = copy(n)
+  grow-nodes()
+  for i in 0..n.arity {
+    if n.in(i) != none { set-input(c, i, arrived(n.in(i), b)) }
+  }
+  c
+}
+
+# Ways meet at a region, each bringing a constant, and all that is done there
+# is to branch or switch on which constant came; but the ways bring other
+# values too, which the sides go on to read. Each way goes straight to the
+# side its constant chooses, and what the sides read is what the way brought.
+# (With no other values this is the rewrite engine's own work.)
+fn part(h: Block) {
+  let r = h.head
+  if not (r is REGION) or h.touched { return }
+  let t = cfg.follower(r)
+  if t == none or not (t is IF or t is SWITCH) { return }
+  let v = t.in(1)
+  if not (v is PHI) or v.in(0) != r or v.uses != 1 { return }
+  for i in 1..v.arity { if not (v.in(i) is CONST) { return } }
+  let others = count u in users(r): u is PHI and u != v
+  if others == 0 or r.uses != others + 2 { return }
+  if any q in h.preds: q.touched { return }
+  loop-serial = loop-serial + 1
+  loop-node = r
+  h.member = loop-serial
+  sides.clear()
+  for u in users(t) {
+    if u.block-of == none or u.block-of.touched { return }
+    u.block-of.side-mark = loop-serial
+    u.block-of.side-index = sides.len
+    sides.push(u)
+  }
+  goes.clear()
+  for i in 0..r.arity {
+    let k = v.in(i + 1).payload
+    var to = -1
+    var otherwise = -1
+    for j in 0..sides.len {
+      let s = sides[j]
+      if s is DEFAULT { otherwise = j }
+      if (s is TRUE and k != word(0)) or (s is FALSE and k == word(0)) or (s is CASE and s.payload == k) { to = j }
+    }
+    if to < 0 { to = otherwise }
+    if to < 0 { return }
+    goes.push(to)
+  }
+  use-of.clear()
+  use-slot.clear()
+  use-at.clear()
+  changing.clear()
+  for u in users(r) {
+    if u is PHI and u != v {
+      changing.push(u)
+      if not spread(u) { return }
+    }
+  }
+  way-walk = way-walk + 1
+  for i in 0..use-of.len {
+    if not open-way?(use-at[i]) or weight(use-of[i].in(use-slot[i]), 6) > 12 { return }
+  }
+  # Nothing is changed before here.
+  way.clear()
+  for i in 0..r.arity { way.push(r.in(i)) }
+  side-count.clear()
+  side-one.clear()
+  side-meet.clear()
+  for j in 0..sides.len {
+    var n = 0
+    var one = -1
+    for i in 0..goes.len {
+      if goes[i] == j {
+        n = n + 1
+        one = i
+      }
+    }
+    side-count.push(n)
+    side-one.push(one)
+    side-meet.push(none)
+  }
+  for j in 0..sides.len {
+    if side-count[j] == 0 {
+      # A side no way goes to hangs from a test that is never true, which
+      # simplifying takes out with all the side led to.
+      let never = ir.if!(mut graph, way[0], ir.make-const!(mut graph, ir.T-BOOL, word(0)))
+      follow(sides[j], ir.true!(mut graph, never))
+      way[0] = ir.false!(mut graph, never)
+    }
+  }
+  for j in 0..sides.len {
+    if side-count[j] == 1 { follow(sides[j], way[side-one[j]]) }
+    else if side-count[j] > 1 {
+      let meet = ir.region!(mut graph, side-count[j])
+      var at = 0
+      for i in 0..goes.len {
+        if goes[i] == j {
+          set-input(meet, at, way[i])
+          at = at + 1
+        }
+      }
+      side-meet[j] = meet
+      follow(sides[j], meet)
+    }
+  }
+  grow-nodes()
+  reach-phi.clear()
+  reach-at.clear()
+  reach-as.clear()
+  for i in 0..use-of.len {
+    let u = use-of[i]
+    set-input(u, use-slot[i], arrived(u.in(use-slot[i]), use-at[i]))
+  }
+  # The branch, the region, its phis and what was computed from them there go.
+  for s in sides {
+    s.block-of.touched = true
+    drop(s)
+  }
+  drop(t)
+  drop(v)
+  for n in changing { drop(n) }
+  drop(r)
+  h.touched = true
+  for q in h.preds { q.touched = true }
+  parted = parted + 1
 }
 
 # ---------------------------------------------------------------- loads made once
@@ -309,13 +507,14 @@ fn hoist(h: Block) {
 
 # How much was changed: blocks must be found again after any of it.
 fn round() -> Int {
-  let was = turned + hoisted
+  let was = turned + hoisted + parted
   for h in order { if h.head is LOOP { hoist(h) } }
   for h in order { if h.head is LOOP { turn(h) } }
-  turned + hoisted - was
+  if trial { for h in order { if h.head is REGION { part(h) } } }
+  turned + hoisted + parted - was
 }
 
-fn any-loop?() -> Bool = any n in Node: not n.dead and n is LOOP
+fn any-loop?() -> Bool = any n in Node: not n.dead and (n is LOOP or n is REGION)
 
 # Round after round, finding the blocks again each time, until a round changes
 # nothing. What the passes had worked out is forgotten, before and after.
@@ -323,7 +522,7 @@ fn run() {
   if not any-loop?() { return }
   var rounds = 0
   var changed = 1
-  while changed > 0 and rounds < 6 {
+  while changed > 0 and rounds < 12 {
     start-over()
     cfg.build()
     changed = round()
