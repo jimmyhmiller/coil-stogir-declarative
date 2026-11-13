@@ -1,5 +1,5 @@
-# A Mach-O relocatable object for arm64: one segment with one section of code,
-# its relocations, the symbols and their names.
+# A Mach-O relocatable object for arm64: one segment with a section of code and
+# a section of data, their relocations, the symbols and their names.
 target a64.target
 symbols defined first
 prefix "_"
@@ -9,22 +9,29 @@ block header {
   u32 0x0100000c  u32 0               # arm64
   u32 1                               # a relocatable object
   u32 4  u32 size(commands)           # four load commands
-  u32 0x2000                          # symbols divide the section
+  u32 0x2000                          # symbols divide the sections
   u32 0
 }
 
 block commands {
-  # The segment, and in it the section of code.
-  u32 0x19  u32 152
+  # The segment: everything from the code to the end of the data.
+  u32 0x19  u32 232
   text "" pad 16
-  u64 0  u64 size(code)  u64 offset(code)  u64 size(code)
-  u32 7  u32 7  u32 1  u32 0
+  u64 0  u64 offset(after-data) - offset(code)  u64 offset(code)  u64 offset(after-data) - offset(code)
+  u32 7  u32 7  u32 2  u32 0
+  # The section of code.
   text "__text" pad 16  text "__TEXT" pad 16
   u64 0  u64 size(code)  u32 offset(code)
   u32 2                               # aligned to four bytes
   u32 offset(relocs)  u32 count(relocs)
   u32 0x80000400                      # instructions, and nothing else
   u32 0  u32 0  u32 0
+  # The section of data, which follows the code.
+  text "__data" pad 16  text "__DATA" pad 16
+  u64 offset(data) - offset(code)  u64 size(data)  u32 offset(data)
+  u32 3                               # aligned to eight bytes
+  u32 offset(pointers)  u32 count(pointers)
+  u32 0  u32 0  u32 0  u32 0
 
   # Built for macOS 11.0.
   u32 0x32  u32 24  u32 1  u32 0x000b0000  u32 0  u32 0
@@ -41,6 +48,9 @@ block commands {
 }
 
 block code { code }
+block after-code { align 8 }
+block data { data }
+block after-data { align 8 }
 
 # A relocation: where, then the symbol's number, whether the value is relative
 # to the instruction, four bytes wide, by symbol, and which kind.
@@ -51,13 +61,21 @@ block relocs {
   }
 }
 
+# A pointer in the data: eight bytes that hold a symbol's address.
+block pointers {
+  each p in pointers {
+    u32 p.at
+    u32 p.symbol.number | 3 << 25 | 1 << 27
+  }
+}
+
 block symtab {
   each s in symbols {
     u32 s.strx
     u8 if s.defined then 0x0f else 0x01    # external, and in a section or not
-    u8 if s.defined then 1 else 0          # the section
+    u8 if not s.defined then 0 else if s.in-data then 2 else 1
     u16 0
-    u64 if s.defined then s.value else 0
+    u64 if not s.defined then 0 else if s.in-data then offset(data) - offset(code) + s.value else s.value
   }
 }
 

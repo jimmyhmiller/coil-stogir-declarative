@@ -11,7 +11,7 @@ int main(void) {
   for (uint64_t i = 0; i < 50; i++) {
     uint64_t x = i * 977;
     uint64_t a = x * 3 + 1, b = helper(x + 1), c = b * 3 + 1;
-    if (both(x) != a + b + c) failures++;
+    if (both(x) != a + b + c + 1000 + a) failures++;
   }
   printf("linked by the system linker: %d failures\n", failures);
   return failures != 0;

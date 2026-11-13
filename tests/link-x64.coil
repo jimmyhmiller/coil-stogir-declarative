@@ -1,8 +1,9 @@
 ;;; Two functions and a helper from outside, linked in memory and written as an
 ;;; object file (tests/link-main.c is the program that links against it):
 ;;;   triple(x) = x * 3 + 1
-;;;   both(x)   = triple(x) + helper(x + 1), where the address of triple is also
-;;;               taken and called through a register.
+;;;   both(x)   = triple(x) + helper(x + 1), the address of triple taken and called
+;;;               through a register, a number read from data, and triple called
+;;;               once more through a pointer kept in that data.
 (module tests.link-x64)
 (import "coil.alloc" :use [malloc-allocator])
 (import "coil.arraylist" :use [ArrayList])
@@ -39,7 +40,7 @@
     (ir/return! (mut g) s r)
     g))
 
-(defn both [(triple-symbol i64) (helper-symbol i64)] (-> graph/Graph)
+(defn both [(triple-symbol i64) (helper-symbol i64) (table-symbol i64)] (-> graph/Graph)
   (let [(mut g) (graph/create (malloc-allocator))
         s (ir/start! (mut g))
         x (ir/param! (mut g) ir/T-I64 0)
@@ -52,27 +53,43 @@
                          (ir/sub! (mut g) ir/T-PTR (ir/trunc! (mut g) ir/T-PTR x) (ir/trunc! (mut g) ir/T-PTR x)))
         indirect (ir/call-node! (mut g) outside pointer 1)
         c (ir/result! (mut g) ir/T-I64 indirect)
-        sum (ir/add! (mut g) ir/T-I64 (ir/add! (mut g) ir/T-I64 a b) c)]
+        ; A number out of the data, and a call through a pointer kept there.
+        table (ir/symbol! (mut g) (cast u64 table-symbol))
+        d (ir/load-node! (mut g) ir/T-I64 indirect table)
+        kept (ir/load-node! (mut g) ir/T-PTR d
+                            (ir/add! (mut g) ir/T-PTR table (ir/const! (mut g) ir/T-PTR 8)))
+        through (ir/call-node! (mut g) kept kept 1)
+        e (ir/result! (mut g) ir/T-I64 through)
+        sum (ir/add! (mut g) ir/T-I64
+                     (ir/add! (mut g) ir/T-I64 (ir/add! (mut g) ir/T-I64 a b) c)
+                     (ir/add! (mut g) ir/T-I64 d e))]
     (graph/set-input! (mut g) direct 2 x)
     (graph/set-input! (mut g) outside 2 (ir/add! (mut g) ir/T-I64 x (ir/const! (mut g) ir/T-I64 1)))
     (graph/set-input! (mut g) indirect 2 b)
-    (ir/return! (mut g) indirect sum)
+    (graph/set-input! (mut g) through 2 x)
+    (ir/return! (mut g) through sum)
     g))
 
 (defn expected [(x u64)] (-> u64)
   (let [a (primitive/iadd (primitive/imul x (: 3 u64)) (: 1 u64))
         b (helper (primitive/iadd x (: 1 u64)))
         c (primitive/iadd (primitive/imul b (: 3 u64)) (: 1 u64))]
-    (primitive/iadd (primitive/iadd a b) c)))
+    (primitive/iadd (primitive/iadd (primitive/iadd a b) c) (primitive/iadd (: 1000 u64) a))))
 
 (defn main [] (-> i64)
   (let [(mut im) (image/create (malloc-allocator))
         triple-symbol (image/symbol! (mut im) "triple")
         helper-symbol (image/symbol! (mut im) "helper")
         both-symbol (image/symbol! (mut im) "both")
+        table-symbol (image/symbol! (mut im) "table")
+        ; The data: the number 1000, then the address of `triple`.
+        (mut table) (ArrayList::new [u8] (malloc-allocator))
         (mut outside) (ArrayList::new [u64] (malloc-allocator))
         (mut failures) 0]
-    (compile! (mut im) "both" (both triple-symbol helper-symbol))
+    (for i (range 0 16) (push! (mut table) (cond (= i 0) (: 0xE8 u8) (= i 1) (: 3 u8) :else (: 0 u8))))
+    (let [at (image/add-data! (mut im) table-symbol (slice table) 8)]
+      (image/add-pointer! (mut im) (+ at 8) triple-symbol))
+    (compile! (mut im) "both" (both triple-symbol helper-symbol table-symbol))
     (compile! (mut im) "triple" (triple))
     (for _ (range 0 (len (.names im))) (push! (mut outside) 0))
     (set! (mut outside) helper-symbol (primitive/cast u64 (primitive/cast (ptr i8) (fnptr-of helper))))
