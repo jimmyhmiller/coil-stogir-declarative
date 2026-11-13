@@ -22,10 +22,23 @@
     (Ok [bytes] (t/follow bytes path))
     (Err [_] (t/fail-at from 1 1 (t/cat2 "cannot read " path)))))
 
+;;; The manifest that names the file at `path`: the nearest Coil.toml above it.
+;;; That is this package's own even when another project is being built with
+;;; this one as a dependency. `otherwise` is the manifest of the build.
+(defn manifest-above [(path (slice u8)) (otherwise (slice u8))] (-> (slice u8))
+  (let [(mut dir) (dir-of path)
+        (mut found) ""]
+    (while (and (= found "") (> (len dir) 1))
+      (let [candidate (t/cat2 dir "/Coil.toml")]
+        (match (fs/read-file (malloc-allocator) candidate)
+          (Ok [_] (set! found candidate))
+          (Err [_] (set! dir (dir-of dir))))))
+    (if (= found "") otherwise found)))
+
 ;;; The modules the manifest of the file being read names, with absolute files.
 (defn open [(context Code)] (-> Project)
   (let [path (t/path-of context)
-        manifest (meta/read-context-manifest context)
+        manifest (manifest-above path (meta/read-context-manifest context))
         base (dir-of manifest)
         text (read-file manifest path)
         (mut entries) (ArrayList::new [Entry] (malloc-allocator))
