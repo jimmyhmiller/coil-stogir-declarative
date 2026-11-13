@@ -56,6 +56,15 @@ rule not-le        : NOT(LE(a, b))                     => LT(b, a)
 rule not-ult       : NOT(ULT(a, b))                    => ULE(b, a)
 rule not-ule       : NOT(ULE(a, b))                    => ULT(b, a)
 
+# Whether a value is zero is not changed by widening it; a boolean widened is
+# not zero when it holds.
+rule eq-zext-zero  : EQ(ZEXT(x), CONST 0) when bits(x) > 1   => EQ(x, 0)
+rule ne-zext-zero  : NE(ZEXT(x), CONST 0) when bits(x) > 1   => NE(x, 0)
+rule eq-sext-zero  : EQ(SEXT(x), CONST 0)              => EQ(x, 0)
+rule ne-sext-zero  : NE(SEXT(x), CONST 0)              => NE(x, 0)
+rule ne-bool-zero  : NE(ZEXT(x), CONST 0) when bits(x) == 1  => x
+rule eq-bool-zero  : EQ(ZEXT(x), CONST 0) when bits(x) == 1  => NOT(x)
+
 # Choices.
 rule cond-same     : COND(c, x, x)                     => x
 rule cond-true     : COND(CONST 1, x, y)               => x

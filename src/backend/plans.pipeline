@@ -19,6 +19,7 @@ plan default {
   atomics.run
   blocks.run
   split.run
+  thread.run
   cfg.build
   promote.run
   start-over
