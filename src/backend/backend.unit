@@ -2,6 +2,8 @@
 unit
 nodes backend.nodes
 rewrite backend.simplify
+flow backend.facts
+rewrite backend.narrow
 pass backend.cfg
 pass backend.schedule
 pass backend.mach

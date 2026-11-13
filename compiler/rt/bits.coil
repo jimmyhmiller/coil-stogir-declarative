@@ -268,3 +268,16 @@
       (let [low (primitive/imul a b)
             high (smulh a b 64)]
         (!= high (if (< (primitive/cast i64 low) 0) (: 0xFFFFFFFFFFFFFFFF u64) (: 0 u64))))))
+
+;;; How many bits it takes to write a value: one more than its highest set bit.
+(defn bit-length [(v u64)] (-> i64)
+  (let [(mut n) 0
+        (mut x) v]
+    (while (!= x 0)
+      (set! n (+ n 1))
+      (set! x (>> x 1)))
+    n))
+
+;;; The value with its low `n` bits set.
+(defn ones [(n i64)] (-> i64)
+  (primitive/cast i64 (mask n)))

@@ -4,9 +4,10 @@
 (import "rt.graph" :as graph)
 (import "backend.unit" :as st)
 (import "backend.simplify" :as simplify)
+(import "backend.narrow" :as narrow)
 
 (defn main [] (-> i64)
   (let [(mut cx) (st/create (graph/create (malloc-allocator)) (malloc-allocator))
-        bad (simplify/check-rules (mut cx) 4000)]
-    (println "{} rules, {} wrong or never seen to apply" simplify/RULES bad)
+        bad (+ (simplify/check-rules (mut cx) 4000) (narrow/check-rules (mut cx) 4000))]
+    (println "{} rules, {} wrong or never seen to apply" (+ simplify/RULES narrow/RULES) bad)
     (if (= bad 0) 0 1)))

@@ -13,11 +13,14 @@ source-roots = ["compiler", "tests"]
 ".rewrite" = "lang.readers"
 ".layout" = "lang.readers"
 ".pipeline" = "lang.readers"
+".flow" = "lang.readers"
 
 [modules]
 "backend.nodes" = "src/backend/nodes.ir"
 "backend.unit" = "src/backend/backend.unit"
 "backend.simplify" = "src/backend/simplify.rewrite"
+"backend.facts" = "src/backend/facts.flow"
+"backend.narrow" = "src/backend/narrow.rewrite"
 "backend.cfg" = "src/backend/cfg.pass"
 "backend.schedule" = "src/backend/schedule.pass"
 "backend.a64" = "src/backend/a64.isa"

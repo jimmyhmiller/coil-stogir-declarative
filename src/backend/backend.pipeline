@@ -10,8 +10,11 @@ plan quick {
   emit.run
 }
 
-# Simplify until nothing changes, then compile.
+# Simplify until nothing changes, solve the facts, simplify with them, compile.
+# Then what the facts allow, and what that opens up.
 plan default {
   until-stable { simplify.run }
+  facts.solve
+  until-stable { narrow.run  simplify.run }
   quick
 }

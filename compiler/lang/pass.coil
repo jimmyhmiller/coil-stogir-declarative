@@ -21,6 +21,7 @@
 (import "lang.ir" :as ir)
 (import "lang.project" :as project)
 (import "lang.lower" :as lower)
+(import "lang.flow" :as flow)
 
 ;; ---------------------------------------------------------------- declarations
 
@@ -247,7 +248,20 @@
                      (Func :module name :name "run" :params (ArrayList::new [Field] (malloc-allocator))
                            :result "Int"))
               (push! (mut (.files d)) (project/file-of p name (.line at) (.col at))))
-          :else (t/die (mut c) tok (t/cat2 "expected nodes, pass, lower or rewrite, found " (.text tok))))))
+          ; A .flow file gives a column and a function for each fact, and `solve`.
+          (t/tok-is? tok "flow")
+            (let [name (module-name! (mut c))
+                  flow-file (project/file-of p name (.line at) (.col at))]
+              (push! (mut (.funcs d))
+                     (Func :module name :name "solve" :params (ArrayList::new [Field] (malloc-allocator))
+                           :result "Void"))
+              (for fact (flow/fact-names (project/read-file flow-file file) flow-file)
+                (let [(mut one) (ArrayList::new [Field] (malloc-allocator))]
+                  (push! (mut one) (Field :name "n" :type "Node"))
+                  (push! (mut (.funcs d)) (Func :module name :name fact :params one :result "Int"))
+                  (push! (mut (.columns d)) (Column :name (t/cat2 "fact-" fact) :key "Node" :type "Int"))))
+              (push! (mut (.files d)) flow-file))
+          :else (t/die (mut c) tok (t/cat2 "expected nodes, pass, lower, rewrite or flow, found " (.text tok))))))
     (for column (.columns d)
       (unless (entity? d (.key column))
         (t/fail-at file 1 1 (t/cat4 "column " (.name column) " is over no entity: " (.key column))))

@@ -34,7 +34,7 @@
 (defstruct Binding [(name (slice u8)) (code (slice u8)) (is-node bool)])
 
 (defstruct R
-  [(c t/Cur) (nodes ir/Spec) (bindings (ArrayList Binding))])
+  [(c t/Cur) (nodes ir/Spec) (bindings (ArrayList Binding)) (facts bool)])
 
 (defn parse-pattern [(r (mut R))] (-> Pat)
   (let [tok (t/peek (mut (.c r)))
@@ -136,6 +136,9 @@
                 (= name "bits") (t/cat3 "(ir/type-bits (graph/ty (.g cx) (primitive/cast i32 " x ")))")
                 (= name "uses") (t/cat3 "(graph/use-count (.g cx) (primitive/cast i32 " x "))")
                 (= name "signed") (t/cat3 "(ir/type-signed? (graph/ty (.g cx) (primitive/cast i32 " x ")))")
+                (= name "ones") (t/cat3 "(bv/ones " x ")")
+                ; Anything else is a fact, if the file names where facts come from.
+                (.facts r) (t/cat4 "(facts/" name " (mut cx) (primitive/cast i32 " (t/cat2 x "))"))
                 :else (t/die (mut (.c r)) tok (t/cat2 "no function named " name)))))
       (= name "width") "(ir/type-bits (graph/ty (.g cx) n))"
       (>= (binding-of (mut r) name) 0)
@@ -273,13 +276,13 @@
           (t/emit! (mut o) "  (let [")
           (for i (range 0 (len vars))
             (t/emit! (mut o)
-                     (t/cat4 "v*" (t/int-text i) " (ir/param! (mut (.g cx)) (deviate! (mut rnd) main) "
-                             (t/cat2 (t/int-text i) ") "))))
+                     (t/cat4 "v*" (t/int-text i) " (narrowed! (mut cx) (mut rnd) (ir/param! (mut (.g cx)) (deviate! (mut rnd) main) "
+                             (t/cat2 (t/int-text i) ")) "))))
           (t/line! (mut o) (t/cat3 "] " body "))"))))
     (t/text-of (mut o))))
 
 ;;; The checker, the same for every rule set but for the dispatch to instances.
-(defn emit-checker! [(o (mut t/Out)) (rules i64)] (-> void)
+(defn emit-checker! [(o (mut t/Out)) (rules i64) (facts bool)] (-> void)
   (t/line! (mut o) "(defstruct Rnd [(state u64)])")
   (t/line! (mut o) "(defn roll! [(rnd (mut Rnd))] (-> u64)")
   (t/line! (mut o) "  (let [(mut x) (.state rnd)]")
@@ -304,6 +307,15 @@
   (t/line! (mut o) "          (= k 12) (<< (: 1 u64) (% (roll! (mut rnd)) 64))")
   (t/line! (mut o) "          (= k 13) (% (roll! (mut rnd)) 64)")
   (t/line! (mut o) "          :else (roll! (mut rnd)))))")
+  (t/line! (mut o) ";;; A parameter, or one time in three its low few bits, so that rules which ask")
+  (t/line! (mut o) ";;; what is known of a value meet values of which something is known.")
+  (t/line! (mut o) "(defn narrowed! [(cx (mut st/State)) (rnd (mut Rnd)) (p i32)] (-> i32)")
+  (t/line! (mut o) "  (let [type (graph/ty (.g cx) p)]")
+  (t/line! (mut o) "    (if (and (= (% (roll! (mut rnd)) 3) 0) (> (ir/type-bits type) 1) (not (ir/type-float? type)))")
+  (t/line! (mut o) "        (ir/and! (mut (.g cx)) type p")
+  (t/line! (mut o) "                 (ir/const! (mut (.g cx)) type")
+  (t/line! (mut o) "                            (bv/mask (cast i64 (% (roll! (mut rnd)) (cast u64 (ir/type-bits type)))))))")
+  (t/line! (mut o) "        p)))")
   (t/line! (mut o) "(defn instance [(cx (mut st/State)) (rnd (mut Rnd)) (rule i64) (main i32)] (-> i32)")
   (t/line! (mut o) "  (match rule")
   (for k (range 1 (+ rules 1))
@@ -333,6 +345,7 @@
   (t/line! (mut o) "              (if (= root 0)")
   (t/line! (mut o) "                  (set! checkable false)")
   (t/line! (mut o) "                  (when (= (ir/verify (.g cx)) \"\")")
+  (t/line! (mut o) (if facts "                    (do (st/begin! (mut cx)) (facts/solve (mut cx)))" "                    (st/begin! (mut cx))"))
   (t/line! (mut o) "                    (set! (.fired cx) 0)")
   (t/line! (mut o) "                    (let [new (simplify (mut cx) root)")
   (t/line! (mut o) "                          fired (.fired cx)]")
@@ -388,10 +401,12 @@
           at (t/peek-at (mut c) 1)
           nodes-module (do (t/expect! (mut c) "nodes") (module-name! (mut c)))
           nodes-file (project/file-of p nodes-module (.line at) (.col at))
+          facts-module (if (t/accept! (mut c) "facts") (module-name! (mut c)) "")
           (mut r) (R
                     :c c
                     :nodes (ir/parse (project/read-file nodes-file path) nodes-file)
-                    :bindings (ArrayList::new [Binding] (malloc-allocator)))
+                    :bindings (ArrayList::new [Binding] (malloc-allocator))
+                    :facts (!= facts-module ""))
           (mut groups) (ArrayList::new [(slice u8)] (malloc-allocator))
           (mut texts) (ArrayList::new [(slice u8)] (malloc-allocator))
           (mut names) (t/out-new)
@@ -445,6 +460,7 @@
       (t/line! (mut o) "(import \"rt.bits\" :as bv)")
       (t/line! (mut o) (t/cat3 "(import \"" unit "\" :as st)"))
       (t/line! (mut o) (t/cat3 "(import \"" nodes-module "\" :as ir)"))
+      (when (.facts r) (t/line! (mut o) (t/cat3 "(import \"" facts-module "\" :as facts)")))
       (t/emit! (mut o) (t/text-of (mut names)))
       (t/line! (mut o) (t/cat3 "(const RULES " (t/int-text rule) ")"))
       (t/line! (mut o) "(defn rule-name [(rule i64)] (-> (slice u8)) (get RULE-NAMES rule))")
@@ -464,7 +480,7 @@
       (t/line! (mut o) "    (_ 0)))")
       (emit-engine! (mut o) (.nodes r))
       (t/emit! (mut o) (t/text-of (mut instances)))
-      (emit-checker! (mut o) rule)
+      (emit-checker! (mut o) rule (.facts r))
       (t/text-of (mut o)))))
 
 (defn const-name [(spec ir/Spec)] (-> (slice u8))

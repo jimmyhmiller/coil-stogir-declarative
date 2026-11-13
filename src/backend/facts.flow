@@ -1,0 +1,22 @@
+# What is known of values without running them.
+flow in backend.unit
+nodes backend.nodes
+
+# How many of a value's low bits may be set: every bit above them is zero.
+fact width
+  CONST k          = bit-length(k)
+  ZEXT(x)          = width(x)
+  TRUNC(x)         = width(x)
+  AND(x, y)        = min(width(x), width(y))
+  OR(x, y)         = max(width(x), width(y))
+  XOR(x, y)        = max(width(x), width(y))
+  SHR(x, CONST k)  = width(x) - k
+  UDIV(x, y)       = width(x)
+  UREM(x, y)       = min(width(x), width(y))
+  UMIN(x, y)       = min(width(x), width(y))
+  UMAX(x, y)       = max(width(x), width(y))
+  COND(_, x, y)    = max(width(x), width(y))
+  CLZ(x)           = bit-length(bits(x))
+  CTZ(x)           = bit-length(bits(x))
+  POPCNT(x)        = bit-length(bits(x))
+  PHI              = join
