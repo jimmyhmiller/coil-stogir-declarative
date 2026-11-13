@@ -71,6 +71,10 @@ inst cnt-bytes(rd: def simd, rn: use simd)                = 0 0 0 01110 00 10000
 inst add-bytes(rd: def simd, rn: use simd)                = 0 0 0 01110 00 11000 11011 10 rn rd
 inst csinc(sf: u1, rd: def gpr, rn: use gpr, rm: use gpr, cond: u4) = sf 0 0 11010100 rm cond 0 1 rn rd
 
+# Sums and differences with the second operand shifted left by `amount`.
+inst add-shifted(sf: u1, rd: def gpr, rn: use gpr, rm: use gpr, amount: u6) = sf 0 0 01011 00 0 rm amount rn rd
+inst sub-shifted(sf: u1, rd: def gpr, rn: use gpr, rm: use gpr, amount: u6) = sf 1 0 01011 00 0 rm amount rn rd
+
 # A logical immediate: a run of `ones` one-bits, turned right by `rotate`
 # within an element of `size` bits, the element repeated to fill the register.
 immediate logical(size in 2 4 8 16 32 64, ones in 1..size - 1, rotate in 0..size - 1) = repeat(rotate-right(low-ones(ones), rotate, size), size) encoded (size == 64) << 12 | rotate << 6 | (~(size * 2 - 1)) & 63 | (ones - 1)
@@ -180,6 +184,18 @@ inst ldur(size: u2, rt: def gpr, rn: use gpr, imm: u9)      = size 111 0 00 01 0
 inst stur(size: u2, rt: use gpr, rn: use gpr, imm: u9)      = size 111 0 00 00 0 imm 00 rn rt
 inst ldur-f(size: u2, rt: def simd, rn: use gpr, imm: u9)   = size 111 1 00 01 0 imm 00 rn rt
 inst stur-f(size: u2, rt: use simd, rn: use gpr, imm: u9)   = size 111 1 00 00 0 imm 00 rn rt
+
+# Memory at a base plus an index register, the index times the access's width
+# if `scaled` is 1; `size` is which power of two bytes.
+inst load-indexed(size: u2, rt: def gpr, rn: use gpr, rm: use gpr, scaled: u1)  = size 111000011 rm 011 scaled 10 rn rt
+inst store-indexed(size: u2, rt: use gpr, rn: use gpr, rm: use gpr, scaled: u1) = size 111000001 rm 011 scaled 10 rn rt
+
+# Two registers to and from two words next to each other, the first `imm`
+# words from the base, which may be up to 64 words below it.
+inst stp(rt: use gpr, rt2: use gpr, rn: use gpr, imm: u7)      = 1010100100 imm rt2 rn rt
+inst ldp(rt: def gpr, rt2: def gpr, rn: use gpr, imm: u7)      = 1010100101 imm rt2 rn rt
+inst stp-d(rt: use simd, rt2: use simd, rn: use gpr, imm: u7)  = 0110110100 imm rt2 rn rt
+inst ldp-d(rt: def simd, rt2: def simd, rn: use gpr, imm: u7)  = 0110110101 imm rt2 rn rt
 
 # The frame: 64-bit loads and stores at a multiple of eight from a base.
 inst ldr(rt: def gpr, rn: use gpr, imm: u12)              = 1111100101 imm rn rt

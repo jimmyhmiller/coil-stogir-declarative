@@ -4,8 +4,8 @@
 # of the routine the unit was told of.
 pass in unit
 
-state copy-routine: Int               # one more than the symbols of routines outside the image that
-state fill-routine: Int               # copy and fill any number of bytes; 0 if there is none
+setting copy-routine: Int              # one more than the symbols of routines outside the image that
+setting fill-routine: Int              # copy and fill any number of bytes; 0 if there is none
 state inline-bytes: Int               # the most bytes done by loads and stores
 
 fn at(p: Node, offset: Int) -> Node =

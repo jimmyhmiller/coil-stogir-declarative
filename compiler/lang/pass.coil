@@ -39,6 +39,7 @@
    (columns (ArrayList Column))
    (records (ArrayList Record))
    (cells (ArrayList Field))
+   (given (ArrayList (slice u8)))   ; the cells that are settings: given from outside, kept by `begin!`
    (funcs (ArrayList Func))
    (files (ArrayList (slice u8)))
    (passes (ArrayList (slice u8)))
@@ -162,9 +163,10 @@
                   (t/die (mut c) tok (t/cat2 "column declared twice: " name)))
                 (push! (mut (.columns d))
                        (Column :name name :key key :type (parse-type (mut c) d)))))
-          (t/tok-is? tok "state")
+          (or (t/tok-is? tok "state") (t/tok-is? tok "setting"))
             (let [name (t/name! (mut c) "a name")]
               (t/expect! (mut c) ":")
+              (when (t/tok-is? tok "setting") (push! (mut (.given d)) name))
               (push! (mut (.cells d)) (Field :name name :type (parse-type (mut c) d))))
           (t/tok-is? tok "record")
             (let [name (t/name! (mut c) "a record name")
@@ -190,6 +192,7 @@
                   :columns (ArrayList::new [Column] (malloc-allocator))
                   :records (ArrayList::new [Record] (malloc-allocator))
                   :cells (ArrayList::new [Field] (malloc-allocator))
+                  :given (ArrayList::new [(slice u8)] (malloc-allocator))
                   :funcs (ArrayList::new [Func] (malloc-allocator))
                   :files (ArrayList::new [(slice u8)] (malloc-allocator))
                   :passes (ArrayList::new [(slice u8)] (malloc-allocator))
@@ -382,11 +385,15 @@
                 (t/line! (mut o)
                          (t/cat4 "  (push! (mut (." (.name column) " cx)) "
                                  (t/cat2 (default-text d (.type column)) ")")))))))
+    ; A setting is whoever compiles's to give, once: starting over leaves it.
     (for cell (.cells d)
-      (if (list-type? (.type cell))
-          (t/line! (mut o) (t/cat3 "  (clear! (mut (." (.name cell) " cx)))"))
-          (t/line! (mut o)
-                   (t/cat4 "  (set! (." (.name cell) " cx) " (t/cat2 (default-text d (.type cell)) ")")))))
+      (cond (>= (t/index-of (.given d) (.name cell)) 0) 0
+            (list-type? (.type cell))
+              (t/line! (mut o) (t/cat3 "  (clear! (mut (." (.name cell) " cx)))"))
+            :else
+              (do (t/line! (mut o)
+                           (t/cat4 "  (set! (." (.name cell) " cx) " (t/cat2 (default-text d (.type cell)) ")")))
+                  0)))
     (t/line! (mut o) "  (grow-nodes! (mut cx))))")
     (t/text-of (mut o))))
 
@@ -1180,7 +1187,7 @@
               (let [f (parse-signature (mut (.c k)) d (.module k))]
                 (t/emit! (mut o) (function-text (mut k) f)))
             ; Storage is the unit's; here a declaration is only passed over.
-            (or (t/tok-is? tok "entity") (t/tok-is? tok "column") (t/tok-is? tok "state")
+            (or (t/tok-is? tok "entity") (t/tok-is? tok "column") (t/tok-is? tok "state") (t/tok-is? tok "setting")
                 (t/tok-is? tok "record"))
               (skip-body! (mut (.c k)))
             :else (t/die (mut (.c k)) tok (t/cat2 "expected a declaration, found " (.text tok))))))

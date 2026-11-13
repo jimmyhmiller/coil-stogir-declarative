@@ -22,6 +22,11 @@ template to-frame(s, base, slot)         = store(1, s, base, slot * 8)
 template from-frame-float(d, base, slot) = loadf(1, d, base, slot * 8)
 template to-frame-float(s, base, slot)   = storef(1, s, base, slot * 8)
 # Sixteen bytes, in two slots.
+# Two registers to and from two slots next to each other: one after the other.
+template to-frame-pair(a, b, base, slot)         = to-frame(a, base, slot) ; to-frame(b, base, slot + 1)
+template from-frame-pair(a, b, base, slot)       = from-frame(a, base, slot) ; from-frame(b, base, slot + 1)
+template to-frame-float-pair(a, b, base, slot)   = to-frame-float(a, base, slot) ; to-frame-float(b, base, slot + 1)
+template from-frame-float-pair(a, b, base, slot) = from-frame-float(a, base, slot) ; from-frame-float(b, base, slot + 1)
 template from-frame-wide(d, base, slot)  = loadv(d, base, slot * 8)
 template to-frame-wide(s, base, slot)    = storev(s, base, slot * 8)
 # An argument of `bytes` bytes to its place above the stack pointer, and a

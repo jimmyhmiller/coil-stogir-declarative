@@ -224,7 +224,7 @@ fn nothing?(i: Inst) -> Bool {
 # it jumps.
 fn find-onward() {
   for b in order {
-    if id(b.last-inst).kind == 2 and b.preds.len == 1 and b.succs.len == 1 and b.succs[0] != b {
+    if id(b.last-inst).kind == 2 and b.preds.len >= 1 and b.succs.len == 1 and b.succs[0] != b {
       var empty = true
       for at in b.first-inst..b.last-inst { if not nothing?(id(at)) { empty = false } }
       # Nor may a value come back from the frame part way through it.
@@ -232,19 +232,32 @@ fn find-onward() {
         let i: Inst = id(at)
         if i.starts-even.len > 0 { empty = false }
       }
-      if empty and settled?(b.preds[0], b) and settled?(b, b.succs[0]) { b.onward = b.succs[0] }
+      if empty and (all p in b.preds: settled?(p, b)) and settled?(b, b.succs[0]) { b.onward = b.succs[0] }
     }
+  }
+  # Blocks that only jump round to one another are a loop that must be code:
+  # one that comes back to itself, or never arrives, stays a jump.
+  for b in order {
+    if b.onward != none {
+      var x = b.onward
+      var steps = 0
+      while x != none and x != b and steps <= order.len {
+        x = x.onward
+        steps = steps + 1
+      }
+      if x != none { b.onward = none }
+    }
+  }
+  # Then each goes straight to where its jumps end.
+  for b in order {
+    if b.onward != none { b.onward = lands(b) }
   }
 }
 
 # Where a jump to block `b` ends up, through blocks that are only jumps.
 fn lands(b: Block) -> Block {
   var x = b
-  var steps = 0
-  while x.onward != none and steps < 64 {
-    x = x.onward
-    steps = steps + 1
-  }
+  while x.onward != none { x = x.onward }
   x
 }
 
@@ -353,22 +366,40 @@ fn others-saved() -> Word =
 
 fn others-slot() -> Int = record-slot() - object-bytes / 8 - bit-count(others-saved())
 
-fn enter() {
+# The other saved registers to their slots (`keeping`) or back from them, two
+# of a kind at a time where the machine can.
+fn others(keeping: Bool) {
   let sp = marker(abi.STACK)
-  lower.grow-stack(frame)
-  if keeps-record?() {
-    lower.to-frame(marker(abi.FRAME), sp, record-slot())
-    if abi.LINK >= 0 { lower.to-frame(marker(abi.LINK), sp, record-slot() + 1) }
-    lower.frame-record(sp, record-slot() * 8)
-  }
   var rest = others-saved()
   var at = others-slot()
   while rest != word(0) {
     let r = lowest-bit(rest)
-    keep-at(r, sp, at)
-    at = at + 1
     rest = clear-bit(rest, r)
+    let r2 = if rest != word(0) then lowest-bit(rest) else -1
+    if r2 >= 0 and floating?(r) == floating?(r2) {
+      if floating?(r) {
+        if keeping { lower.to-frame-float-pair(marker(r), marker(r2), sp, at) } else { lower.from-frame-float-pair(marker(r), marker(r2), sp, at) }
+      } else {
+        if keeping { lower.to-frame-pair(marker(r), marker(r2), sp, at) } else { lower.from-frame-pair(marker(r), marker(r2), sp, at) }
+      }
+      rest = clear-bit(rest, r2)
+      at = at + 2
+    } else {
+      if keeping { keep-at(r, sp, at) } else { fetch-at(r, sp, at) }
+      at = at + 1
+    }
   }
+}
+
+fn enter() {
+  let sp = marker(abi.STACK)
+  lower.grow-stack(frame)
+  if keeps-record?() {
+    if abi.LINK >= 0 { lower.to-frame-pair(marker(abi.FRAME), marker(abi.LINK), sp, record-slot()) }
+    else { lower.to-frame(marker(abi.FRAME), sp, record-slot()) }
+    lower.frame-record(sp, record-slot() * 8)
+  }
+  others(true)
   if dynamic { lower.base-from-stack(marker(abi.BASE)) }
 }
 
@@ -376,17 +407,10 @@ fn leave() {
   let sp = marker(abi.STACK)
   # The stack pointer back to where the frame is, before anything is read from it.
   if dynamic { lower.stack-from-base(marker(abi.BASE)) }
-  var rest = others-saved()
-  var at = others-slot()
-  while rest != word(0) {
-    let r = lowest-bit(rest)
-    fetch-at(r, sp, at)
-    at = at + 1
-    rest = clear-bit(rest, r)
-  }
+  others(false)
   if keeps-record?() {
-    if abi.LINK >= 0 { lower.from-frame(marker(abi.LINK), sp, record-slot() + 1) }
-    lower.from-frame(marker(abi.FRAME), sp, record-slot())
+    if abi.LINK >= 0 { lower.from-frame-pair(marker(abi.FRAME), marker(abi.LINK), sp, record-slot()) }
+    else { lower.from-frame(marker(abi.FRAME), sp, record-slot()) }
   }
   lower.shrink-stack(frame)
 }
