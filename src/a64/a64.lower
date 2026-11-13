@@ -416,6 +416,10 @@ rule ULE(a, b)  => subs(sf(a), zr, zx(a), zx(b)) ; csinc(0, out, zr, zr, hi)
 # this way only if the constant is not negative: a negative one is held as its
 # low bits, which is not the number.
 # A branch on a comparison uses its flags directly.
+# The low 32 bits against a small constant.
+rule IF(_, EQ(AND(x, CONST m), CONST k)) when k > 0 and u12(k) and m == 4294967295 and bits(x) == 64 => subs-imm(0, zr, x, k) ; b-cond(eq, then) ; jump(else)
+rule IF(_, NE(AND(x, CONST m), CONST k)) when k > 0 and u12(k) and m == 4294967295 and bits(x) == 64 => subs-imm(0, zr, x, k) ; b-cond(ne, then) ; jump(else)
+rule IF(_, ULT(AND(x, CONST m), CONST k)) when u12(k) and m == 4294967295 and bits(x) == 64 => subs-imm(0, zr, x, k) ; b-cond(lo, then) ; jump(else)
 # Whether the low 32 bits are zero.
 rule IF(_, EQ(AND(x, CONST m), CONST k)) when k == 0 and m == 4294967295 and bits(x) == 64 => cbz(0, x, then) ; jump(else)
 rule IF(_, NE(AND(x, CONST m), CONST k)) when k == 0 and m == 4294967295 and bits(x) == 64 => cbnz(0, x, then) ; jump(else)

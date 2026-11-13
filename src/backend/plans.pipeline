@@ -16,6 +16,7 @@ plan quick {
 # changes, solve the facts, simplify with them, and compile.
 # Then what the facts allow, and what that opens up.
 plan default {
+  switches.settle
   atomics.run
   until-stable { simplify.run }
   blocks.run

@@ -28,6 +28,7 @@ setting trial: Bool
 #   9 waiting from a loop's start   10 loads and stores forwarded   11 promotion
 #   12 loads and stores in pairs   13 branches that only choose made choices
 #   14 the frame opened only where it is needed   15 switches by table
+#   16 the last case of a switch that names every value is its default
 setting off: Int
 fn on?(what: Int) -> Bool = not has-bit(word(off), what)
 state post: [Block]

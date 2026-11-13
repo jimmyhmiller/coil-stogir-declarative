@@ -8,6 +8,7 @@ use cfg as cfg
 import target as isa
 
 state halved: Int
+state settled: Int
 
 # How many cases a switch may have and still be compared with each in turn.
 fn few() -> Int = 4
@@ -54,6 +55,49 @@ fn halve(s: Node) {
   halved = halved + 1
   halve(below)
   halve(above)
+}
+
+# A switch whose default only stops the program names every value it can be
+# given: the last case needs no test, and is what the default now is. With
+# one case left besides, the switch is a test of whether the value is that
+# case's.
+fn certain(s: Node) {
+  let otherwise = first u in users(s): u is DEFAULT
+  if otherwise == none { return }
+  let stop = cfg.follower(otherwise)
+  if stop == none or not (stop is TRAP) { return }
+  var last: Node = none
+  var cases = 0
+  for u in users(s) {
+    if u is CASE {
+      cases = cases + 1
+      if last == none or u.payload > last.payload { last = u }
+    }
+  }
+  if last == none { return }
+  drop(stop)
+  loops.follow(last, otherwise)
+  drop(last)
+  settled = settled + 1
+  if cases == 2 {
+    let other = first u in users(s): u is CASE
+    let v = s.in(1)
+    let test = ir.if!(mut graph, s.in(0), ir.eq!(mut graph, v, ir.make-const!(mut graph, v.type, other.payload)))
+    let yes = ir.true!(mut graph, test)
+    let no = ir.false!(mut graph, test)
+    grow-nodes()
+    loops.follow(other, yes)
+    loops.follow(otherwise, no)
+    drop(other)
+    drop(otherwise)
+    drop(s)
+  }
+}
+
+# Run early, so that what follows sees the tests and not the switches.
+fn settle() {
+  if not cfg.on?(16) { return }
+  for n in Node { if not n.dead and n is SWITCH { certain(n) } }
 }
 
 fn run() {
