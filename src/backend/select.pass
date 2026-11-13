@@ -86,7 +86,7 @@ fn param(n: Node) {
     arrive(n, 0 - r - 1)
   } else {
     if n.float { lower.from-frame-float(int(n), stacked) } else { lower.from-frame(int(n), stacked) }
-    mach.from-caller()
+    mach.from-caller(int(n), stacked)
   }
 }
 

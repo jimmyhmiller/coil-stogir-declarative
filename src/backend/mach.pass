@@ -13,8 +13,7 @@ column a3: Inst -> Int
 column a4: Inst -> Int
 column also-reads: Inst -> Word       # machine registers it reads besides its operands
 column also-writes: Inst -> Word      # and writes
-column above-frame: Inst -> Bool      # its frame slot counts from the caller's frame
-column kind: Inst -> Int               # 1 a register copy, 2 a jump, 3 a return, else 0
+column kind: Inst -> Int               # 1 a register copy, 2 a jump, 3 a return, 4 a read of the caller's frame, else 0
 column copy-to: Inst -> Int            # for a copy: the register written
 column copy-from: Inst -> Int          # and the register read
 column first-inst: Block -> Int       # a block's instructions are first..last
@@ -83,9 +82,14 @@ fn implicit(reads: Word, writes: Word) {
   i.also-writes = writes
 }
 
-# The instruction just emitted names a slot of the caller's frame.
-fn from-caller() {
-  id(Inst.count).above-frame = true
+# The instruction just emitted reads register `d` from slot `slot` of the
+# caller's frame, which is as far above this function's own as the frame is
+# large: where exactly is known only when the frame is.
+fn from-caller(d: Int, slot: Int) {
+  let i = id(Inst.count)
+  i.kind = 4
+  i.copy-to = d
+  i.copy-from = slot
 }
 
 # How far below the frame record a frame object lies. Objects up to 8 bytes

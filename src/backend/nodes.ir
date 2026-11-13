@@ -64,7 +64,8 @@ node SHR(a: T, n: T) : T in int                 = a >> (n % bits)
 node SAR(a: T, n: T) : T in int                 = sar(a, n % bits)
 
 # Division. By zero, and the smallest signed value by -1, are for the program
-# to avoid: their results here are only what the machines without a trap give.
+# to avoid: some machines trap, and the results here are only what the ones
+# that do not trap give.
 node UDIV(a: T, b: T) : T in int                = udiv(a, b)
 node SDIV(a: T, b: T) : T in int                = sdiv(a, b)
 node UREM(a: T, b: T) : T in int                = urem(a, b)

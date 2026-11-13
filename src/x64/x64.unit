@@ -1,0 +1,16 @@
+# The x86-64 compiler: the shared node set, rules and passes, with this
+# directory's machine, convention and selection rules.
+unit
+nodes backend.nodes
+target x64.target
+abi x64.abi
+rewrite x64.simplify
+flow x64.facts
+rewrite x64.narrow
+pass x64.cfg
+pass x64.schedule
+pass x64.mach
+lower x64.lower
+pass x64.select
+pass x64.alloc
+pass x64.emit

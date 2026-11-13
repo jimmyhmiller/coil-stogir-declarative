@@ -1,0 +1,108 @@
+;;; Differential check: random programs, the reference interpreter against the
+;;; generated machine code. Usage: fuzz [count] [first-seed] [classic]
+;;; With one program, its graph before and after rewriting and its code are printed.
+(module tests.fuzz-x64)
+(import "coil.alloc" :use [malloc-allocator])
+(import "coil.arraylist" :use [ArrayList])
+(import "coil.primitive" :as primitive)
+(import "coil.cc" :as cc)
+
+(extern scratch-memory :as "malloc" :cc (cc/C) [i64] (-> (ptr u8)))
+
+(import "coil.str" :as str)
+(import "coil.slice" :use [subslice])
+(import "rt.graph" :as graph)
+(import "rt.jit" :as jit)
+(import "backend.nodes" :as ir)
+(import "tests.gen" :as gen)
+(import "x64.unit" :as st)
+(import "x64.plans" :as plans)
+
+(defstruct Stats [(spilled i64) (slots i64) (words i64) (nodes i64)])
+
+(defn reset-memory! [(memory (ptr u8)) (round i64)] (-> void)
+  (for i (range 0 256)
+    (primitive/store! (primitive/index memory i) (primitive/cast u8 (& (+ (* i 37) (* round 11)) 255)))))
+
+(defn memory-sum [(memory (ptr u8))] (-> u64)
+  (let [(mut h) (: 1469598103934665603 u64)]
+    (for i (range 0 256)
+      (set! h (primitive/imul (^ h (cast u64 (primitive/load (primitive/index memory i)))) (: 1099511628211 u64))))
+    h))
+
+(defn check [(seed u64) (type i32) (show bool) (stats (mut Stats)) (memory (ptr u8)) (rich bool)] (-> bool)
+  (let [g (gen/program seed type 60 (primitive/cast u64 memory) rich (if (= (% seed 3) 0) 12 0))
+        problem (ir/verify g)
+        bits (ir/type-bits type)
+        (mut args) (ArrayList::new [u64] (malloc-allocator))
+        (mut want) (ArrayList::new [u64] (malloc-allocator))
+        (mut sums) (ArrayList::new [u64] (malloc-allocator))
+        (mut state) (| seed 1)
+        (mut ok) true]
+    (when (!= problem "")
+      (println "seed {}: the generator made a wrong graph: {}" seed problem)
+      (set! ok false))
+    ; Three sets of arguments, interpreted before the graph is given away.
+    (for round (range 0 3)
+      (for i (range 0 10)
+        (set! state (primitive/iadd (primitive/imul state (: 6364136223846793005 u64)) (: 1442695040888963407 u64)))
+        (push! (mut args) (if (= round 0) (cast u64 (+ i 1)) (>> state (if (= round 1) 40 0)))))
+      (reset-memory! memory round)
+      (match (ir/interpret g (subslice (slice args) (* round 10) (+ (* round 10) 10)) 10000000)
+        (Some [v] (push! (mut want) v))
+        (None [] (do (println "seed {}: the interpreter did not finish" seed) (set! ok false) (push! (mut want) 0))))
+      (push! (mut sums) (memory-sum memory)))
+    (when show (println "before:") (ir/dump g))
+    (let [(mut cx) (st/create g (malloc-allocator))]
+      (st/begin! (mut cx))
+      (plans/default (mut cx))
+      (when show
+        (ir/dump (.g cx))
+        (print "code:")
+        (for b (.code cx) (print " {:02x}" b))
+        (println ""))
+      (when (> (.slots cx) 0) (set! (.spilled stats) (+ (.spilled stats) 1)))
+      (set! (.slots stats) (+ (.slots stats) (.slots cx)))
+      (set! (.words stats) (+ (.words stats) (/ (len (.code cx)) 4)))
+      (set! (.nodes stats) (+ (.nodes stats) (graph/size (.g cx))))
+      (let [code (jit/map-bytes (.code cx))
+            f (primitive/cast (fnptr (cc/C) [u64 u64 u64 u64 u64 u64 u64 u64 u64 u64] u64) (.base code))
+            mask (if (>= bits 64) (: 0xFFFFFFFFFFFFFFFF u64) (- (<< (: 1 u64) (cast u64 bits)) 1))]
+        (for round (range 0 3)
+          (reset-memory! memory round)
+          (let [at (* round 10)
+                got (& (f (get args at) (get args (+ at 1)) (get args (+ at 2)) (get args (+ at 3))
+                          (get args (+ at 4)) (get args (+ at 5)) (get args (+ at 6))
+                          (get args (+ at 7)) (get args (+ at 8)) (get args (+ at 9)))
+                       mask)]
+            (when (!= got (get want round))
+              (println "seed {} type {} round {}: machine code gave {:x}, the interpreter {:x}"
+                       seed (ir/type-name type) round got (get want round))
+              (set! ok false))
+            (when (!= (memory-sum memory) (get sums round))
+              (println "seed {} type {} round {}: machine code left memory different from the interpreter"
+                       seed (ir/type-name type) round)
+              (set! ok false))))
+        (jit/release! code)))
+    ok))
+
+(defn main [(argc i32) (argv (ptr (ptr i8)))] (-> i64)
+  (let [count (if (> argc 1)
+                  (match (str/parse-int (str/from-cstr (primitive/load (primitive/index argv 1))))
+                    (Some [n] n) (None [] 100))
+                  100)
+        first (if (> argc 2)
+                  (match (str/parse-int (str/from-cstr (primitive/load (primitive/index argv 2))))
+                    (Some [n] n) (None [] 1))
+                  1)
+        rich (not (and (> argc 3) (= (str/from-cstr (primitive/load (primitive/index argv 3))) "classic")))
+        (mut failed) 0
+        (mut stats) (Stats :spilled 0 :slots 0 :words 0 :nodes 0)
+        memory (scratch-memory 256)]
+    (for seed (range first (+ first count))
+      (unless (check (cast u64 seed) ir/T-I64 (= count 1) (mut stats) memory rich) (set! failed (+ failed 1)))
+      (unless (check (cast u64 seed) ir/T-I32 false (mut stats) memory rich) (set! failed (+ failed 1))))
+    (println "{} programs, {} failed" (* count 2) failed)
+    (println "{} spilled something ({} slots); {} nodes became {} instructions"
+             (.spilled stats) (.slots stats) (.nodes stats) (.words stats))
+    (if (= failed 0) 0 1)))

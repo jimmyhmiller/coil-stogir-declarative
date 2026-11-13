@@ -69,6 +69,15 @@
 (defn operand! [(r (mut Gen))] (-> i32)
   (if (= (below! (mut r) 4) 0) (constant! (mut r)) (pick! (mut r))))
 
+;;; A value to divide by: never zero and never -1, since division by zero and
+;;; the one signed overflow are for a program to avoid and some machines trap.
+(defn divisor! [(r (mut Gen)) (t i32) (b i32)] (-> i32)
+  (let [bits (ir/type-bits t)
+        all (if (>= bits 64) (: 0xFFFFFFFFFFFFFFFF u64) (- (<< (: 1 u64) (cast u64 bits)) 1))]
+    (ir/or! (mut (.g r)) t
+            (ir/and! (mut (.g r)) t b (ir/const! (mut (.g r)) t (& all (: 0xFFFFFFFFFFFFFFFD u64))))
+            (ir/const! (mut (.g r)) t 1))))
+
 (defn binary! [(r (mut Gen)) (t i32) (op i64) (a i32) (b i32)] (-> i32)
   (cond (= op 0) (ir/add! (mut (.g r)) t a b)
         (= op 1) (ir/sub! (mut (.g r)) t a b)
@@ -79,10 +88,10 @@
         (= op 6) (ir/shl! (mut (.g r)) t a b)
         (= op 7) (ir/shr! (mut (.g r)) t a b)
         (= op 8) (ir/sar! (mut (.g r)) t a b)
-        (= op 9) (ir/udiv! (mut (.g r)) t a b)
-        (= op 10) (ir/sdiv! (mut (.g r)) t a b)
-        (= op 11) (ir/urem! (mut (.g r)) t a b)
-        (= op 12) (ir/srem! (mut (.g r)) t a b)
+        (= op 9) (ir/udiv! (mut (.g r)) t a (divisor! (mut r) t b))
+        (= op 10) (ir/sdiv! (mut (.g r)) t a (divisor! (mut r) t b))
+        (= op 11) (ir/urem! (mut (.g r)) t a (divisor! (mut r) t b))
+        (= op 12) (ir/srem! (mut (.g r)) t a (divisor! (mut r) t b))
         (= op 13) (ir/neg! (mut (.g r)) t a)
         (= op 14) (ir/not! (mut (.g r)) t a)
         (= op 15) (ir/clz! (mut (.g r)) t a)

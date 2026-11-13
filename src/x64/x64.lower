@@ -1,0 +1,225 @@
+# Which x86-64 instructions compute each node.
+lower in unit
+nodes backend.nodes
+target x64.target
+emit mach
+
+# A constant is built again in each block that needs it in a register, and so
+# are addresses the machine forms in one instruction.
+local CONST
+local SLOT
+local SYMBOL
+local EXTERN
+
+# What the allocator and the emitter ask for by name.
+template move(d, s) is copy       = mov(1, d, s)
+template move-float(d, s) is copy = movaps(d, s)
+template jump(to) is jump         = jmp(to)
+template leave() is return        = ret()
+template from-frame(d, slot)      = load(1, d, rsp, slot * 8)
+template to-frame(s, slot)        = store(1, s, rsp, slot * 8)
+template from-frame-float(d, slot) = loadf(1, d, rsp, slot * 8)
+template to-frame-float(s, slot)  = storef(1, s, rsp, slot * 8)
+template grow-stack(n)            = sub-imm(1, rsp, n)
+template shrink-stack(n)          = add-imm(1, rsp, n)
+template frame-record(n)          = lea(rbp, rsp, n)
+template call-register(f)         = call-reg(f)
+template call-symbol(s)           = call(s)
+
+# A value narrower than 32 bits has no promise about the bits above it. These
+# make a copy with those bits filled, for the instructions that read them.
+template sign-extend(d, s, bits) when bits == 8  = movsx8(0, d, s)
+template sign-extend(d, s, bits)                 = movsx16(0, d, s)
+template zero-extend(d, s, bits) when bits == 8  = movzx8(d, s)
+template zero-extend(d, s, bits) when bits == 16 = movzx16(d, s)
+template zero-extend(d, s, bits)                 = mov(0, d, s) ; and-imm(0, d, 1)
+
+# Control that is only structure.
+rule START   => nothing
+rule REGION  => nothing
+rule LOOP    => nothing
+rule TRUE    => nothing
+rule FALSE   => nothing
+rule PHI     => nothing
+rule CALL    => nothing
+rule RESULT  => nothing
+rule PARAM   => nothing
+
+rule SLOT                        => lea(out, rbp, 0 - object)
+rule SYMBOL s                    => lea-symbol(out, s)
+rule EXTERN s                    => mov-got(out, s)
+rule RETURN(_, v) when float(v)  => move-float(xmm0, v) ; leave()
+rule RETURN(_, v)                => move(rax, ex(v)) ; leave()
+
+# A floating constant is its bits, built in an integer register and moved across.
+rule CONST k when float and width == 32 => mov-imm32($t, k) ; bits-to-float(0, out, $t)
+rule CONST k when float                 => mov-imm64($t, k) ; bits-to-float(1, out, $t)
+
+# Constants, by the shortest instruction that makes them.
+rule CONST k when k >= 0 and k < 4294967296 => mov-imm32(out, k)
+rule CONST k when s32(k)                    => mov-simm32(out, k)
+rule CONST k                                => mov-imm64(out, k)
+
+# Arithmetic: the result starts as a copy of the first operand.
+rule ADD(x, CONST k) when s32(k) and width == 64 => lea(out, x, k)
+rule ADD(x, CONST k) when s32(k)   => move(out, x) ; add-imm(sf, out, k)
+rule ADD(x, y)                     => move(out, x) ; add(sf, out, y)
+rule SUB(x, CONST k) when s32(k)   => move(out, x) ; sub-imm(sf, out, k)
+rule SUB(x, y)                     => move(out, x) ; sub(sf, out, y)
+rule MUL(x, y)                     => move(out, x) ; imul(sf, out, y)
+rule AND(x, CONST k) when s32(k)   => move(out, x) ; and-imm(sf, out, k)
+rule AND(x, y)                     => move(out, x) ; and(sf, out, y)
+rule OR(x, CONST k) when s32(k)    => move(out, x) ; or-imm(sf, out, k)
+rule OR(x, y)                      => move(out, x) ; or(sf, out, y)
+rule XOR(x, CONST k) when s32(k)   => move(out, x) ; xor-imm(sf, out, k)
+rule XOR(x, y)                     => move(out, x) ; xor(sf, out, y)
+rule NEG(x)                        => move(out, x) ; neg(sf, out)
+rule NOT(x) when width == 1        => move(out, x) ; xor-imm(0, out, 1)
+rule NOT(x)                        => move(out, x) ; not(sf, out)
+
+# Shifts count modulo the width, which the machine does for 32 and 64 bits.
+rule SHL(x, y) when width == 8     => move(out, x) ; move(rcx, y) ; and-imm(0, rcx, 7) ; shl-cl(0, out)
+rule SHL(x, y) when width == 16    => move(out, x) ; move(rcx, y) ; and-imm(0, rcx, 15) ; shl-cl(0, out)
+rule SHL(x, y)                     => move(out, x) ; move(rcx, y) ; shl-cl(sf, out)
+rule SHR(x, y) when width == 8     => zero-extend(out, x, 8) ; move(rcx, y) ; and-imm(0, rcx, 7) ; shr-cl(0, out)
+rule SHR(x, y) when width == 16    => zero-extend(out, x, 16) ; move(rcx, y) ; and-imm(0, rcx, 15) ; shr-cl(0, out)
+rule SHR(x, y)                     => move(out, x) ; move(rcx, y) ; shr-cl(sf, out)
+rule SAR(x, y) when width == 8     => sign-extend(out, x, 8) ; move(rcx, y) ; and-imm(0, rcx, 7) ; sar-cl(0, out)
+rule SAR(x, y) when width == 16    => sign-extend(out, x, 16) ; move(rcx, y) ; and-imm(0, rcx, 15) ; sar-cl(0, out)
+rule SAR(x, y)                     => move(out, x) ; move(rcx, y) ; sar-cl(sf, out)
+
+# Division goes through rax and rdx.
+rule UDIV(x, y)                    => move(rax, zx(x)) ; mov-imm32(rdx, 0) ; div(sf, zx(y)) ; move(out, rax)
+rule UREM(x, y)                    => move(rax, zx(x)) ; mov-imm32(rdx, 0) ; div(sf, zx(y)) ; move(out, rdx)
+rule SDIV(x, y)                    => move(rax, sx(x)) ; sign-extend-rax(sf) ; idiv(sf, sx(y)) ; move(out, rax)
+rule SREM(x, y)                    => move(rax, sx(x)) ; sign-extend-rax(sf) ; idiv(sf, sx(y)) ; move(out, rdx)
+
+# Bits. Below 32 bits, leading zeros are counted in 32 and the extra taken
+# off; trailing zeros are counted with a bit set just above the value.
+rule CLZ(x) when width == 8        => lzcnt(0, $c, zx(x)) ; move(out, $c) ; sub-imm(0, out, 24)
+rule CLZ(x) when width == 16       => lzcnt(0, $c, zx(x)) ; move(out, $c) ; sub-imm(0, out, 16)
+rule CLZ(x)                        => lzcnt(sf, out, x)
+rule CTZ(x) when width == 8        => move($t, x) ; or-imm(0, $t, 256) ; tzcnt(0, out, $t)
+rule CTZ(x) when width == 16       => move($t, x) ; or-imm(0, $t, 65536) ; tzcnt(0, out, $t)
+rule CTZ(x)                        => tzcnt(sf, out, x)
+rule POPCNT(x)                     => popcnt(sf, out, zx(x))
+rule BSWAP(x)                      => move(out, x) ; bswap(sf, out)
+rule ROL(x, y)                     => move(out, x) ; move(rcx, y) ; rol-cl(sf, out)
+rule ROR(x, y)                     => move(out, x) ; move(rcx, y) ; ror-cl(sf, out)
+
+rule SMIN(x, y)                    => move(out, x) ; cmp(sf, sx(x), sx(y)) ; cmov(sf, greater, out, y)
+rule SMAX(x, y)                    => move(out, x) ; cmp(sf, sx(x), sx(y)) ; cmov(sf, less, out, y)
+rule UMIN(x, y)                    => move(out, x) ; cmp(sf, zx(x), zx(y)) ; cmov(sf, above, out, y)
+rule UMAX(x, y)                    => move(out, x) ; cmp(sf, zx(x), zx(y)) ; cmov(sf, below, out, y)
+rule UMULH(x, y)                   => move(rax, x) ; mul-wide(sf, y) ; move(out, rdx)
+rule SMULH(x, y)                   => move(rax, x) ; imul-wide(sf, y) ; move(out, rdx)
+
+# Overflow: the flag the same operation leaves.
+rule SADDO(a, b)                   => move($t, a) ; add(sf(a), $t, b) ; setcc(overflow, $f) ; movzx8(out, $f)
+rule UADDO(a, b)                   => move($t, a) ; add(sf(a), $t, b) ; setcc(below, $f) ; movzx8(out, $f)
+rule SSUBO(a, b)                   => move($t, a) ; sub(sf(a), $t, b) ; setcc(overflow, $f) ; movzx8(out, $f)
+rule USUBO(a, b)                   => cmp(sf(a), a, b) ; setcc(below, $f) ; movzx8(out, $f)
+rule SMULO(a, b)                   => move($t, a) ; imul(sf(a), $t, b) ; setcc(overflow, $f) ; movzx8(out, $f)
+rule UMULO(a, b)                   => move(rax, a) ; mul-wide(sf(a), b) ; setcc(overflow, $f) ; movzx8(out, $f)
+
+# Floating point: the result starts as a copy of the first operand.
+rule FADD(x, y)   => move-float(out, x) ; addf(sf, out, y)
+rule FSUB(x, y)   => move-float(out, x) ; subf(sf, out, y)
+rule FMUL(x, y)   => move-float(out, x) ; mulf(sf, out, y)
+rule FDIV(x, y)   => move-float(out, x) ; divf(sf, out, y)
+rule FSQRT(x)     => sqrtf(sf, out, x)
+# The sign is one bit: flipped for the negative, cleared for the absolute value.
+rule FNEG(x) when width == 64 => mov-imm64($m, 0 - 9223372036854775807 - 1) ; bits-to-float(1, $v, $m) ; move-float(out, x) ; xorf(out, $v)
+rule FNEG(x)                  => mov-imm32($m, 2147483648) ; bits-to-float(0, $v, $m) ; move-float(out, x) ; xorf(out, $v)
+rule FABS(x) when width == 64 => mov-imm64($m, 9223372036854775807) ; bits-to-float(1, $v, $m) ; move-float(out, x) ; andf(out, $v)
+rule FABS(x)                  => mov-imm32($m, 2147483647) ; bits-to-float(0, $v, $m) ; move-float(out, x) ; andf(out, $v)
+# Less than is asked the other way round, so that "not a number" reads as false.
+rule FLT(a, b)    => cmpf(sf(a), b, a) ; setcc(above, $t) ; movzx8(out, $t)
+rule FLE(a, b)    => cmpf(sf(a), b, a) ; setcc(above-equal, $t) ; movzx8(out, $t)
+rule FEQ(a, b)    => cmpf(sf(a), a, b) ; setcc(no-parity, $p) ; setcc(equal, $e) ; and(0, $e, $p) ; movzx8(out, $e)
+rule FNE(a, b)    => cmpf(sf(a), a, b) ; setcc(parity, $p) ; setcc(not-equal, $e) ; or(0, $e, $p) ; movzx8(out, $e)
+rule SITOF(x) when bits(x) == 64 => int-to-float(1, sf, out, x)
+rule SITOF(x)                    => int-to-float(0, sf, out, sx(x))
+# An unsigned integer below 64 bits is a non-negative 64-bit one. At 64 bits,
+# one with its top bit set is halved, keeping the bit that falls off for the
+# rounding, converted and doubled.
+rule UITOF(x) when bits(x) < 64  => mov(0, $t, zx(x)) ; int-to-float(1, sf, out, $t)
+rule UITOF(x) => move($h, x) ; mov-imm32(rcx, 1) ; shr-cl(1, $h) ; move($l, x) ; and-imm(1, $l, 1) ; or(1, $h, $l) ; int-to-float(1, sf, $half, $h) ; move-float($twice, $half) ; addf(sf, $twice, $half) ; int-to-float(1, sf, $plain, x) ; float-to-bits(sf, $a, $plain) ; float-to-bits(sf, $b, $twice) ; test(1, x, x) ; cmov(1, sign, $a, $b) ; bits-to-float(sf, out, $a)
+# To an integer: the machine's answer for what does not fit or is not a number
+# is the smallest integer; what was too large becomes the largest, and what was
+# not a number 0.
+rule FTOSI(x) when width == 64 => float-to-int(1, sf(x), $r, x) ; mov-imm64($m, 9223372036854775807) ; int-to-float(1, sf(x), $edge, $m) ; cmpf(sf(x), x, $edge) ; cmov(1, above-equal, $r, $m) ; mov-imm32($z, 0) ; cmpf(sf(x), x, x) ; cmov(1, parity, $r, $z) ; move(out, $r)
+rule FTOSI(x)                  => float-to-int(1, sf(x), $r, x) ; mov-imm64($m, 2147483647) ; mov-simm32($n, 0 - 2147483648) ; cmp(1, $r, $m) ; cmov(1, greater, $r, $m) ; cmp(1, $r, $n) ; cmov(1, less, $r, $n) ; int-to-float(1, sf(x), $edge, $m) ; cmpf(sf(x), x, $edge) ; cmov(1, above-equal, $r, $m) ; mov-imm32($z, 0) ; cmpf(sf(x), x, x) ; cmov(1, parity, $r, $z) ; move(out, $r)
+rule FTOUI(x) when width == 32 => float-to-int(1, sf(x), $r, x) ; mov-imm32($z, 0) ; cmp(1, $r, $z) ; cmov(1, less, $r, $z) ; mov-imm32($m, 4294967295) ; cmp(1, $r, $m) ; cmov(1, greater, $r, $m) ; mov-imm64($big, 4294967296) ; int-to-float(1, sf(x), $edge, $big) ; cmpf(sf(x), x, $edge) ; cmov(1, above-equal, $r, $m) ; cmpf(sf(x), x, x) ; cmov(1, parity, $r, $z) ; move(out, $r)
+rule FTOUI(x) => float-to-int(1, sf(x), $low, x) ; mov-imm64($top, 0 - 9223372036854775807 - 1) ; mov-imm64($m, 9223372036854775807) ; int-to-float(1, sf(x), $edge, $m) ; move-float($y, x) ; subf(sf(x), $y, $edge) ; float-to-int(1, sf(x), $high, $y) ; xor(1, $high, $top) ; cmpf(sf(x), x, $edge) ; cmov(1, above-equal, $low, $high) ; move-float($d, $edge) ; addf(sf(x), $d, $edge) ; mov-simm32($all, 0 - 1) ; cmpf(sf(x), x, $d) ; cmov(1, above-equal, $low, $all) ; mov-imm32($z, 0) ; bits-to-float(1, $fz, $z) ; cmpf(sf(x), x, $fz) ; cmov(1, below, $low, $z) ; move(out, $low)
+rule FEXT(x)      => single-to-double(out, x)
+rule FTRUNC(x)    => double-to-single(out, x)
+rule BITCAST(x) when float and not float(x)  => bits-to-float(sf, out, x)
+rule BITCAST(x) when float(x) and not float  => float-to-bits(sf, out, x)
+
+rule LOAD(_, ADD(p, CONST k)) when float and s32(k) => loadf(sf, out, p, k)
+rule LOAD(_, p) when float                          => loadf(sf, out, p, 0)
+rule STORE(_, ADD(p, CONST k), v) when float(v) and s32(k) => storef(sf(v), v, p, k)
+rule STORE(_, p, v) when float(v)                          => storef(sf(v), v, p, 0)
+# One of two floating values: chosen as bits, in integer registers.
+rule COND(c, x, y) when float => float-to-bits(sf, $a, x) ; float-to-bits(sf, $b, y) ; test(0, c, c) ; cmov(1, equal, $a, $b) ; bits-to-float(sf, out, $a)
+
+# Between widths.
+rule ZEXT(x) when bits(x) == 32    => mov(0, out, x)
+rule ZEXT(x) when bits(x) == 16    => movzx16(out, x)
+rule ZEXT(x) when bits(x) == 8     => movzx8(out, x)
+rule ZEXT(x)                       => x
+rule SEXT(x) when bits(x) == 32    => movsx32(out, x)
+rule SEXT(x) when bits(x) == 16    => movsx16(1, out, x)
+rule SEXT(x)                       => movsx8(1, out, x)
+rule TRUNC(x) when width == 1      => mov(0, out, x) ; and-imm(0, out, 1)
+rule TRUNC(x)                      => x
+rule BITCAST(x) when not float and not float(x) => x
+
+# Memory.
+rule LOAD(_, ADD(p, CONST k)) when not float and width == 64 and s32(k) => load(1, out, p, k)
+rule LOAD(_, ADD(p, CONST k)) when not float and width == 32 and s32(k) => load(0, out, p, k)
+rule LOAD(_, ADD(p, CONST k)) when not float and width == 16 and s32(k) => load16(out, p, k)
+rule LOAD(_, ADD(p, CONST k)) when not float and s32(k)                 => load8(out, p, k)
+rule LOAD(_, p) when not float and width == 64   => load(1, out, p, 0)
+rule LOAD(_, p) when not float and width == 32   => load(0, out, p, 0)
+rule LOAD(_, p) when not float and width == 16   => load16(out, p, 0)
+rule LOAD(_, p) when not float                   => load8(out, p, 0)
+rule STORE(_, ADD(p, CONST k), v) when not float(v) and bits(v) == 64 and s32(k) => store(1, v, p, k)
+rule STORE(_, ADD(p, CONST k), v) when not float(v) and bits(v) == 32 and s32(k) => store(0, v, p, k)
+rule STORE(_, ADD(p, CONST k), v) when not float(v) and bits(v) == 16 and s32(k) => store16(v, p, k)
+rule STORE(_, ADD(p, CONST k), v) when not float(v) and s32(k)                   => store8(v, p, k)
+rule STORE(_, p, v) when not float(v) and bits(v) == 64 => store(1, v, p, 0)
+rule STORE(_, p, v) when not float(v) and bits(v) == 32 => store(0, v, p, 0)
+rule STORE(_, p, v) when not float(v) and bits(v) == 16 => store16(v, p, 0)
+rule STORE(_, p, v) when not float(v)                   => store8(v, p, 0)
+
+# One of two values.
+rule COND(c, x, y) when not float  => move(out, y) ; test(0, c, c) ; cmov(sf, not-equal, out, x)
+
+# A comparison as a value: the flags, then 1 where the condition holds.
+rule EQ(a, b)   => cmp(sf(a), zx(a), zx(b)) ; setcc(equal, $t) ; movzx8(out, $t)
+rule NE(a, b)   => cmp(sf(a), zx(a), zx(b)) ; setcc(not-equal, $t) ; movzx8(out, $t)
+rule LT(a, b)   => cmp(sf(a), sx(a), sx(b)) ; setcc(less, $t) ; movzx8(out, $t)
+rule LE(a, b)   => cmp(sf(a), sx(a), sx(b)) ; setcc(less-equal, $t) ; movzx8(out, $t)
+rule ULT(a, b)  => cmp(sf(a), zx(a), zx(b)) ; setcc(below, $t) ; movzx8(out, $t)
+rule ULE(a, b)  => cmp(sf(a), zx(a), zx(b)) ; setcc(below-equal, $t) ; movzx8(out, $t)
+
+# A branch on a comparison uses its flags directly.
+rule IF(_, EQ(a, CONST k)) when s32(k)  => cmp-imm(sf(a), zx(a), k) ; jcc(equal, then) ; jump(else)
+rule IF(_, NE(a, CONST k)) when s32(k)  => cmp-imm(sf(a), zx(a), k) ; jcc(not-equal, then) ; jump(else)
+rule IF(_, LT(a, CONST k)) when s32(k)  => cmp-imm(sf(a), sx(a), k) ; jcc(less, then) ; jump(else)
+rule IF(_, LE(a, CONST k)) when s32(k)  => cmp-imm(sf(a), sx(a), k) ; jcc(less-equal, then) ; jump(else)
+rule IF(_, ULT(a, CONST k)) when s32(k) and (k >= 0 or bits(a) == 64) => cmp-imm(sf(a), zx(a), k) ; jcc(below, then) ; jump(else)
+rule IF(_, ULE(a, CONST k)) when s32(k) and (k >= 0 or bits(a) == 64) => cmp-imm(sf(a), zx(a), k) ; jcc(below-equal, then) ; jump(else)
+rule IF(_, EQ(a, b))   => cmp(sf(a), zx(a), zx(b)) ; jcc(equal, then) ; jump(else)
+rule IF(_, NE(a, b))   => cmp(sf(a), zx(a), zx(b)) ; jcc(not-equal, then) ; jump(else)
+rule IF(_, LT(a, b))   => cmp(sf(a), sx(a), sx(b)) ; jcc(less, then) ; jump(else)
+rule IF(_, LE(a, b))   => cmp(sf(a), sx(a), sx(b)) ; jcc(less-equal, then) ; jump(else)
+rule IF(_, ULT(a, b))  => cmp(sf(a), zx(a), zx(b)) ; jcc(below, then) ; jump(else)
+rule IF(_, ULE(a, b))  => cmp(sf(a), zx(a), zx(b)) ; jcc(below-equal, then) ; jump(else)
+rule IF(_, FLT(a, b))  => cmpf(sf(a), b, a) ; jcc(above, then) ; jump(else)
+rule IF(_, FLE(a, b))  => cmpf(sf(a), b, a) ; jcc(above-equal, then) ; jump(else)
+rule IF(_, FEQ(a, b))  => cmpf(sf(a), a, b) ; jcc(parity, else) ; jcc(equal, then) ; jump(else)
+rule IF(_, FNE(a, b))  => cmpf(sf(a), a, b) ; jcc(parity, then) ; jcc(not-equal, then) ; jump(else)
+rule IF(_, c)          => test(0, c, c) ; jcc(not-equal, then) ; jump(else)

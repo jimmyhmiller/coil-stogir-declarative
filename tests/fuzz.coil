@@ -1,5 +1,6 @@
 ;;; Differential check: random programs, the reference interpreter against the
-;;; generated machine code. Usage: fuzz [count] [first-seed]
+;;; generated machine code. Usage: fuzz [count] [first-seed] [classic]
+;;; With one program, its graph before and after rewriting and its code are printed.
 (module tests.fuzz)
 (import "coil.alloc" :use [malloc-allocator])
 (import "coil.arraylist" :use [ArrayList])
@@ -29,8 +30,8 @@
       (set! h (primitive/imul (^ h (cast u64 (primitive/load (primitive/index memory i)))) (: 1099511628211 u64))))
     h))
 
-(defn check [(seed u64) (type i32) (show bool) (stats (mut Stats)) (memory (ptr u8))] (-> bool)
-  (let [g (gen/program seed type 60 (primitive/cast u64 memory) true (if (= (% seed 3) 0) 12 0))
+(defn check [(seed u64) (type i32) (show bool) (stats (mut Stats)) (memory (ptr u8)) (rich bool)] (-> bool)
+  (let [g (gen/program seed type 60 (primitive/cast u64 memory) rich (if (= (% seed 3) 0) 12 0))
         problem (ir/verify g)
         bits (ir/type-bits type)
         (mut args) (ArrayList::new [u64] (malloc-allocator))
@@ -57,9 +58,9 @@
       (plans/default (mut cx))
       (when show
         (ir/dump (.g cx))
-        (for i (range 0 (/ (len (.code cx)) 4))
-          (println "{:02x}{:02x}{:02x}{:02x}" (get (.code cx) (+ (* i 4) 3)) (get (.code cx) (+ (* i 4) 2))
-                   (get (.code cx) (+ (* i 4) 1)) (get (.code cx) (* i 4)))))
+        (print "code:")
+        (for b (.code cx) (print " {:02x}" b))
+        (println ""))
       (when (> (.slots cx) 0) (set! (.spilled stats) (+ (.spilled stats) 1)))
       (set! (.slots stats) (+ (.slots stats) (.slots cx)))
       (set! (.words stats) (+ (.words stats) (/ (len (.code cx)) 4)))
@@ -94,12 +95,13 @@
                   (match (str/parse-int (str/from-cstr (primitive/load (primitive/index argv 2))))
                     (Some [n] n) (None [] 1))
                   1)
+        rich (not (and (> argc 3) (= (str/from-cstr (primitive/load (primitive/index argv 3))) "classic")))
         (mut failed) 0
         (mut stats) (Stats :spilled 0 :slots 0 :words 0 :nodes 0)
         memory (scratch-memory 256)]
     (for seed (range first (+ first count))
-      (unless (check (cast u64 seed) ir/T-I64 (= count 1) (mut stats) memory) (set! failed (+ failed 1)))
-      (unless (check (cast u64 seed) ir/T-I32 false (mut stats) memory) (set! failed (+ failed 1))))
+      (unless (check (cast u64 seed) ir/T-I64 (= count 1) (mut stats) memory rich) (set! failed (+ failed 1)))
+      (unless (check (cast u64 seed) ir/T-I32 false (mut stats) memory rich) (set! failed (+ failed 1))))
     (println "{} programs, {} failed" (* count 2) failed)
     (println "{} spilled something ({} slots); {} nodes became {} instructions"
              (.spilled stats) (.slots stats) (.nodes stats) (.words stats))

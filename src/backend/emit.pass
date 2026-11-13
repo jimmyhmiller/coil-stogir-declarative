@@ -157,14 +157,16 @@ fn rewrite(i: Inst, next: Int) {
   let op = i.inst-op
   let x0 = resolve(i, 0)
   let x1 = resolve(i, 1)
-  var x2 = resolve(i, 2)
+  let x2 = resolve(i, 2)
   let x3 = resolve(i, 3)
   let x4 = resolve(i, 4)
   let same-register = i.kind == 1 and placed(i.copy-to, 2 * int(i) + 1) == placed(i.copy-from, 2 * int(i))
   let falls-through = i.kind == 2 and label-of(i) == next
-  if not same-register and not falls-through {
+  if i.kind == 4 {
+    # A parameter from the caller's frame, now that this frame's size is known.
+    fetch(0 - placed(i.copy-to, 2 * int(i) + 1) - 1, i.copy-from + frame / 8 + abi.RETURN-SLOTS)
+  } else if not same-register and not falls-through {
     if i.kind == 3 and frame > 0 { leave() }
-    if i.above-frame { x2 = x2 + frame / 8 + abi.RETURN-SLOTS }
     mach.emit(op, x0, x1, x2, x3, x4)
   }
   for k in 0..5 { finish(i, k) }
