@@ -15,7 +15,7 @@
 (import "rt.graph" :as graph)
 (import "backend.nodes" :as ir)
 (import "backend.unit" :as st)
-(import "backend.driver" :as driver)
+(import "backend.plans" :as plans)
 (import "backend.a64" :as isa)
 (import "tests.gen" :as gen)
 
@@ -47,7 +47,7 @@
       (for i (range 0 programs)
         (set! (.g cx) (get graphs i))
         (st/begin! (mut cx))
-        (driver/compile (mut cx))
+        (plans/default (mut cx))
         (set! nodes (+ nodes (graph/size (.g cx))))
         (set! words (+ words (len (.code cx))))
         (when (> (cast i64 argc) 4)

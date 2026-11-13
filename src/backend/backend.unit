@@ -9,4 +9,3 @@ lower backend.a64-lower
 pass backend.select
 pass backend.alloc
 pass backend.emit
-pass backend.driver

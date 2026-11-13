@@ -12,6 +12,7 @@ source-roots = ["compiler", "tests"]
 ".abi" = "lang.readers"
 ".rewrite" = "lang.readers"
 ".layout" = "lang.readers"
+".pipeline" = "lang.readers"
 
 [modules]
 "backend.nodes" = "src/backend/nodes.ir"
@@ -27,4 +28,4 @@ source-roots = ["compiler", "tests"]
 "backend.select" = "src/backend/select.pass"
 "backend.alloc" = "src/backend/alloc.pass"
 "backend.emit" = "src/backend/emit.pass"
-"backend.driver" = "src/backend/driver.pass"
+"backend.plans" = "src/backend/backend.pipeline"

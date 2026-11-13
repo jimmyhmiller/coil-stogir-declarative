@@ -10,6 +10,7 @@
 (import "lang.abi" :as abi)
 (import "lang.rewrite" :as rewrite)
 (import "lang.layout" :as layout)
+(import "lang.pipeline" :as pipeline)
 
 (reader-provider "lang.readers" read-any)
 
@@ -27,4 +28,5 @@
           (t/ends-with path ".abi") (abi/module-text context)
           (t/ends-with path ".rewrite") (rewrite/module-text context)
           (t/ends-with path ".layout") (layout/module-text context)
+          (t/ends-with path ".pipeline") (pipeline/module-text context)
           :else (t/fail-at path 1 1 "no language reads a file with this extension"))))

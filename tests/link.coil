@@ -13,7 +13,7 @@
 (import "rt.jit" :as jit)
 (import "backend.nodes" :as ir)
 (import "backend.unit" :as st)
-(import "backend.driver" :as driver)
+(import "backend.plans" :as plans)
 (import "backend.a64" :as isa)
 (import "backend.macho" :as macho)
 (import "coil.fs" :as fs)
@@ -26,7 +26,7 @@
         (mut cx) (st/create g (malloc-allocator))]
     (when (!= problem "") (panic "{}: {}" name problem))
     (st/begin! (mut cx))
-    (driver/compile (mut cx))
+    (plans/default (mut cx))
     (image/add-function! (mut im) (image/symbol! (mut im) name) (.code cx) (.reloc-at cx)
                          (.reloc-symbol cx) (.reloc-op cx))))
 

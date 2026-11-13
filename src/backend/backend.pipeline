@@ -1,0 +1,17 @@
+# What a compile is, as plans.
+pipeline in backend.unit
+
+# From a graph to code, with no optimization beyond what building the graph did.
+plan quick {
+  cfg.build
+  schedule.build
+  select.run
+  alloc.run
+  emit.run
+}
+
+# Simplify until nothing changes, then compile.
+plan default {
+  until-stable { simplify.run }
+  quick
+}

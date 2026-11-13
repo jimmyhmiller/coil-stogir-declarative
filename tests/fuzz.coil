@@ -15,7 +15,7 @@
 (import "backend.nodes" :as ir)
 (import "tests.gen" :as gen)
 (import "backend.unit" :as st)
-(import "backend.driver" :as driver)
+(import "backend.plans" :as plans)
 
 (defstruct Stats [(spilled i64) (slots i64) (words i64) (nodes i64)])
 
@@ -54,7 +54,7 @@
     (when show (println "before:") (ir/dump g))
     (let [(mut cx) (st/create g (malloc-allocator))]
       (st/begin! (mut cx))
-      (driver/compile (mut cx))
+      (plans/default (mut cx))
       (when show
         (ir/dump (.g cx))
         (for w (.code cx) (println "{:08x}" w)))
