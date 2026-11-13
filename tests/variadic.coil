@@ -22,7 +22,9 @@
         n (ir/param! (mut g) ir/T-I64 2)
         x (ir/param! (mut g) ir/T-F64 3)
         ; Three named arguments, then three more.
-        call (ir/call-node! (mut g) 4 s (ir/const! (mut g) ir/T-PTR snprintf) 6)]
+        shape (graph/shape! (mut g) true)
+        call (ir/call-node! (mut g) shape s (ir/const! (mut g) ir/T-PTR snprintf) 6)]
+    (for i (range 0 6) (graph/shape-arg! (mut g) shape (if (< i 3) (: 0 u64) graph/PASS-UNNAMED)))
     (graph/set-input! (mut g) call 2 buffer)
     (graph/set-input! (mut g) call 3 (ir/const! (mut g) ir/T-U64 64))
     (graph/set-input! (mut g) call 4 pattern)

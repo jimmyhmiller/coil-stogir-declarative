@@ -16,6 +16,7 @@ pass in unit
 use cfg as cfg
 use mach as mach
 import target as isa
+import abi as abi
 
 entity Vreg
 column first-piece: Vreg -> Piece
@@ -82,7 +83,9 @@ fn reg-kind?(kind: Int) -> Bool = kind == isa.K-DEF or kind == isa.K-USE or kind
 
 fn writes?(kind: Int) -> Bool = kind == isa.K-DEF or kind == isa.K-MOD
 
-fn allocatable?(r: Int) -> Bool = isa.in-set?(isa.ALLOCATABLE, r)
+# A function that moves the stack pointer as it runs keeps one register to
+# say where its frame is.
+fn allocatable?(r: Int) -> Bool = isa.in-set?(isa.ALLOCATABLE, r) and not (dynamic and r == abi.BASE)
 
 # What a copy reads, or 0 for an instruction that is not one.
 fn move-source(i: Inst) -> Int = if i.kind == 1 then i.copy-from else 0

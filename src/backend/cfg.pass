@@ -34,7 +34,8 @@ fn update?(n: Node) -> Bool =
 
 # In the control chain inside a block: it happens where it stands.
 fn chain?(n: Node) -> Bool =
-  n is CALL or n is LOAD or n is STORE or n is ATOMIC-LOAD or n is ATOMIC-STORE or n is FENCE or update?(n)
+  n is CALL or n is LOAD or n is STORE or n is ATOMIC-LOAD or n is ATOMIC-STORE or n is FENCE or n is RESERVE or
+  update?(n)
 
 fn control?(n: Node) -> Bool = head?(n) or end?(n) or chain?(n)
 

@@ -308,7 +308,11 @@
                                 (primitive/cast u64 (primitive/cast (ptr i8) (fnptr-of helper10)))))
         target (ir/const! (mut (.g r)) ir/T-PTR address)
         node (ir/call-node! (mut (.g r)) 0 (.control r) target count)]
-    (for i (range 0 count) (graph/set-input! (mut (.g r)) node (+ i 2) (operand! (mut r))))
+    ; The interpreter passes every integer as 64 bits, which is not how a
+    ; narrower one goes on the stack everywhere; so each goes as 64 bits here.
+    (for i (range 0 count)
+      (let [a (operand! (mut r))]
+        (graph/set-input! (mut (.g r)) node (+ i 2) (if narrow (ir/zext! (mut (.g r)) ir/T-U64 a) a))))
     (set! (.control r) node)
     (ir/result! (mut (.g r)) (.type r) 0 node)))
 
@@ -357,7 +361,7 @@
 (defn statements! [(r (mut Gen)) (depth i64)] (-> void)
   (let [count (+ 1 (below! (mut r) 6))]
     (for _ (range 0 count)
-      (let [choice (below! (mut r) (if (.rich r) 23 10))]
+      (let [choice (below! (mut r) (if (.rich r) 26 10))]
         (set! (.budget r) (- (.budget r) 1))
         (cond
           (or (< choice (if (.rich r) 5 6)) (>= depth 3) (< (.budget r) 0))
@@ -371,6 +375,8 @@
           (= choice 16) (if (< depth 2) (switch! (mut r) depth) (trap! (mut r)))
           (= choice 17) (trap! (mut r))
           (or (= choice 21) (= choice 22)) (shared! (mut r))
+          (= choice 23) (push! (mut (.env r)) (reserve! (mut r)))
+          (or (= choice 24) (= choice 25)) (bottom-loop! (mut r) depth)
           (= choice 18)
             (set! (.control r)
                   (ir/store-node! (mut (.g r)) (.control r) (get (.vars r) (below! (mut r) 3)) (pick! (mut r))))
@@ -484,6 +490,48 @@
     (push! (mut (.env r)) y)
     (set! (.control r) exit)))
 
+;;; do { … } while (i + 1 < bound): the loop's first block is also where it
+;;; comes round from, so what the phis read is computed after them in their
+;;; own block.
+(defn bottom-loop! [(r (mut Gen)) (depth i64)] (-> void)
+  (let [t (.type r)
+        head (ir/loop! (mut (.g r)) 2)
+        i (ir/phi! (mut (.g r)) t head 2)
+        x (ir/phi! (mut (.g r)) t head 2)
+        bound (ir/const! (mut (.g r)) t (cast u64 (+ 1 (below! (mut r) 6))))
+        base (len (.env r))]
+    (graph/set-input! (mut (.g r)) head 0 (.control r))
+    (graph/set-input! (mut (.g r)) i 1 (ir/const! (mut (.g r)) t 0))
+    (graph/set-input! (mut (.g r)) x 1 (pick! (mut r)))
+    (push! (mut (.env r)) i)
+    (push! (mut (.env r)) x)
+    (set! (.control r) head)
+    (statements! (mut r) (+ depth 1))
+    (let [x2 (pick! (mut r))
+          next (ir/add! (mut (.g r)) t i (ir/const! (mut (.g r)) t 1))
+          branch (ir/if! (mut (.g r)) (.control r) (ir/ult! (mut (.g r)) next bound))]
+      (graph/set-input! (mut (.g r)) head 1 (ir/true! (mut (.g r)) branch))
+      (graph/set-input! (mut (.g r)) i 2 next)
+      (graph/set-input! (mut (.g r)) x 2 x2)
+      (while (> (len (.env r)) base) (pop! (mut (.env r))))
+      ; The body ran at least once, so what it last made is there after it.
+      (push! (mut (.env r)) x2)
+      (set! (.control r) (ir/false! (mut (.g r)) branch)))))
+
+;;; Memory reserved as the program runs, a value written to it and read back.
+(defn reserve! [(r (mut Gen))] (-> i32)
+  (let [words (+ 1 (below! (mut r) 6))
+        room (ir/reserve! (mut (.g r)) (.control r) (ir/const! (mut (.g r)) ir/T-U64 (cast u64 (* words 8))))
+        at (ir/add! (mut (.g r)) ir/T-PTR room
+                    (ir/const! (mut (.g r)) ir/T-PTR (cast u64 (* 8 (below! (mut r) words)))))
+        kept (ir/store-node! (mut (.g r)) room at (pick! (mut r)))]
+    (set! (.control r) kept)
+    ; Something between the write and the read, so the value waits there.
+    (push! (mut (.env r)) (arithmetic! (mut r)))
+    (let [back (ir/load-node! (mut (.g r)) (.type r) (.control r) at)]
+      (set! (.control r) back)
+      back)))
+
 ;;; One random function of ten parameters (two arrive on the stack), of about `size` statements beyond
 ;;; its first few. `memory` is the address of 256 bytes it may read and write.
 ;;; `rich` adds calls, other widths, division, choices and memory, and six more
@@ -536,7 +584,7 @@
                 target (ir/const! (mut (.g r)) ir/T-PTR
                                   (if narrow (primitive/cast u64 (primitive/cast (ptr i8) (fnptr-of helper1-32)))
                                       (primitive/cast u64 (primitive/cast (ptr i8) (fnptr-of helper1)))))
-                node (ir/tailcall! (mut (.g r)) type (.control r) target 1)]
+                node (ir/tailcall! (mut (.g r)) type 0 (.control r) target 1)]
             (graph/set-input! (mut (.g r)) node 2 result))
           (graph/set-input! (mut (.g r)) (ir/return! (mut (.g r)) (.control r) 1) 1 result)))
     (free! (mut (.env r)))

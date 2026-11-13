@@ -38,7 +38,10 @@
         (mut link) false
         (mut return-slots) 0
         (mut variadic-stack) false
-        (mut variadic-count) -1]
+        (mut variadic-count) -1
+        (mut indirect) -1
+        (mut packed) false
+        (mut closing) false]
     (t/expect! (mut c) "target")
     (let [at (t/peek (mut c))
           target (module-name! (mut c))
@@ -97,6 +100,25 @@
             ; `return-address 8`: a call leaves that many bytes on the stack.
             (t/tok-is? tok "return-address")
               (set! return-slots (/ (cast i64 (t/num! (mut c) "a number of bytes")) 8))
+            ; `stack REG` is the stack pointer, and `base REG` the register that
+            ; holds where the frame is in a function that moves the stack
+            ; pointer as it runs.
+            (t/tok-is? tok "stack")
+              (t/line! (mut o) (t/cat3 "(const STACK " (t/int-text (reg! (mut c) spec)) ")"))
+            (t/tok-is? tok "base")
+              (t/line! (mut o) (t/cat3 "(const BASE " (t/int-text (reg! (mut c) spec)) ")"))
+            ; `indirect-result REG`: the address a function is to write its
+            ; result to has a register of its own.
+            (t/tok-is? tok "indirect-result") (set! indirect (reg! (mut c) spec))
+            ; `stacked packed`: an argument on the stack takes its own size,
+            ; not a whole word. `stacked closing`: once one argument of a kind
+            ; is on the stack, so is every later one of that kind.
+            (t/tok-is? tok "stacked")
+              (let [(mut more) true]
+                (while more
+                  (cond (t/accept! (mut c) "packed") (set! packed true)
+                        (t/accept! (mut c) "closing") (set! closing true)
+                        :else (set! more false))))
             (t/tok-is? tok "frame")
               (t/line! (mut o) (t/cat3 "(const FRAME " (t/int-text (reg! (mut c) spec)) ")"))
             :else (t/die (mut c) tok (t/cat2 "expected integers, result, link or frame, found "
@@ -106,4 +128,7 @@
     (t/line! (mut o) (t/cat3 "(const RETURN-SLOTS " (t/int-text return-slots) ")"))
     (t/line! (mut o) (t/cat3 "(const VARIADIC-ON-STACK " (if variadic-stack "true" "false") ")"))
     (t/line! (mut o) (t/cat3 "(const VARIADIC-COUNT " (t/int-text variadic-count) ")"))
+    (t/line! (mut o) (t/cat3 "(const INDIRECT-RESULT " (t/int-text indirect) ")"))
+    (t/line! (mut o) (t/cat3 "(const STACK-PACKED " (if packed "true" "false") ")"))
+    (t/line! (mut o) (t/cat3 "(const REGISTERS-CLOSE " (if closing "true" "false") ")"))
     (t/text-of (mut o))))

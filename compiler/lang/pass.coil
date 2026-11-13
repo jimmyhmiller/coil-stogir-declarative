@@ -726,6 +726,11 @@
         (and (= name "param-count") (= n 0)) "(graph/param-count (.g cx))"
         (and (= name "param-type") (= n 1)) (t/cat3 "(graph/param-type (.g cx) " a ")")
         (and (= name "float-type?") (= n 1)) (t/cat3 "(ir/type-float? " a ")")
+        (and (= name "type-bytes") (= n 1)) (t/cat3 "(/ (+ (ir/type-bits " a ") 7) 8)")
+        ; How a parameter, and an argument of a call of some shape, is passed.
+        (and (= name "param-passing") (= n 1)) (t/cat3 "(graph/param-passing (.g cx) " a ")")
+        (and (= name "shape-passing") (= n 2)) (cat5 "(graph/shape-passing (.g cx) " a " " b ")")
+        (and (= name "shape-variadic") (= n 1)) (t/cat3 "(graph/shape-variadic? (.g cx) " a ")")
         (and (= name "panic") (= n 1)) (t/cat3 "(panic " a ")")
         ; Sets of small numbers, as the bits of a Word.
         (and (= name "bit") (= n 1)) (t/cat3 "(<< (: 1 u64) (cast u64 " a "))")

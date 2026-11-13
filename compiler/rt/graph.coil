@@ -41,6 +41,7 @@
 (const ROLE-TAILCALL 22)
 (const ROLE-UPDATE 23)
 (const ROLE-BARRIER 24)
+(const ROLE-RESERVE 25)
 
 (defstruct Graph
   [(ops (ArrayList u16))
@@ -59,6 +60,9 @@
    (start i32)
    (addresses (ArrayList u64))
    (signature (ArrayList i32))
+   (passing (ArrayList u64))
+   (shapes (ArrayList u64))
+   (shape-at (ArrayList i32))
    (alc (dyn Allocator))])
 
 (defn create [(a (dyn Allocator))] (-> Graph)
@@ -79,6 +83,9 @@
                   :start 0
                   :addresses (ArrayList::new [u64] a)
                   :signature (ArrayList::new [i32] a)
+                  :passing (ArrayList::new [u64] a)
+                  :shapes (ArrayList::new [u64] a)
+                  :shape-at (ArrayList::new [i32] a)
                   :alc a)]
     ; Node 0 is "no node".
     (push! (mut (.ops g)) 0)
@@ -105,7 +112,10 @@
   (free! (mut (.use-count g)))
   (free! (mut (.table g)))
   (free! (mut (.addresses g)))
-  (free! (mut (.signature g))))
+  (free! (mut (.signature g)))
+  (free! (mut (.passing g)))
+  (free! (mut (.shapes g)))
+  (free! (mut (.shape-at g))))
 
 ;;; One past the largest node: the size of a column over nodes.
 (defn size [(g Graph)] (-> i64)
@@ -320,6 +330,51 @@
 (defn declare-param! [(g (mut Graph)) (index i64) (type i32)] (-> void)
   (while (<= (len (.signature g)) index) (push! (mut (.signature g)) 0))
   (set! (mut (.signature g)) index type))
+
+;;; How an argument is passed, beyond what its type says. The low eight bits
+;;; count the arguments after it that must be in registers if it is: the parts
+;;; of one thing, which go in registers together or not at all.
+(const PASS-WITH (: 255 u64))
+;;; The address the function is to write its result to.
+(const PASS-INDIRECT (: 256 u64))
+;;; Past the parameters a function that takes any number of arguments names.
+(const PASS-UNNAMED (: 512 u64))
+;;; On the stack, at a multiple of 16.
+(const PASS-ALIGN16 (: 1024 u64))
+
+;;; Parameter `index` is passed this way.
+(defn declare-passing! [(g (mut Graph)) (index i64) (how u64)] (-> void)
+  (while (<= (len (.passing g)) index) (push! (mut (.passing g)) 0))
+  (set! (mut (.passing g)) index how))
+
+(defn param-passing [(g Graph) (index i64)] (-> u64)
+  (if (< index (len (.passing g))) (get (.passing g) index) (: 0 u64)))
+
+;;; A shape says how each argument of a call is passed, and whether the
+;;; function called takes any number of arguments. Shape 0 is the plain one:
+;;; every argument by its type alone.
+(defn shape! [(g (mut Graph)) (variadic bool)] (-> u64)
+  (push! (mut (.shape-at g)) (cast i32 (len (.shapes g))))
+  (push! (mut (.shapes g)) (if variadic (: 0x100000000 u64) (: 0 u64)))
+  (cast u64 (len (.shape-at g))))
+
+;;; The next argument of `shape` is passed this way.
+(defn shape-arg! [(g (mut Graph)) (shape u64) (how u64)] (-> void)
+  (when (!= (cast i64 shape) (len (.shape-at g))) (panic "a shape's arguments are said before the next shape is made"))
+  (let [at (cast i64 (get (.shape-at g) (- (cast i64 shape) 1)))]
+    (set! (mut (.shapes g)) at (+ (get (.shapes g) at) 1))
+    (push! (mut (.shapes g)) how)))
+
+(defn shape-passing [(g Graph) (shape i64) (index i64)] (-> u64)
+  (if (= shape 0)
+      (: 0 u64)
+      (let [at (cast i64 (get (.shape-at g) (- shape 1)))
+            count (cast i64 (& (get (.shapes g) at) (: 0xFFFFFFFF u64)))]
+        (if (< index count) (get (.shapes g) (+ at (+ index 1))) (: 0 u64)))))
+
+(defn shape-variadic? [(g Graph) (shape i64)] (-> bool)
+  (and (!= shape 0)
+       (!= (& (get (.shapes g) (cast i64 (get (.shape-at g) (- shape 1)))) (: 0x100000000 u64)) 0)))
 
 (defn param-count [(g Graph)] (-> i64)
   (len (.signature g)))

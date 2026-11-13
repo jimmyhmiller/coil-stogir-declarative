@@ -17,7 +17,7 @@ out/link
 clang tests/link-main.c out/link.o -o out/link-aot
 out/link-aot
 # The tests that are one program each.
-for t in variadic results; do
+for t in variadic results passing; do
   coil build tests/$t.coil -O1 -o out/$t | grep -v '^wrote' || true
   out/$t
 done

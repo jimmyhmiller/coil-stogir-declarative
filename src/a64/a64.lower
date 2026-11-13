@@ -15,10 +15,32 @@ template move(d, s) is copy       = orr(1, d, zr, s)
 template jump(to) is jump         = b(to)
 template leave() is return        = ret(x30)
 template move-float(d, s) is copy = fmov(1, d, s)
-template from-frame-float(d, slot) = ldr-d(d, sp, slot)
-template to-frame-float(s, slot)   = str-d(s, sp, slot)
-template from-frame(d, slot) = ldr(d, sp, slot)
-template to-frame(s, slot)   = str(s, sp, slot)
+# A register to and from a slot of the frame, which is found from `base`.
+template from-frame-float(d, base, slot) = ldr-d(d, base, slot)
+template to-frame-float(s, base, slot)   = str-d(s, base, slot)
+template from-frame(d, base, slot) = ldr(d, base, slot)
+template to-frame(s, base, slot)   = str(s, base, slot)
+# An argument of `bytes` bytes to its place above the stack pointer, and a
+# parameter from its place above `base`.
+template to-stack(s, at, bytes) when bytes == 8 = str(s, sp, at / 8)
+template to-stack(s, at, bytes) when bytes == 4 = strw(s, sp, at / 4)
+template to-stack(s, at, bytes) when bytes == 2 = strh(s, sp, at / 2)
+template to-stack(s, at, bytes)                 = strb(s, sp, at)
+template to-stack-float(s, at, bytes) when bytes == 8 = str-d(s, sp, at / 8)
+template to-stack-float(s, at, bytes)                 = str-s(s, sp, at / 4)
+template from-stack(d, base, at, bytes) when bytes == 8 = ldr(d, base, at / 8)
+template from-stack(d, base, at, bytes) when bytes == 4 = ldrw(d, base, at / 4)
+template from-stack(d, base, at, bytes) when bytes == 2 = ldrh(d, base, at / 2)
+template from-stack(d, base, at, bytes)                 = ldrb(d, base, at)
+template from-stack-float(d, base, at, bytes) when bytes == 8 = ldr-d(d, base, at / 8)
+template from-stack-float(d, base, at, bytes)                 = ldr-s(d, base, at / 4)
+# In a function that moves the stack pointer as it runs: where the frame is,
+# kept and given back; the stack pointer down by the bytes in n, to a multiple
+# of 16; and the address n bytes above it.
+template base-from-stack(d)  = add-imm(1, d, sp, 0)
+template stack-from-base(s)  = add-imm(1, sp, s, 0)
+template reserve(n)          = add-imm(1, $up, n, 15) ; and-imm(1, $whole, $up, logical(0 - 16)) ; add-imm(1, $top, sp, 0) ; sub(1, $low, $top, $whole) ; add-imm(1, sp, $low, 0)
+template above-arguments(d, n) = add-imm(1, d, sp, n)
 # The stack pointer down and up by n bytes; from 4096 up it takes two instructions.
 template grow-stack(n) when n < 4096   = sub-imm(1, sp, sp, n)
 template grow-stack(n)                 = sub-imm(1, sp, sp, n % 4096) ; sub-imm-hi(1, sp, sp, n / 4096)
@@ -56,6 +78,7 @@ rule TAILCALL => nothing
 rule CALL    => nothing
 rule RESULT  => nothing
 rule RETURN  => nothing
+rule RESERVE => nothing
 
 rule PARAM   => nothing
 

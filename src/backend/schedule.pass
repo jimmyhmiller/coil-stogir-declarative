@@ -57,12 +57,16 @@ fn late(n: Node) {
   }
 }
 
-# `n` after whatever it needs from its own block.
+# `n` after whatever it needs from its own block. A phi needs nothing there:
+# its values are those the blocks before its own end with, and when the block
+# comes round to itself, what it reads is computed after it.
 fn place(n: Node, b: Block) {
   if n.placed { return }
   n.placed = true
-  for i in inputs(n) {
-    if i != none and i.block-of == b and not pinned?(i) { place(i, b) }
+  if not (n is PHI) {
+    for i in inputs(n) {
+      if i != none and i.block-of == b and not pinned?(i) { place(i, b) }
+    }
   }
   b.seq.push(n)
 }

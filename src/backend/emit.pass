@@ -81,13 +81,26 @@ fn move(to: Int, from: Int) {
 
 fn floating?(r: Int) -> Bool = isa.reg-class(r) == 1
 
-# Register `r` to and from frame slot `at`, by the kind of register it is.
+# The register the frame is found from: the stack pointer, unless the
+# function moves that as it runs.
+fn base() -> Int = marker(if dynamic then abi.BASE else abi.STACK)
+
+# Register `r` to and from frame slot `at` above `from`, by the kind of
+# register it is.
+fn keep-at(r: Int, from: Int, at: Int) {
+  if floating?(r) { lower.to-frame-float(marker(r), from, at) } else { lower.to-frame(marker(r), from, at) }
+}
+
+fn fetch-at(r: Int, from: Int, at: Int) {
+  if floating?(r) { lower.from-frame-float(marker(r), from, at) } else { lower.from-frame(marker(r), from, at) }
+}
+
 fn keep(r: Int, at: Int) {
-  if floating?(r) { lower.to-frame-float(marker(r), at) } else { lower.to-frame(marker(r), at) }
+  keep-at(r, base(), at)
 }
 
 fn fetch(r: Int, at: Int) {
-  if floating?(r) { lower.from-frame-float(marker(r), at) } else { lower.from-frame(marker(r), at) }
+  fetch-at(r, base(), at)
 }
 
 fn copy(to: Int, from: Int) {
@@ -164,7 +177,12 @@ fn rewrite(i: Inst, next: Int) {
   let falls-through = i.kind == 2 and label-of(i) == next
   if i.kind == 4 {
     # A parameter from the caller's frame, now that this frame's size is known.
-    fetch(0 - placed(i.copy-to, 2 * int(i) + 1) - 1, i.copy-from + frame / 8 + abi.RETURN-SLOTS)
+    let d = placed(i.copy-to, 2 * int(i) + 1)
+    let at = i.copy-from + frame + abi.RETURN-SLOTS * 8
+    if floating?(0 - d - 1) { lower.from-stack-float(d, base(), at, i.caller-bytes) }
+    else { lower.from-stack(d, base(), at, i.caller-bytes) }
+  } else if i.kind == 5 {
+    lower.above-arguments(placed(i.copy-to, 2 * int(i) + 1), out-slots * 8)
   } else if not same-register and not falls-through {
     if i.kind == 3 and frame > 0 { leave() }
     mach.emit(op, x0, x1, x2, x3, x4)
@@ -239,41 +257,47 @@ fn others-saved() -> Word =
 fn others-slot() -> Int = record-slot() - object-bytes / 8 - bit-count(others-saved())
 
 fn enter() {
+  let sp = marker(abi.STACK)
   lower.grow-stack(frame)
   if keeps-record?() {
-    lower.to-frame(marker(abi.FRAME), record-slot())
-    if abi.LINK >= 0 { lower.to-frame(marker(abi.LINK), record-slot() + 1) }
+    lower.to-frame(marker(abi.FRAME), sp, record-slot())
+    if abi.LINK >= 0 { lower.to-frame(marker(abi.LINK), sp, record-slot() + 1) }
     lower.frame-record(record-slot() * 8)
   }
   var rest = others-saved()
   var at = others-slot()
   while rest != word(0) {
     let r = lowest-bit(rest)
-    keep(r, at)
+    keep-at(r, sp, at)
     at = at + 1
     rest = clear-bit(rest, r)
   }
+  if dynamic { lower.base-from-stack(marker(abi.BASE)) }
 }
 
 fn leave() {
+  let sp = marker(abi.STACK)
+  # The stack pointer back to where the frame is, before anything is read from it.
+  if dynamic { lower.stack-from-base(marker(abi.BASE)) }
   var rest = others-saved()
   var at = others-slot()
   while rest != word(0) {
     let r = lowest-bit(rest)
-    fetch(r, at)
+    fetch-at(r, sp, at)
     at = at + 1
     rest = clear-bit(rest, r)
   }
   if keeps-record?() {
-    if abi.LINK >= 0 { lower.from-frame(marker(abi.LINK), record-slot() + 1) }
-    lower.from-frame(marker(abi.FRAME), record-slot())
+    if abi.LINK >= 0 { lower.from-frame(marker(abi.LINK), sp, record-slot() + 1) }
+    lower.from-frame(marker(abi.FRAME), sp, record-slot())
   }
   lower.shrink-stack(frame)
 }
 
 fn run() {
   saved = used & isa.CALLEE-SAVED
-  if calls or object-bytes > 0 {
+  if dynamic { saved = set-bit(saved, abi.BASE) }
+  if calls or object-bytes > 0 or dynamic {
     saved = set-bit(saved, abi.FRAME)
     if abi.LINK >= 0 { saved = set-bit(saved, abi.LINK) }
   }

@@ -38,15 +38,16 @@ node CASE(switch: ctrl) : ctrl                  role case     payload value
 node DEFAULT(switch: ctrl) : ctrl               role default
 # Control that reaches a trap stops the program.
 node TRAP(c: ctrl)                              role trap
-# A call follows the C convention. `named` is 0, or for a function that takes
-# any number of arguments, one more than the number it names. RESULT is a value
-# the call returned: of the integers or of the floating values, whichever its
-# type is, the one numbered `index` from 0.
-node CALL(c: ctrl, target: ptr, args...) : ctrl role call  payload named
+# A call follows the C convention. Its `shape` is 0 when every argument is
+# passed as its type alone says, or names a shape the graph holds, which says
+# what else there is to say of each. RESULT is a value the call returned: of
+# the integers or of the floating values, whichever its type is, the one
+# numbered `index` from 0.
+node CALL(c: ctrl, target: ptr, args...) : ctrl role call  payload shape
 node RESULT(call: ctrl) : T                     role result  payload index
 # A call whose result is this function's: the function ends by going there,
 # with its own frame already given back. Its type is what it returns.
-node TAILCALL(c: ctrl, target: ptr, args...) : T  role tailcall
+node TAILCALL(c: ctrl, target: ptr, args...) : T  role tailcall  payload shape
 
 # Memory. A load and a store sit in the control chain, in the order they happen;
 # a load is also the value it read. The width is the type's.
@@ -75,6 +76,10 @@ node CAS(c: ctrl, addr: ptr, expected: T, new: T) : T in int     role update  = 
 # Every access to memory before this one is seen by the other threads before
 # any after it.
 node FENCE(c: ctrl) : ctrl                                       role barrier
+
+# Memory of the function's own, sized as it runs: `bytes` of it at a multiple
+# of 16, until the function returns.
+node RESERVE(c: ctrl, bytes: u64) : ptr                          role reserve
 
 # Addresses. SLOT is a frame object of `size` bytes, its own for each call of
 # the function. SYMBOL is something in the same image, EXTERN something outside.
