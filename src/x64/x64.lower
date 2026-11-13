@@ -270,6 +270,13 @@ rule STORE(_, p, v) when not float(v)                   => store8(v, p, 0)
 rule COND(c, x, y) when not float  => move(out, y) ; test(0, c, c) ; cmov(sf, not-equal, out, x)
 
 # A comparison as a value: the flags, then 1 where the condition holds.
+# Against a constant that fits, the constant needs no register.
+rule EQ(a, CONST k) when s32(k)   => cmp-imm(sf(a), zx(a), k) ; setcc(equal, $t) ; movzx8(out, $t)
+rule NE(a, CONST k) when s32(k)   => cmp-imm(sf(a), zx(a), k) ; setcc(not-equal, $t) ; movzx8(out, $t)
+rule LT(a, CONST k) when s32(k)   => cmp-imm(sf(a), sx(a), k) ; setcc(less, $t) ; movzx8(out, $t)
+rule LE(a, CONST k) when s32(k)   => cmp-imm(sf(a), sx(a), k) ; setcc(less-equal, $t) ; movzx8(out, $t)
+rule ULT(a, CONST k) when s32(k)  => cmp-imm(sf(a), zx(a), k) ; setcc(below, $t) ; movzx8(out, $t)
+rule ULE(a, CONST k) when s32(k)  => cmp-imm(sf(a), zx(a), k) ; setcc(below-equal, $t) ; movzx8(out, $t)
 rule EQ(a, b)   => cmp(sf(a), zx(a), zx(b)) ; setcc(equal, $t) ; movzx8(out, $t)
 rule NE(a, b)   => cmp(sf(a), zx(a), zx(b)) ; setcc(not-equal, $t) ; movzx8(out, $t)
 rule LT(a, b)   => cmp(sf(a), sx(a), sx(b)) ; setcc(less, $t) ; movzx8(out, $t)

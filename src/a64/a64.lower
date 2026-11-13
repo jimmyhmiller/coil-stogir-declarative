@@ -286,6 +286,13 @@ rule COND(ULE(a, b), x, y)  => subs(sf(a), zr, zx(a), zx(b)) ; csel(sf, out, x, 
 rule COND(c, x, y)          => subs-imm(0, zr, c, 0) ; csel(sf, out, x, y, ne)
 
 # A comparison as a value: the flags, then 1 where the condition holds.
+# Against a small constant, the constant needs no register.
+rule EQ(a, CONST k) when u12(k)   => subs-imm(sf(a), zr, zx(a), k) ; csinc(0, out, zr, zr, ne)
+rule NE(a, CONST k) when u12(k)   => subs-imm(sf(a), zr, zx(a), k) ; csinc(0, out, zr, zr, eq)
+rule LT(a, CONST k) when u12(k)   => subs-imm(sf(a), zr, sx(a), k) ; csinc(0, out, zr, zr, ge)
+rule LE(a, CONST k) when u12(k)   => subs-imm(sf(a), zr, sx(a), k) ; csinc(0, out, zr, zr, gt)
+rule ULT(a, CONST k) when u12(k)  => subs-imm(sf(a), zr, zx(a), k) ; csinc(0, out, zr, zr, hs)
+rule ULE(a, CONST k) when u12(k)  => subs-imm(sf(a), zr, zx(a), k) ; csinc(0, out, zr, zr, hi)
 rule EQ(a, b)   => subs(sf(a), zr, zx(a), zx(b)) ; csinc(0, out, zr, zr, ne)
 rule NE(a, b)   => subs(sf(a), zr, zx(a), zx(b)) ; csinc(0, out, zr, zr, eq)
 rule LT(a, b)   => subs(sf(a), zr, sx(a), sx(b)) ; csinc(0, out, zr, zr, ge)
