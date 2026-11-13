@@ -207,13 +207,32 @@ fn settled?(p: Block, s: Block) -> Bool {
   true
 }
 
-# A block that is one jump, reached and left with nothing to move, is no code
-# at all: what goes to it goes to where it jumps.
+# The machine register operand `a` is in at `pos`, found without moving the
+# marks emission keeps.
+fn register-at(a: Int, pos: Int) -> Int = if a < 0 then a else marker(alloc.piece-at(id(a), pos).reg - 1)
+
+# Whether instruction `i` comes to nothing: a copy between two values in the
+# same register, the one written not also kept in the frame.
+fn nothing?(i: Inst) -> Bool {
+  if i.kind != 1 { return false }
+  if i.copy-to > 0 and id(i.copy-to).slot != 0 { return false }
+  register-at(i.copy-to, 2 * int(i) + 1) == register-at(i.copy-from, 2 * int(i))
+}
+
+# A block that is a jump and nothing else that comes to anything, reached and
+# left with nothing to move, is no code at all: what goes to it goes to where
+# it jumps.
 fn find-onward() {
   for b in order {
-    if b.first-inst == b.last-inst and id(b.first-inst).kind == 2 and b.preds.len == 1 and b.succs.len == 1 and b.succs[0] != b {
-      let i: Inst = id(b.first-inst)
-      if settled?(b.preds[0], b) and settled?(b, b.succs[0]) { b.onward = b.succs[0] }
+    if id(b.last-inst).kind == 2 and b.preds.len == 1 and b.succs.len == 1 and b.succs[0] != b {
+      var empty = true
+      for at in b.first-inst..b.last-inst { if not nothing?(id(at)) { empty = false } }
+      # Nor may a value come back from the frame part way through it.
+      for at in b.first-inst + 1..b.last-inst + 1 {
+        let i: Inst = id(at)
+        if i.starts-even.len > 0 { empty = false }
+      }
+      if empty and settled?(b.preds[0], b) and settled?(b, b.succs[0]) { b.onward = b.succs[0] }
     }
   }
 }
