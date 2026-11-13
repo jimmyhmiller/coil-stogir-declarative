@@ -646,6 +646,9 @@
 ;;; for (i = 0; i < n; i++) x = x + a[i] (and sometimes b[i] = x), where the
 ;;; counter is used only to make addresses: the addresses can be stepped
 ;;; themselves. Sometimes the loop also reads a word that does not change.
+;;; One time in two the loop may be left from its middle, and the way out
+;;; reads c[i] through a pointer it is only given there: a base made outside
+;;; the loop that is no base to step from on the way in.
 (defn array-loop! [(r (mut Gen))] (-> void)
   (let [t (.type r)
         head (ir/loop! (mut (.g r)) 2)
@@ -668,7 +671,10 @@
         base (if from-call
                  (pointer! (mut r))
                  (ir/const! (mut (.g r)) ir/T-PTR (+ (.memory r) (cast u64 (below! (mut r) (- 256 reach))))))
-        x0 (pick! (mut r))]
+        leaving (= (below! (mut r) 2) 0)
+        x0 (pick! (mut r))
+        (mut out) (: 0 i32)
+        (mut out-x) (: 0 i32)]
     (graph/set-input! (mut (.g r)) head 0 (.control r))
     (graph/set-input! (mut (.g r)) i 1 (ir/const! (mut (.g r)) ir/T-PTR 0))
     (graph/set-input! (mut (.g r)) x 1 x0)
@@ -680,34 +686,62 @@
                        v)
                      0)
           lt (memory-type! (mut r))
-          read (ir/load-node! (mut (.g r)) lt 0 (.control r) (ir/add! (mut (.g r)) ir/T-PTR base scaled))
-          _ (set! (.control r) read)
-          wide (if (< (ir/type-bits lt) (ir/type-bits t)) (widen! (mut r) read) (ir/trunc! (mut (.g r)) t read))
-          mixed (binary! (mut r) t (below! (mut r) 6) x wide)
-          next-x (if (!= steady 0) (ir/add! (mut (.g r)) t mixed steady) mixed)]
-      (when (= (below! (mut r) 2) 0)
-        (let [other (ir/const! (mut (.g r)) ir/T-PTR (+ (.memory r) (cast u64 (below! (mut r) (- 256 reach)))))
-              st (memory-type! (mut r))]
-          (set! (.control r)
-                (ir/store-node! (mut (.g r)) 0 (.control r) (ir/add! (mut (.g r)) ir/T-PTR other scaled)
-                                (fitted! (mut r) st next-x)))))
-      (graph/set-input! (mut (.g r)) head 1 (.control r))
-      (graph/set-input! (mut (.g r)) i 2 (ir/add! (mut (.g r)) ir/T-PTR i (ir/const! (mut (.g r)) ir/T-PTR 1)))
-      (graph/set-input! (mut (.g r)) x 2 next-x))
+          read (ir/load-node! (mut (.g r)) lt 0 (.control r) (ir/add! (mut (.g r)) ir/T-PTR base scaled))]
+      (set! (.control r) read)
+      (let [wide (if (< (ir/type-bits lt) (ir/type-bits t)) (widen! (mut r) read) (ir/trunc! (mut (.g r)) t read))
+            mixed (binary! (mut r) t (below! (mut r) 6) x wide)
+            next-x (if (!= steady 0) (ir/add! (mut (.g r)) t mixed steady) mixed)]
+        (when leaving
+          (let [stop (ir/if! (mut (.g r)) (.control r)
+                             (ir/eq! (mut (.g r)) (ir/and! (mut (.g r)) t wide (ir/const! (mut (.g r)) t 7))
+                                     (ir/const! (mut (.g r)) t 3)))
+                stay (ir/false! (mut (.g r)) stop)]
+            (set! (.control r) (ir/true! (mut (.g r)) stop))
+            (let [p (if (<= reach 128)
+                        (pointer! (mut r))
+                        (ir/const! (mut (.g r)) ir/T-PTR (+ (.memory r) (cast u64 (below! (mut r) (- 256 reach))))))
+                  ct (memory-type! (mut r))
+                  late (ir/load-node! (mut (.g r)) ct 0 (.control r) (ir/add! (mut (.g r)) ir/T-PTR p scaled))]
+              (set! out late)
+              (set! out-x (binary! (mut r) t (below! (mut r) 6) next-x
+                                   (if (< (ir/type-bits ct) (ir/type-bits t)) (widen! (mut r) late) (ir/trunc! (mut (.g r)) t late)))))
+            (set! (.control r) stay)))
+        ; Then sometimes b[i] = x, mostly when the loop may be left: then the
+        ; loop does not end in the test that may leave it, and can be turned.
+        (when (< (below! (mut r) 4) (if leaving 3 2))
+          (let [other (ir/const! (mut (.g r)) ir/T-PTR (+ (.memory r) (cast u64 (below! (mut r) (- 256 reach)))))
+                st (memory-type! (mut r))]
+            (set! (.control r)
+                  (ir/store-node! (mut (.g r)) 0 (.control r) (ir/add! (mut (.g r)) ir/T-PTR other scaled)
+                                  (fitted! (mut r) st next-x)))))
+        (graph/set-input! (mut (.g r)) head 1 (.control r))
+        (graph/set-input! (mut (.g r)) i 2 (ir/add! (mut (.g r)) ir/T-PTR i (ir/const! (mut (.g r)) ir/T-PTR 1)))
+        (graph/set-input! (mut (.g r)) x 2 next-x)))
     (set! (.control r) exit)
-    ; Mostly what the loop made is handed to a call: a value read outside only
-    ; through a long expression keeps the loop from being turned.
-    (push! (mut (.env r))
-           (if (= (below! (mut r) 3) 0)
-               x
-               (let [narrow (< (ir/type-bits t) 64)
-                     target (ir/const! (mut (.g r)) ir/T-PTR
-                                       (if narrow (primitive/cast u64 (primitive/cast (ptr i8) (fnptr-of helper1-32)))
-                                           (primitive/cast u64 (primitive/cast (ptr i8) (fnptr-of helper1)))))
-                     node (ir/call-node! (mut (.g r)) 0 (.control r) target 1)]
-                 (graph/set-input! (mut (.g r)) node 2 (if narrow (ir/zext! (mut (.g r)) ir/T-U64 x) x))
-                 (set! (.control r) node)
-                 (ir/result! (mut (.g r)) t 0 node))))))
+    ; Where the two ways out meet, what the loop made by each.
+    (let [made (if leaving
+                   (let [meet (ir/region! (mut (.g r)) 2)
+                         v (ir/phi! (mut (.g r)) t meet 2)]
+                     (graph/set-input! (mut (.g r)) meet 0 exit)
+                     (graph/set-input! (mut (.g r)) meet 1 out)
+                     (graph/set-input! (mut (.g r)) v 1 x)
+                     (graph/set-input! (mut (.g r)) v 2 out-x)
+                     (set! (.control r) meet)
+                     v)
+                   x)]
+      ; Mostly what the loop made is handed to a call: a value read outside only
+      ; through a long expression keeps the loop from being turned.
+      (push! (mut (.env r))
+             (if (= (below! (mut r) 3) 0)
+                 made
+                 (let [narrow (< (ir/type-bits t) 64)
+                       target (ir/const! (mut (.g r)) ir/T-PTR
+                                         (if narrow (primitive/cast u64 (primitive/cast (ptr i8) (fnptr-of helper1-32)))
+                                             (primitive/cast u64 (primitive/cast (ptr i8) (fnptr-of helper1)))))
+                       node (ir/call-node! (mut (.g r)) 0 (.control r) target 1)]
+                   (graph/set-input! (mut (.g r)) node 2 (if narrow (ir/zext! (mut (.g r)) ir/T-U64 made) made))
+                   (set! (.control r) node)
+                   (ir/result! (mut (.g r)) t 0 node)))))))
 
 ;;; if (test) return something: a way out before anything else is done.
 (defn early-exit! [(r (mut Gen))] (-> void)
