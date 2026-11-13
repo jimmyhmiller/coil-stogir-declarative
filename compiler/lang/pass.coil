@@ -774,6 +774,8 @@
         ; Whether a call of this symbol is known to write no memory.
         ; Where a node came from, as whoever built the graph numbered it; 0 if it said nothing.
         (and (= name "origin") (= n 1)) (t/cat3 "(graph/origin (.g cx) " a ")")
+        ; Nodes made from here on come from where this one came from (none: from nowhere).
+        (and (= name "from") (= n 1)) (t/cat3 "(graph/from! (mut (.g cx)) " a ")")
         (and (= name "reads-only") (= n 1)) (t/cat3 "(graph/reads-only? (.g cx) " a ")")
         ; What else is known of the routine a symbol is: 0 nothing, 1 it only
         ; reads, 2 memcpy, 3 memmove, 4 memset, 5 memcmp.

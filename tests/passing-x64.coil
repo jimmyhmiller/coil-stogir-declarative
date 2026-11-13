@@ -1,7 +1,7 @@
 ;;; How arguments are passed, beyond integers and floating values in order:
 ;;; integers narrower than a word on the stack, a result written where the
-;;; caller says, parts that go in registers together or not at all, and memory
-;;; reserved as the function runs. Each is checked against functions compiled
+;;; caller says, parts that go in registers together or not at all, a record
+;;; passed by value, and memory reserved as the function runs. Each is checked against functions compiled
 ;;; by Coil with the C convention, both calling them and being called by them.
 (module tests.passing-x64)
 (import "coil.alloc" :use [malloc-allocator])
@@ -15,6 +15,7 @@
 (import "backend.nodes" :as ir)
 (import "x64.unit" :as st)
 (import "x64.plans" :as plans)
+(import "declarative.target" :as target)
 
 (defstruct Triple [(first u64) (second u64) (third u64)])
 
@@ -30,6 +31,17 @@
 
 (defn ten [(a u64) (b u64) (c u64) (d u64) (e u64) (f u64) (g u64) (h u64) (i u64) (j u64)] (-> u64) :cc (cc/C)
   (+ (+ (+ a b) (+ c d)) (+ (+ e f) (+ g h)) (+ (* i 100) (* j 10000))))
+
+;;; Six words, a record of three by value, and two words more. On x86-64 the
+;;; record goes on the stack, its bytes copied there, and the two words after
+;;; it as well; on AArch64 it goes as the address of a copy, in a register.
+(defn by-value [(a u64) (b u64) (c u64) (d u64) (e u64) (f u64) (t Triple) (g u64) (h u64)] (-> u64) :cc (cc/C)
+  (+ (+ (+ a (* b 2)) (+ (* c 3) (* d 4))) (+ (* e 5) (* f 6))
+     (+ (+ (* (.first t) 7) (* (.second t) 8)) (+ (* (.third t) 9) (+ (* g 10) (* h 11))))))
+
+;;; How the record goes, as Coil's C convention passes it on this machine.
+(defn record-passing [] (-> u64)
+  (target/machine-pick (: 0 u64) (| graph/PASS-COPIED (<< (: 24 u64) 32))))
 
 (defn address-of [(f (ptr i8))] (-> u64) (primitive/cast u64 f))
 
@@ -132,6 +144,44 @@
       (graph/shape-arg! (mut g) shape (grouped-passing i))
       (graph/set-input! (mut g) call (+ i 2) (ir/mul! (mut g) ir/T-I64 x (word (mut g) (cast u64 (+ i 1))))))
     (graph/set-input! (mut g) (ir/return! (mut g) call 1) 1 (ir/result! (mut g) ir/T-I64 0 call))
+    g))
+
+;;; `by-value` as a graph: the record's parameter is the address of its copy.
+(defn by-value-sum [] (-> graph/Graph)
+  (let [(mut g) (graph/create (malloc-allocator))
+        (mut c) (ir/start! (mut g))
+        (mut sum) (word (mut g) 0)]
+    (for i (range 0 9)
+      (let [weight (cond (< i 6) (+ i 1) (= i 6) 0 :else (+ i 3))
+            p (ir/param! (mut g) (if (= i 6) ir/T-PTR ir/T-I64) (cast u64 i))]
+        (when (= i 6)
+          (graph/declare-passing! (mut g) i (record-passing))
+          (for k (range 0 3)
+            (let [part (ir/load-node! (mut g) ir/T-I64 0 c (ir/add! (mut g) ir/T-PTR p (ir/const! (mut g) ir/T-PTR (cast u64 (* k 8)))))]
+              (set! c part)
+              (set! sum (ir/add! (mut g) ir/T-I64 sum (ir/mul! (mut g) ir/T-I64 part (word (mut g) (cast u64 (+ k 7)))))))))
+        (when (!= i 6)
+          (set! sum (ir/add! (mut g) ir/T-I64 sum (ir/mul! (mut g) ir/T-I64 p (word (mut g) (cast u64 weight))))))))
+    (graph/set-input! (mut g) (ir/return! (mut g) c 1) 1 sum)
+    g))
+
+;;; A call of `target` with x, 2x, ..., 6x, the record (7x, 8x, 9x) and 10x, 11x.
+(defn by-value-call [(target u64)] (-> graph/Graph)
+  (let [(mut g) (graph/create (malloc-allocator))
+        s (ir/start! (mut g))
+        x (ir/param! (mut g) ir/T-I64 0)
+        record (ir/slot! (mut g) 24)
+        (mut c) s]
+    (for k (range 0 3)
+      (set! c (ir/store-node! (mut g) 0 c (ir/add! (mut g) ir/T-PTR record (ir/const! (mut g) ir/T-PTR (cast u64 (* k 8))))
+                              (ir/mul! (mut g) ir/T-I64 x (word (mut g) (cast u64 (+ k 7)))))))
+    (let [shape (graph/shape! (mut g) false)
+          call (ir/call-node! (mut g) shape c (ir/const! (mut g) ir/T-PTR target) 9)]
+      (for i (range 0 9)
+        (graph/shape-arg! (mut g) shape (if (= i 6) (record-passing) (: 0 u64)))
+        (graph/set-input! (mut g) call (+ i 2)
+                          (if (= i 6) record (ir/mul! (mut g) ir/T-I64 x (word (mut g) (cast u64 (if (< i 6) (+ i 1) (+ i 3))))))))
+      (graph/set-input! (mut g) (ir/return! (mut g) call 1) 1 (ir/result! (mut g) ir/T-I64 0 call)))
     g))
 
 ;;; Reserves n * 8 bytes each time round a loop of three, fills the last word
@@ -262,6 +312,14 @@
         large-fn (primitive/cast (fnptr (cc/C) [u64] u64)
                                  (compile (large-frame (address-of (primitive/cast (ptr i8) (fnptr-of ten))))))
         pinned-fn (primitive/cast (fnptr (cc/C) [u64 u64] u64) (compile (pinned)))
+        record-sum (compile (by-value-sum))
+        record-sum-fn (primitive/cast (fnptr (cc/C) [u64 u64 u64 u64 u64 u64 Triple u64 u64] u64) record-sum)
+        ; Its type said first: `fnptr-of` cast straight to an address gives one that
+        ; does not take the record as C passes it (pad coil-bugs, fnptr-of-cast-loses-c-byval).
+        by-value-entry (: (fnptr-of by-value) (fnptr (cc/C) [u64 u64 u64 u64 u64 u64 Triple u64 u64] u64))
+        record-call-fn (primitive/cast (fnptr (cc/C) [i64] i64)
+                                       (compile (by-value-call (address-of (primitive/cast (ptr i8) by-value-entry)))))
+        record-both-fn (primitive/cast (fnptr (cc/C) [i64] i64) (compile (by-value-call (primitive/cast u64 record-sum))))
         written (out-fn 9 4)
         (mut failures) 0]
     (set! failures (+ failures (check "narrow parameters" (sum-fn 1 2 3 4 5 6 7 8 -9 -10 -11 12)
@@ -280,5 +338,11 @@
     ; ten(1..10) = 36 + 900 + 100000, and 4 * 1000 + 6
     (set! failures (+ failures (check "a large frame" (cast i64 (large-fn 1000)) (+ 100936 4006))))
     (set! failures (+ failures (check "a call that follows no convention" (cast i64 (pinned-fn 100 7)) 407)))
+    ; 1..6 and 10, 11 weighted by themselves, and 7, 8, 9 likewise: 506, times x.
+    (set! failures (+ failures (check "a record by value, as parameters"
+                                      (cast i64 (record-sum-fn 1 2 3 4 5 6 (Triple :first 7 :second 8 :third 9) 10 11))
+                                      (cast i64 (by-value 1 2 3 4 5 6 (Triple :first 7 :second 8 :third 9) 10 11)))))
+    (set! failures (+ failures (check "a record by value, as arguments" (record-call-fn 3) 1518)))
+    (set! failures (+ failures (check "a record by value, both ends ours" (record-both-fn 5) 2530)))
     (println "passing arguments: {} failures" failures)
     failures))

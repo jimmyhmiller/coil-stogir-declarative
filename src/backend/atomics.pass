@@ -26,6 +26,7 @@ fn left(n: Node, old: Node, v: Node) -> Node {
 }
 
 fn expand(n: Node) {
+  from(n)
   let t = n.type
   let first = ir.atomic-load!(mut graph, t, n.in(0), n.in(1))
   let loop = ir.loop!(mut graph, 2)
@@ -46,6 +47,7 @@ fn expand(n: Node) {
     if u is REGION or u is LOOP or (k == 0 and cfg.control?(u)) { set-input(u, k, out) } else { set-input(u, k, tried) }
   }
   drop(n)
+  from(none)
   expanded = expanded + 1
 }
 

@@ -203,7 +203,10 @@ fn again() -> Int {
   let was = known-calls
   for n in Node {
     if not n.dead and n is CALL {
+      # What is done in place of the call comes from where the call came from.
+      from(n)
       if routine(n) == 5 { compare(n) } else { known-call(n) }
+      from(none)
     }
   }
   known-calls - was
@@ -211,10 +214,19 @@ fn again() -> Int {
 
 fn run() {
   if inline-bytes == 0 { inline-bytes = 128 }
-  for n in Node { if not n.dead and (n is COPY or n is FILL) { expand(n) } }
+  for n in Node {
+    if not n.dead and (n is COPY or n is FILL) {
+      from(n)
+      expand(n)
+      from(none)
+    }
+  }
   for n in Node {
     if not n.dead and n is CALL {
+      # What is done in place of the call comes from where the call came from.
+      from(n)
       if routine(n) == 5 { compare(n) } else { known-call(n) }
+      from(none)
     }
   }
 }

@@ -13,7 +13,10 @@ sed 's/"a64\./"x64./g; s/x64\.macho/x64.elf/; s/tests\.link/tests.link-x64/' tes
 SINGLES=(variadic results passing)
 for t in $SINGLES; do sed "s/\"a64\\./\"x64./g; s/tests\\.$t/tests.$t-x64/" tests/$t.coil > tests/$t-x64.coil; done
 rsync -a --delete --exclude .git --exclude out ./ ${HOST}:csd/
-ssh -o BatchMode=yes $HOST bash -s -- "$COIL" "${X64_FLAGS:--O1}" "${1:-500}" "${2:-1}" "${3:-}" "$SINGLES" <<'REMOTE'
+# ssh hands the far side one line: each argument is quoted for its shell, so
+# that an empty one stays an argument.
+args=("$COIL" "${X64_FLAGS:--O1}" "${1:-500}" "${2:-1}" "${3:-}" "$SINGLES")
+ssh -o BatchMode=yes $HOST "bash -s -- ${(j: :)${(qq)args[@]}}" <<'REMOTE'
 set -euo pipefail
 coil=$(eval echo "$1"); flags=$2; count=$3; first=$4; mode=$5; singles=$6
 cd csd && rm -rf out && mkdir -p out

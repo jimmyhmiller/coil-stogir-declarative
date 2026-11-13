@@ -14,6 +14,7 @@ column pair-second: Node -> Bool      # the second of such a two,
 column pair-first: Node -> Node       # and its first
 column pair-base: Node -> Node        # for the first: the address both are offsets from,
 column pair-at: Node -> Int           # and the first's offset
+column homed: Node -> Bool            # for an argument: put in its frame object where the function begins
 tally paired: Int                     # how many such twos there were
 tally tabled: Int                     # how many switches went by a table
 
@@ -48,6 +49,14 @@ fn pair-up(b: Block) {
     }
     c = next
   }
+}
+
+# The argument, as it arrived, that store `n` puts into a frame object; else none.
+fn homing(n: Node) -> Node {
+  if not (n is STORE) or not (address-base(n.in(1)) is SLOT) { return none }
+  var v = n.in(2)
+  while v is SEXT or v is ZEXT or v is TRUNC { v = v.in(0) }
+  if v is PARAM then v else none
 }
 
 fn choose(n: Node) {
@@ -507,11 +516,30 @@ fn run() {
     for n in b.seq { if cfg.control?(n) or n is PHI { mach.need(n) } }
   }
   while worklist.len > 0 { choose(worklist.pop()) }
+  # Where a debugger stops on entering the function, the arguments it shows
+  # must already be where it reads them: in their frame objects. The entry
+  # block begins by putting each there; up to the last of those, what it
+  # computes comes from no place.
+  var homed: Node = none
+  if debugging {
+    var leading = true
+    for n in cfg.entry().seq {
+      if leading and cfg.control?(n) and not (n is START) {
+        let p = homing(n)
+        if p == none or p.homed { leading = false } else {
+          p.homed = true
+          homed = n
+        }
+      }
+    }
+  }
   for b in order {
     b.first-inst = Inst.count + 1
     emitting = b
+    var prologue = b == cfg.entry() and homed != none
     for n in b.seq {
-      emitting-from = origin(n)
+      emitting-from = if prologue then 0 else origin(n)
+      if n == homed { prologue = false }
       if n is CALL { call(n) }
       else if n is SWITCH { switch(n) }
       else if n is TAILCALL { tail-call(n) }

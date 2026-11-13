@@ -425,6 +425,9 @@ fn others(keeping: Bool) {
 
 fn enter() {
   # The frame, with its record if it keeps one, as the machine opens frames.
+  # It comes from no place in the source: what the instruction before it in
+  # the code came from is no reason for a debugger to stop here.
+  emitting-from = 0
   if keeps-record?() { lower.open-record(record-slot() * 8) } else { lower.grow-stack(frame) }
   others(true)
   if dynamic { lower.base-from-stack(marker(abi.BASE)) }
