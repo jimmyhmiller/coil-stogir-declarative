@@ -19,6 +19,8 @@ const scratch0 = 16
 const scratch1 = 17
 const scratch2 = 15
 const fscratch = 63
+# A switch may go by a table of distances.
+const tables = 1
 # Machine code is whole instructions of this many bytes.
 const code-unit = 4
 
@@ -117,6 +119,12 @@ inst cbz(sf: u1, rt: use gpr, to: label)                  = sf 0110100 to[20:2] 
 inst cbnz(sf: u1, rt: use gpr, to: label)                 = sf 0110101 to[20:2] rt        opposite cbz
 inst brk(imm: u16)                                        = 11010100001 imm 00000
 inst ret(rn: use gpr)                                     = 1101011001011111000000 rn 00000
+# For a switch by table: the address `words` instructions ahead; a signed
+# 32-bit word read from a base plus four times an index; and a word that is
+# the distance from itself to a label.
+inst address-ahead(rd: def gpr, words: u19)                         = 0 00 10000 words rd
+inst load-distance(rt: def gpr, rn: use gpr, rm: use gpr)           = 10111000101 rm 011 1 10 rn rt
+inst distance-to(to: label)                                         = to[31:0]
 # Machine code given as it is.
 inst raw(bits: u32)                                       = bits
 # Symbols. S is the symbol's address, G the address of its slot in the table of

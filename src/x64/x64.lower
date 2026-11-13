@@ -29,6 +29,9 @@ template from-object(d, base, at, bytes)         = from-stack(d, base, at, bytes
 template from-object-float(d, base, at, bytes)   = from-stack-float(d, base, at, bytes)
 template to-object(s, base, at, bytes)           = store(1, s, base, at)
 template to-object-float(s, base, at, bytes)     = storef(1, s, base, at)
+# Never asked for: `tables` is 0, and selection stops if it is asked anyway.
+template table-jump(w, v, low, last, otherwise) = ud2()
+template table-entry(to) = ud2()
 # Two words next to each other in memory: one after the other.
 template load-pair(a, b, base, at)  = load(1, a, base, at) ; load(1, b, base, at + 8)
 template store-pair(a, b, base, at) = store(1, a, base, at) ; store(1, b, base, at + 8)

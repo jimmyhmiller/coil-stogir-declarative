@@ -17,6 +17,8 @@ set callee-saved = rbx r12..r15
 const scratch0 = 11
 const fscratch = 47
 # Machine code is bytes.
+# A switch goes by comparing with each case; this machine's tables are not described.
+const tables = 0
 const code-unit = 1
 
 # Condition codes.

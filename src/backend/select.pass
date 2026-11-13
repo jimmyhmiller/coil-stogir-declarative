@@ -271,9 +271,41 @@ fn reserve(n: Node) {
   mach.above-arguments(int(n))
 }
 
+# A switch whose cases are many and close together goes by a table: for each
+# value from the lowest case to the highest, where that value goes.
+fn table-switch(n: Node, low: Int, high: Int) {
+  if isa.TABLES == 0 { panic("a switch by table on a machine whose description has none") }
+  let v = n.in(1)
+  let otherwise = first u in users(n): u is DEFAULT
+  lower.table-jump(if v.bits == 64 then 1 else 0, lower.extended(v, 0), low, high - low, int(otherwise.block-of))
+  for k in low..high + 1 {
+    let to = first u in users(n): u is CASE and int(u.payload) == k
+    lower.table-entry(int(if to == none then otherwise.block-of else to.block-of))
+  }
+}
+
 # A switch: its value against each case in turn, then the default.
 fn switch(n: Node) {
   let v = n.in(1)
+  if isa.TABLES == 1 and cfg.on?(15) {
+    var cases = 0
+    var low = 4095
+    var high = 0
+    var fits = true
+    for u in users(n) {
+      if u is CASE {
+        cases = cases + 1
+        if u.payload > word(4000) { fits = false } else {
+          low = min(low, int(u.payload))
+          high = max(high, int(u.payload))
+        }
+      }
+    }
+    if fits and cases >= 5 and high - low < 3 * cases {
+      table-switch(n, low, high)
+      return
+    }
+  }
   let w = if v.bits == 64 then 1 else 0
   for u in users(n) {
     if u is CASE { lower.branch-if-equal(w, lower.extended(v, 0), int(u.payload), int(u.block-of)) }

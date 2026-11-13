@@ -5,6 +5,7 @@
 pass in unit
 use loops as loops
 use cfg as cfg
+import target as isa
 
 state halved: Int
 
@@ -15,6 +16,20 @@ fn halve(s: Node) {
   var cases: [Node] = []
   for u in users(s) { if u is CASE { cases.push(u) } }
   if cases.len <= few() { return }
+  # Cases that are many and close together are left whole, for a table, on a
+  # machine that has them (as selection judges it).
+  if isa.TABLES == 1 and cfg.on?(15) {
+    var low = 4095
+    var high = 0
+    var fits = true
+    for c in cases {
+      if c.payload > word(4000) { fits = false } else {
+        low = min(low, int(c.payload))
+        high = max(high, int(c.payload))
+      }
+    }
+    if fits and cases.len >= 5 and high - low < 3 * cases.len { return }
+  }
   let otherwise = first u in users(s): u is DEFAULT
   if otherwise == none { return }
   # The middle: a case's value that half the cases are below.
