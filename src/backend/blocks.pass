@@ -4,8 +4,8 @@
 # of the routine the unit was told of.
 pass in unit
 
-state copy-routine: Int               # the symbols of routines outside the image that copy
-state fill-routine: Int               # and fill any number of bytes; 0 if there is none
+state copy-routine: Int               # one more than the symbols of routines outside the image that
+state fill-routine: Int               # copy and fill any number of bytes; 0 if there is none
 state inline-bytes: Int               # the most bytes done by loads and stores
 
 fn at(p: Node, offset: Int) -> Node =
@@ -43,7 +43,7 @@ fn pieces(c: Node, dst: Node, src: Node, value: Node, total: Int) -> Node {
 
 fn call(c: Node, routine: Int, a: Node, b: Node, bytes: Int) -> Node {
   if routine == 0 { panic("a copy or fill of this many bytes needs a routine, and the unit was told of none") }
-  let n = ir.call-node!(mut graph, word(0), c, ir.extern!(mut graph, word(routine)), 3)
+  let n = ir.call-node!(mut graph, word(0), c, ir.extern!(mut graph, word(routine - 1)), 3)
   set-input(n, 2, a)
   set-input(n, 3, b)
   set-input(n, 4, ir.make-const!(mut graph, ir.T-U64, word(bytes)))

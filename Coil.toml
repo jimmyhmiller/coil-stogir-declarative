@@ -1,7 +1,7 @@
 [package]
 name = "backend"
 entry = "tests/fuzz.coil"
-source-roots = ["compiler", "tests"]
+source-roots = ["compiler", "tests", "adapter"]
 
 [readers]
 ".ir" = "lang.readers"
