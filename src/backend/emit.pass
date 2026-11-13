@@ -202,7 +202,7 @@ fn encode() {
   for at in final-start + 1..Inst.count + 1 {
     let i = id(at)
     i.offset = code-bytes
-    code-bytes = code-bytes + isa.size(i.inst-op, encoded(i, 0, false), encoded(i, 1, false), encoded(i, 2, false), encoded(i, 3, false), encoded(i, 4, false))
+    code-bytes = code-bytes + isa.size(mut code, i.inst-op, encoded(i, 0, false), encoded(i, 1, false), encoded(i, 2, false), encoded(i, 3, false), encoded(i, 4, false))
   }
   for at in final-start + 1..Inst.count + 1 {
     let i = id(at)
