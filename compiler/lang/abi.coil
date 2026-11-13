@@ -56,6 +56,18 @@
                 (t/line! (mut o) " :else -1))")
                 (t/line! (mut o) (t/cat3 "(const INT-ARGS " (t/int-text (len names)) ")"))
                 (t/line! (mut o) (t/cat3 "(const ARGUMENTS " (t/u64-text mask) ")")))
+            (t/tok-is? tok "floats")
+              (let [names (isa/parse-reg-list (mut c))]
+                (t/line! (mut o) "(defn float-arg [(i i64)] (-> i64)")
+                (t/emit! (mut o) "  (cond")
+                (for i (range 0 (len names))
+                  (let [number (isa/reg-number spec (get names i))]
+                    (when (< number 0) (t/die (mut c) tok (t/cat2 "the target has no register " (get names i))))
+                    (t/emit! (mut o) (t/cat4 " (= i " (t/int-text i) ") " (t/int-text number)))))
+                (t/line! (mut o) " :else -1))")
+                (t/line! (mut o) (t/cat3 "(const FLOAT-ARGS " (t/int-text (len names)) ")")))
+            (t/tok-is? tok "float-result")
+              (t/line! (mut o) (t/cat3 "(const FLOAT-RESULT " (t/int-text (reg! (mut c) spec)) ")"))
             (t/tok-is? tok "result")
               (t/line! (mut o) (t/cat3 "(const RESULT " (t/int-text (reg! (mut c) spec)) ")"))
             (t/tok-is? tok "link")

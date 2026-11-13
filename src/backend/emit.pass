@@ -51,7 +51,7 @@ fn finish(i: Inst, k: Int) {
   if k < isa.operand-count(op) and alloc.writes?(isa.operand-kind(op, k)) {
     let a = mach.arg(i, k)
     if a > 0 and id(a).slot != 0 {
-      lower.to-frame(marker(here(id(a), 2 * int(i) + 1).reg - 1), out-slots + id(a).slot - 1)
+      keep(here(id(a), 2 * int(i) + 1).reg - 1, out-slots + id(a).slot - 1)
     }
   }
 }
@@ -65,9 +65,23 @@ fn move(to: Int, from: Int) {
   }
 }
 
+fn floating?(r: Int) -> Bool = isa.reg-class(r) == 1
+
+# Register `r` to and from frame slot `at`, by the kind of register it is.
+fn keep(r: Int, at: Int) {
+  if floating?(r) { lower.to-frame-float(marker(r), at) } else { lower.to-frame(marker(r), at) }
+}
+
+fn fetch(r: Int, at: Int) {
+  if floating?(r) { lower.from-frame-float(marker(r), at) } else { lower.from-frame(marker(r), at) }
+}
+
+fn copy(to: Int, from: Int) {
+  if floating?(to) { lower.move-float(marker(to), marker(from)) } else { lower.move(marker(to), marker(from)) }
+}
+
 fn emit-move(to: Int, from: Int) {
-  if from < 0 { lower.from-frame(marker(to), out-slots + (0 - from) - 1) }
-  else { lower.move(marker(to), marker(from)) }
+  if from < 0 { fetch(to, out-slots + (0 - from) - 1) } else { copy(to, from) }
 }
 
 # Every pending move, each source read before anything overwrites it. A ring
@@ -91,8 +105,9 @@ fn flush-moves() {
     if not progress {
       var d = -1
       for j in 0..move-to.len { if d < 0 and move-to[j] >= 0 { d = move-to[j] } }
-      lower.move(marker(isa.SCRATCH0), marker(d))
-      for j in 0..move-to.len { if move-to[j] >= 0 and move-from[j] == d { move-from[j] = isa.SCRATCH0 } }
+      let aside = if floating?(d) then isa.FSCRATCH else isa.SCRATCH0
+      copy(aside, d)
+      for j in 0..move-to.len { if move-to[j] >= 0 and move-from[j] == d { move-from[j] = aside } }
     }
   }
   move-to.clear()
@@ -131,7 +146,8 @@ fn rewrite(i: Inst, next: Int) {
   var x2 = resolve(i, 2)
   let x3 = resolve(i, 3)
   let x4 = resolve(i, 4)
-  let same-register = alloc.move-source(i) != 0 and x1 == x3
+  let from = alloc.move-operand(i)
+  let same-register = (from == 3 and x1 == x3) or (from == 2 and x1 == x2)
   let falls-through = op == isa.B and x0 == next
   if not same-register and not falls-through {
     if op == isa.RET and frame > 0 { leave() }
@@ -181,7 +197,7 @@ fn enter() {
   var rest = clear-bit(clear-bit(saved, abi.FRAME), abi.LINK)
   while rest != word(0) {
     let r = lowest-bit(rest)
-    lower.to-frame(marker(r), at)
+    keep(r, at)
     at = at + 1
     rest = clear-bit(rest, r)
   }
@@ -197,7 +213,7 @@ fn leave() {
   var rest = clear-bit(clear-bit(saved, abi.FRAME), abi.LINK)
   while rest != word(0) {
     let r = lowest-bit(rest)
-    lower.from-frame(marker(r), at)
+    fetch(r, at)
     at = at + 1
     rest = clear-bit(rest, r)
   }

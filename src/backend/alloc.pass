@@ -22,6 +22,7 @@ column first-piece: Vreg -> Piece
 column at-piece: Vreg -> Piece         # where emission has got to in its pieces
 column slot: Vreg -> Int               # its frame slot + 1, once any piece waits there
 column hint: Vreg -> Int               # an operand it is copied to or from, or 0
+column class: Vreg -> Int              # which kind of register it lives in
 column last-reg: Vreg -> Int           # the register + 1 its latest placed piece got
 column reads: Vreg -> [Int]            # the instructions that read it
 column writes: Vreg -> [Int]           # the instructions that write it
@@ -83,9 +84,17 @@ fn writes?(kind: Int) -> Bool = kind == isa.K-DEF or kind == isa.K-MOD
 
 fn allocatable?(r: Int) -> Bool = isa.in-set?(isa.ALLOCATABLE, r)
 
-# `orr d, zr, s` is how a register is copied: its source, or 0.
-fn move-source(i: Inst) -> Int =
-  if i.inst-op == isa.ORR and i.a0 == 1 and i.a2 == 0 - isa.ZR - 1 then i.a3 else 0
+# Which operand a copy reads, or -1: `orr d, zr, s` copies an integer
+# register and `fmov d, s` a floating one. Either writes operand 1.
+fn move-operand(i: Inst) -> Int =
+  if i.inst-op == isa.ORR and i.a0 == 1 and i.a2 == 0 - isa.ZR - 1 then 3
+  else if i.inst-op == isa.FMOV and i.a0 == 1 then 2
+  else -1
+
+fn move-source(i: Inst) -> Int = if move-operand(i) < 0 then 0 else mach.arg(i, move-operand(i))
+
+# A register `v` may live in: one the allocator may use, of `v`'s class.
+fn fits?(v: Vreg, r: Int) -> Bool = allocatable?(r) and isa.reg-class(r) == v.class
 
 # ---------------------------------------------------------------- liveness
 
@@ -97,10 +106,11 @@ fn fixed-range(p: Phys, a: Int, b: Int) {
   p.last-fixed = r
 }
 
-fn touch(i: Inst, kind: Int, a: Int) {
+fn touch(i: Inst, kind: Int, a: Int, class: Int) {
   let at = int(i)
   if a > 0 {
     let v = id(a)
+    v.class = class
     if kind != isa.K-DEF { v.reads.push(at) }
     if writes?(kind) { v.writes.push(at) }
   } else if allocatable?(0 - a - 1) {
@@ -119,14 +129,14 @@ fn also(i: Inst, set: Word, kind: Int) {
   var rest = set
   while rest != word(0) {
     let r = lowest-bit(rest)
-    touch(i, kind, 0 - r - 1)
+    touch(i, kind, 0 - r - 1, 0)
     rest = clear-bit(rest, r)
   }
 }
 
 fn occurrences() {
   for n in 0..next-vreg { Vreg.new() }
-  for r in 0..32 { Phys.new() }
+  for r in 0..isa.REGISTERS { Phys.new() }
   for b in order {
     for at in b.first-inst..b.last-inst + 1 {
       let i = id(at)
@@ -134,7 +144,7 @@ fn occurrences() {
       i.home = b
       for k in 0..isa.operand-count(op) {
         let kind = isa.operand-kind(op, k)
-        if reg-kind?(kind) { touch(i, kind, mach.arg(i, k)) }
+        if reg-kind?(kind) { touch(i, kind, mach.arg(i, k), isa.operand-class(op, k)) }
       }
       also(i, i.also-reads, isa.K-USE)
       also(i, i.also-writes, isa.K-DEF)
@@ -366,8 +376,9 @@ fn place-in(p: Piece, r: Int) {
 # The register `p` would like: the one its value is copied to or from.
 fn wanted(p: Piece) -> Int {
   let h = p.owner.hint
-  if h > 0 { return id(h).last-reg - 1 }
-  if h < 0 and allocatable?(0 - h - 1) { return 0 - h - 1 }
+  let v = p.owner
+  if h > 0 and id(h).last-reg != 0 and fits?(v, id(h).last-reg - 1) { return id(h).last-reg - 1 }
+  if h < 0 and fits?(v, 0 - h - 1) { return 0 - h - 1 }
   -1
 }
 
@@ -403,7 +414,7 @@ fn advance(pos: Int) {
 # A register nothing else holds for some way ahead.
 fn try-free(p: Piece) -> Bool {
   let pos = p.pstart
-  for r in Phys { r.free-until = if allocatable?(int(r) - 1) then far() else 0 }
+  for r in Phys { r.free-until = if fits?(p.owner, int(r) - 1) then far() else 0 }
   for a in active { id(a.reg).free-until = 0 }
   for a in inactive {
     let x = meeting(a.ranges, p.ranges)
@@ -439,7 +450,7 @@ fn try-free(p: Piece) -> Bool {
 fn take-blocked(p: Piece) {
   let pos = p.pstart
   for r in Phys {
-    r.needed-at = if allocatable?(int(r) - 1) then far() else 0
+    r.needed-at = if fits?(p.owner, int(r) - 1) then far() else 0
     r.blocked-at = far()
   }
   for a in active {

@@ -1,6 +1,7 @@
 ;;; Arithmetic on values held as 64-bit words of a narrower declared width.
 (module rt.bits)
 (import "coil.primitive" :as primitive)
+(import "coil.math" :as math)
 
 (defn mask [(bits i64)] (-> u64) :inline (Always)
   (if (>= bits 64)
@@ -83,3 +84,94 @@
 
 (defn sar-signed [(v i64) (n i64)] (-> i64)
   (>> v (if (or (< n 0) (>= n 64)) 63 n)))
+
+;; ---------------------------------------------------------------- floating point
+;; A floating value is held as its bits, 32 or 64 of them.
+
+(defn f64-of [(v u64)] (-> f64)
+  (let [(mut x) v]
+    (primitive/load (primitive/cast (ptr f64) (mut x)))))
+
+(defn of-f64 [(v f64)] (-> u64)
+  (let [(mut x) v]
+    (primitive/load (primitive/cast (ptr u64) (mut x)))))
+
+(defn f32-of [(v u64)] (-> f32)
+  (let [(mut x) (primitive/cast u32 (& v (: 0xFFFFFFFF u64)))]
+    (primitive/load (primitive/cast (ptr f32) (mut x)))))
+
+(defn of-f32 [(v f32)] (-> u64)
+  (let [(mut x) v]
+    (cast u64 (primitive/load (primitive/cast (ptr u32) (mut x))))))
+
+(defn fadd [(a u64) (b u64) (bits i64)] (-> u64)
+  (if (= bits 32) (of-f32 (+ (f32-of a) (f32-of b))) (of-f64 (+ (f64-of a) (f64-of b)))))
+
+(defn fsub [(a u64) (b u64) (bits i64)] (-> u64)
+  (if (= bits 32) (of-f32 (- (f32-of a) (f32-of b))) (of-f64 (- (f64-of a) (f64-of b)))))
+
+(defn fmul [(a u64) (b u64) (bits i64)] (-> u64)
+  (if (= bits 32) (of-f32 (* (f32-of a) (f32-of b))) (of-f64 (* (f64-of a) (f64-of b)))))
+
+(defn fdiv [(a u64) (b u64) (bits i64)] (-> u64)
+  (if (= bits 32) (of-f32 (/ (f32-of a) (f32-of b))) (of-f64 (/ (f64-of a) (f64-of b)))))
+
+;;; Negation and absolute value are the sign bit alone, whatever the value.
+(defn fneg [(a u64) (bits i64)] (-> u64)
+  (^ a (<< (: 1 u64) (cast u64 (- bits 1)))))
+
+(defn fabs [(a u64) (bits i64)] (-> u64)
+  (& a (primitive/isub (<< (: 1 u64) (cast u64 (- bits 1))) (: 1 u64))))
+
+(defn fsqrt [(a u64) (bits i64)] (-> u64)
+  (if (= bits 32)
+      (of-f32 (cast f32 (math/sqrt (cast f64 (f32-of a)))))
+      (of-f64 (math/sqrt (f64-of a)))))
+
+;;; Comparisons are false when either side is not a number, but for `fne`.
+(defn feq [(a u64) (b u64) (bits i64)] (-> bool)
+  (if (= bits 32) (= (f32-of a) (f32-of b)) (= (f64-of a) (f64-of b))))
+
+(defn flt [(a u64) (b u64) (bits i64)] (-> bool)
+  (if (= bits 32) (< (f32-of a) (f32-of b)) (< (f64-of a) (f64-of b))))
+
+(defn fle [(a u64) (b u64) (bits i64)] (-> bool)
+  (if (= bits 32) (<= (f32-of a) (f32-of b)) (<= (f64-of a) (f64-of b))))
+
+(defn fvalue [(a u64) (bits i64)] (-> f64)
+  (if (= bits 32) (cast f64 (f32-of a)) (f64-of a)))
+
+(defn of-fvalue [(v f64) (bits i64)] (-> u64)
+  (if (= bits 32) (of-f32 (cast f32 v)) (of-f64 v)))
+
+;;; An integer as the nearest floating value.
+(defn sitof [(a u64) (bits i64)] (-> u64)
+  (if (= bits 32) (of-f32 (cast f32 (primitive/cast i64 a))) (of-f64 (cast f64 (primitive/cast i64 a)))))
+
+(defn uitof [(a u64) (bits i64)] (-> u64)
+  (if (= bits 32) (of-f32 (cast f32 a)) (of-f64 (cast f64 a))))
+
+;;; A floating value as an integer of `to` bits, toward zero: what is not a
+;;; number gives 0 and what is out of range gives the nearest end of the range.
+(defn ftosi [(a u64) (bits i64) (to i64)] (-> u64)
+  (let [x (fvalue a bits)
+        low (cast f64 (primitive/cast i64 (sext (<< (: 1 u64) (cast u64 (- to 1))) to)))
+        high (- 0.0 low)]
+    (cond (!= x x) (: 0 u64)
+          (<= x low) (<< (: 1 u64) (cast u64 (- to 1)))
+          (>= x high) (primitive/isub (<< (: 1 u64) (cast u64 (- to 1))) (: 1 u64))
+          :else (cut (primitive/cast u64 (cast i64 x)) to))))
+
+(defn ftoui [(a u64) (bits i64) (to i64)] (-> u64)
+  (let [x (fvalue a bits)
+        high (* 2.0 (cast f64 (<< (: 1 u64) (cast u64 (- to 1)))))]
+    (cond (!= x x) (: 0 u64)
+          (<= x 0.0) (: 0 u64)
+          (>= x high) (mask to)
+          :else (cast u64 x))))
+
+(defn fext [(a u64)] (-> u64)
+  (of-f64 (cast f64 (f32-of a))))
+
+(defn ftrunc [(a u64)] (-> u64)
+  (of-f32 (cast f32 (f64-of a))))

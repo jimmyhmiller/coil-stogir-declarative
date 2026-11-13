@@ -168,6 +168,12 @@
               (t/expect! (mut (.c l)) ")")
               (t/cat4 "(extended (mut cx) " (.code (get (.bindings l) index)) " "
                       (cond (= name "sx") "1)" (= name "zx") "0)" :else "2)"))))
+      (and call (= name "float"))
+        (do (t/advance! (mut (.c l)))
+            (let [x (value-expr (mut l) 0 false)]
+              (t/expect! (mut (.c l)) ")")
+              (t/cat3 "(ir/type-float? (graph/ty (.g cx) (primitive/cast i32 " x ")))")))
+      (= name "float") "(ir/type-float? (graph/ty (.g cx) n))"
       (= name "out") "out"
       (= name "width") "(ir/type-bits (graph/ty (.g cx) n))"
       (= name "sf") "(if (= (ir/type-bits (graph/ty (.g cx) n)) 64) 1 0)"

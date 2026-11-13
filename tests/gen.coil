@@ -24,6 +24,9 @@
                     (primitive/iadd (primitive/iadd (primitive/imul g (: 7 u64)) (primitive/imul h (: 8 u64)))
                                     (primitive/iadd (primitive/imul i (: 9 u64)) (primitive/imul j (: 10 u64)))))))
 
+(defn float-helper [(a f64) (x u64) (b f64)] (-> f64)
+  (+ (* a 0.5) (- b (cast f64 (& x (: 1023 u64))))))
+
 (defn low [(a u64)] (-> u64) (& a (: 0xFFFFFFFF u64)))
 
 (defn helper1-32 [(a u64)] (-> u64) (helper1 (low a)))
@@ -131,6 +134,81 @@
                         (ir/and! (mut (.g r)) ir/T-BOOL flag (compare! (mut r) (below! (mut r) 6) b a))
                         (pick! (mut r)) (pick! (mut r)))))))
 
+;;; A floating constant: ordinary values, the ends, and what is not a number.
+(defn float-constant! [(r (mut Gen)) (ft i32)] (-> i32)
+  (let [k (below! (mut r) 8)
+        wide (cond (= k 0) (: 0 u64)
+                   (= k 1) (: 0x3FF0000000000000 u64)
+                   (= k 2) (: 0xBFF8000000000000 u64)
+                   (= k 3) (: 0x4024000000000000 u64)
+                   (= k 4) (: 0x43E0000000000000 u64)
+                   (= k 5) (: 0x7FF0000000000000 u64)
+                   (= k 6) (: 0x7FF8000000000000 u64)
+                   :else (: 0x3F50624DD2F1A9FC u64))]
+    (if (= ft ir/T-F64)
+        (ir/const! (mut (.g r)) ft wide)
+        (ir/ftrunc! (mut (.g r)) ft (ir/const! (mut (.g r)) ir/T-F64 wide)))))
+
+(defn float-operand! [(r (mut Gen)) (ft i32)] (-> i32)
+  (let [k (below! (mut r) 4)]
+    (cond (= k 0) (float-constant! (mut r) ft)
+          (= k 1) (ir/uitof! (mut (.g r)) ft (pick! (mut r)))
+          :else (ir/sitof! (mut (.g r)) ft (pick! (mut r))))))
+
+;;; A floating value back as one of the program's integers.
+(defn float-result! [(r (mut Gen)) (v i32)] (-> i32)
+  (if (= (below! (mut r) 3) 0)
+      (ir/trunc! (mut (.g r)) (.type r)
+                 (ir/ftoui! (mut (.g r)) (cast i32 (if (>= (ir/type-bits (.type r)) 64) ir/T-U64 ir/T-U32)) v))
+      (ir/ftosi! (mut (.g r)) (.type r) v)))
+
+;;; Some floating point: integers in, arithmetic, a comparison or a choice or a
+;;; call, and an integer out. Nothing looks at the bits of a value that may not
+;;; be a number, since which such value arithmetic gives is the machine's choice.
+(defn float! [(r (mut Gen))] (-> i32)
+  (let [ft (cast i32 (if (= (below! (mut r) 2) 0) ir/T-F32 ir/T-F64))
+        (mut a) (float-operand! (mut r) ft)
+        b (float-operand! (mut r) ft)
+        steps (+ 1 (below! (mut r) 3))]
+    (for _ (range 0 steps)
+      (let [op (below! (mut r) 7)]
+        (set! a (cond (= op 0) (ir/fadd! (mut (.g r)) ft a b)
+                      (= op 1) (ir/fsub! (mut (.g r)) ft a b)
+                      (= op 2) (ir/fmul! (mut (.g r)) ft a b)
+                      (= op 3) (ir/fdiv! (mut (.g r)) ft a b)
+                      (= op 4) (ir/fneg! (mut (.g r)) ft a)
+                      (= op 5) (ir/fabs! (mut (.g r)) ft a)
+                      :else (ir/fsqrt! (mut (.g r)) ft a)))))
+    (let [cmp (below! (mut r) 4)
+          flag (cond (= cmp 0) (ir/feq! (mut (.g r)) a b)
+                     (= cmp 1) (ir/fne! (mut (.g r)) a b)
+                     (= cmp 2) (ir/flt! (mut (.g r)) a b)
+                     :else (ir/fle! (mut (.g r)) b a))
+          kind (below! (mut r) 5)]
+      (cond
+        (= kind 0) (float-result! (mut r) a)
+        (= kind 1) (ir/cond! (mut (.g r)) (.type r) flag (pick! (mut r)) (pick! (mut r)))
+        (= kind 2) (float-result! (mut r) (ir/cond! (mut (.g r)) ft flag a b))
+        (= kind 3)
+          ; Across widths and through a call that takes and gives floating point.
+          (let [wide-a (if (= ft ir/T-F32) (ir/fext! (mut (.g r)) ir/T-F64 a) a)
+                wide-b (if (= ft ir/T-F32) (ir/fext! (mut (.g r)) ir/T-F64 b) b)
+                target (ir/const! (mut (.g r)) ir/T-PTR
+                                  (primitive/cast u64 (primitive/cast (ptr i8) (fnptr-of float-helper))))
+                node (ir/call-node! (mut (.g r)) (.control r) target 3)]
+            (graph/set-input! (mut (.g r)) node 2 wide-a)
+            (graph/set-input! (mut (.g r)) node 3 (ir/zext! (mut (.g r)) ir/T-U64 (ir/trunc! (mut (.g r)) ir/T-U8 (pick! (mut r)))))
+            (graph/set-input! (mut (.g r)) node 4 wide-b)
+            (set! (.control r) node)
+            (float-result! (mut r) (ir/result! (mut (.g r)) ir/T-F64 node)))
+        :else
+          ; The bits of an integer as a floating value, which may be anything at all.
+          (let [bits (if (= ft ir/T-F64)
+                         (ir/zext! (mut (.g r)) ir/T-U64 (ir/trunc! (mut (.g r)) ir/T-U32 (pick! (mut r))))
+                         (ir/trunc! (mut (.g r)) ir/T-U32 (pick! (mut r))))
+                odd (ir/bitcast! (mut (.g r)) ft bits)]
+            (float-result! (mut r) (ir/fmul! (mut (.g r)) ft odd a)))))))
+
 ;;; An address inside the scratch memory, right for a value of `bits` bits.
 (defn address! [(r (mut Gen)) (bits i64)] (-> i32)
   (let [size (/ (+ bits 7) 8)
@@ -191,7 +269,7 @@
 (defn statements! [(r (mut Gen)) (depth i64)] (-> void)
   (let [count (+ 1 (below! (mut r) 6))]
     (for _ (range 0 count)
-      (let [choice (below! (mut r) (if (.rich r) 14 10))]
+      (let [choice (below! (mut r) (if (.rich r) 16 10))]
         (set! (.budget r) (- (.budget r) 1))
         (cond
           (or (< choice (if (.rich r) 5 6)) (>= depth 3) (< (.budget r) 0))
@@ -201,7 +279,8 @@
           (< choice 10) (counted-loop! (mut r) depth)
           (< choice 12) (push! (mut (.env r)) (narrow! (mut r)))
           (= choice 12) (write! (mut r))
-          :else (push! (mut (.env r)) (read! (mut r))))
+          (= choice 13) (push! (mut (.env r)) (read! (mut r)))
+          :else (push! (mut (.env r)) (float! (mut r))))
         ; With a window, old values fall out of scope, as locals do in real code.
         (when (and (> (.window r) 0) (= depth 0))
           (while (> (len (.env r)) (.window r))

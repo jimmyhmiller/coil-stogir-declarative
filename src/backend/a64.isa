@@ -6,21 +6,27 @@ reg x0..x30 : gpr
 reg sp : gpr = 31
 reg zr : gpr = 31
 
-set allocatable  = x0..x14 x19..x28
-set caller-saved = x0..x17
-set callee-saved = x19..x28
+class simd 5
+reg v0..v31 : simd
+
+set allocatable  = x0..x14 x19..x28 v0..v30
+set caller-saved = x0..x17 v0..v7 v16..v31
+set callee-saved = x19..x28 v8..v15
 set arguments    = x0..x7
 
 # Registers the emitter may use for a value that lives in the frame.
 const scratch0 = 16
 const scratch1 = 17
 const scratch2 = 15
+const fscratch = 63
 
 # Condition codes.
 const eq = 0
 const ne = 1
 const hs = 2
 const lo = 3
+const mi = 4
+const pl = 5
 const hi = 8
 const ls = 9
 const ge = 10
@@ -77,6 +83,32 @@ inst add-symbol(rd: def gpr, rn: use gpr, to: symbol)     = 1 0 0 100010 0 to:12
 inst adrp-got(rd: def gpr, to: symbol)                    = 1 to[1:0] 10000 to[20:2] rd   reloc got-page21 = (page(G) - page(P)) >> 12
 inst ldr-got(rt: def gpr, rn: use gpr, to: symbol)        = 1111100101 to:12 rn rt        reloc got-pageoff12 = (G & 4095) >> 3
 inst blr(rn: use gpr)                                     = 1101011000111111000000 rn 00000
+
+# Floating point. `ty` picks double (1) or single (0).
+inst fadd(ty: u1, rd: def simd, rn: use simd, rm: use simd)  = 00011110 0 ty 1 rm 001010 rn rd
+inst fsub(ty: u1, rd: def simd, rn: use simd, rm: use simd)  = 00011110 0 ty 1 rm 001110 rn rd
+inst fmul(ty: u1, rd: def simd, rn: use simd, rm: use simd)  = 00011110 0 ty 1 rm 000010 rn rd
+inst fdiv(ty: u1, rd: def simd, rn: use simd, rm: use simd)  = 00011110 0 ty 1 rm 000110 rn rd
+inst fmov(ty: u1, rd: def simd, rn: use simd)                = 00011110 0 ty 1 0000 00 10000 rn rd
+inst fabs(ty: u1, rd: def simd, rn: use simd)                = 00011110 0 ty 1 0000 01 10000 rn rd
+inst fneg(ty: u1, rd: def simd, rn: use simd)                = 00011110 0 ty 1 0000 10 10000 rn rd
+inst fsqrt(ty: u1, rd: def simd, rn: use simd)               = 00011110 0 ty 1 0000 11 10000 rn rd
+inst fcmp(ty: u1, rn: use simd, rm: use simd)                = 00011110 0 ty 1 rm 001000 rn 00000
+inst fcsel(ty: u1, rd: def simd, rn: use simd, rm: use simd, cond: u4) = 00011110 0 ty 1 rm cond 11 rn rd
+inst fcvt-to-double(rd: def simd, rn: use simd)              = 00011110 00 1 0001 01 10000 rn rd
+inst fcvt-to-single(rd: def simd, rn: use simd)              = 00011110 01 1 0001 00 10000 rn rd
+# Between integers and floating point: `sf` is the integer's width.
+inst scvtf(sf: u1, ty: u1, rd: def simd, rn: use gpr)        = sf 0011110 0 ty 1 00 010 000000 rn rd
+inst ucvtf(sf: u1, ty: u1, rd: def simd, rn: use gpr)        = sf 0011110 0 ty 1 00 011 000000 rn rd
+inst fcvtzs(sf: u1, ty: u1, rd: def gpr, rn: use simd)       = sf 0011110 0 ty 1 11 000 000000 rn rd
+inst fcvtzu(sf: u1, ty: u1, rd: def gpr, rn: use simd)       = sf 0011110 0 ty 1 11 001 000000 rn rd
+# The same bits, moved between the two kinds of register.
+inst fmov-from-gpr(sf: u1, rd: def simd, rn: use gpr)        = sf 0011110 0 sf 1 00 111 000000 rn rd
+inst fmov-to-gpr(sf: u1, rd: def gpr, rn: use simd)          = sf 0011110 0 sf 1 00 110 000000 rn rd
+inst ldr-d(rt: def simd, rn: use gpr, imm: u12)              = 1111110101 imm rn rt
+inst str-d(rt: use simd, rn: use gpr, imm: u12)              = 1111110100 imm rn rt
+inst ldr-s(rt: def simd, rn: use gpr, imm: u12)              = 1011110101 imm rn rt
+inst str-s(rt: use simd, rn: use gpr, imm: u12)              = 1011110100 imm rn rt
 
 # Memory at a base plus an offset counted in units of the access's width.
 inst ldrb(rt: def gpr, rn: use gpr, imm: u12)             = 0011100101 imm rn rt

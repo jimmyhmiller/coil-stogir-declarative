@@ -18,32 +18,42 @@ fn choose(n: Node) {
   if n is PHI or n is CALL { for i in 1..n.arity { mach.need(n.in(i)) } }
 }
 
-# An argument's value into register `d`. The convention wants a value narrower
-# than 32 bits carried up to 32 by its own kind of extension.
+# An argument's value into register `d`. The convention wants an integer
+# narrower than 32 bits carried up to 32 by its own kind of extension.
 fn widened(d: Int, n: Node) {
-  if n.bits >= 32 { copy(d, n) } else { lower.move(d, lower.extended(n, 2)) }
+  if n.float or n.bits >= 32 { copy(d, n) } else { lower.move(d, lower.extended(n, 2)) }
 }
 
 # A value arriving in machine register `r`, a parameter or a call's result.
 # A boolean is kept as exactly 0 or 1, whatever the other side left above it.
 fn arrive(n: Node, r: Int) {
-  if n.bits == 1 { lower.zero-extend(int(n), r, 1) } else { lower.move(int(n), r) }
+  if n.float { lower.move-float(int(n), r) }
+  else if n.bits == 1 { lower.zero-extend(int(n), r, 1) }
+  else { lower.move(int(n), r) }
 }
 
 # A call: arguments to where the convention wants them, the call, the result
-# out of its register. The call reads the argument registers and may write
-# every register the convention does not preserve.
+# out of its register. Integers and floating values each take their own
+# registers in order, and whatever does not fit goes to the stack in order.
+# The call reads the argument registers and may write every register the
+# convention does not preserve.
 fn call(n: Node) {
   var passed = word(0)
+  var ints = 0
+  var floats = 0
+  var stacked = 0
   for i in 2..n.arity {
-    let k = i - 2
-    let r = abi.int-arg(k)
+    let a = n.in(i)
+    let r = if a.float then abi.float-arg(floats) else abi.int-arg(ints)
+    if a.float { floats = floats + 1 } else { ints = ints + 1 }
     if r >= 0 {
-      widened(0 - r - 1, n.in(i))
+      widened(0 - r - 1, a)
       passed = set-bit(passed, r)
     } else {
-      lower.to-frame(lower.extended(n.in(i), 2), k - abi.INT-ARGS)
-      out-slots = max(out-slots, k - abi.INT-ARGS + 1)
+      if a.float { lower.to-frame-float(lower.operand(a), stacked) }
+      else { lower.to-frame(lower.extended(a, 2), stacked) }
+      stacked = stacked + 1
+      out-slots = max(out-slots, stacked)
     }
   }
   # Something in the same image is called where it is; anything else through a register.
@@ -52,16 +62,30 @@ fn call(n: Node) {
   mach.implicit(passed, set-bit(isa.CALLER-SAVED, abi.LINK))
   calls = true
   let result = first u in users(n): u is RESULT and u.needed
-  if result != none { arrive(result, 0 - abi.RESULT - 1) }
+  if result != none { arrive(result, 0 - (if result.float then abi.FLOAT-RESULT else abi.RESULT) - 1) }
 }
 
-# A parameter: out of its register, or out of the caller's frame.
+# A parameter: out of its register, or out of the caller's frame. Where it
+# arrives depends on the parameters before it.
 fn param(n: Node) {
   let k = int(n.payload)
-  if abi.int-arg(k) >= 0 {
-    arrive(n, 0 - abi.int-arg(k) - 1)
+  var ints = 0
+  var floats = 0
+  var stacked = 0
+  for j in 0..k {
+    if float-type?(param-type(j)) {
+      if abi.float-arg(floats) < 0 { stacked = stacked + 1 }
+      floats = floats + 1
+    } else {
+      if abi.int-arg(ints) < 0 { stacked = stacked + 1 }
+      ints = ints + 1
+    }
+  }
+  let r = if n.float then abi.float-arg(floats) else abi.int-arg(ints)
+  if r >= 0 {
+    arrive(n, 0 - r - 1)
   } else {
-    lower.from-frame(int(n), k - abi.INT-ARGS)
+    if n.float { lower.from-frame-float(int(n), stacked) } else { lower.from-frame(int(n), stacked) }
     mach.from-caller()
   }
 }
@@ -71,7 +95,12 @@ fn phi-of?(u: Node, h: Node) -> Bool = u is PHI and u.in(0) == h
 # `n`'s value into register `d`: computed straight into it if `n` is computed
 # per block, copied otherwise.
 fn copy(d: Int, n: Node) {
-  if lower.local?(n) { lower.emit(n, n.tile, d) } else { lower.move(d, lower.operand(n)) }
+  if lower.local?(n) { lower.emit(n, n.tile, d) } else { transfer(d, lower.operand(n), n) }
+}
+
+# Register `s` into register `d`; both hold a value of `like`'s kind.
+fn transfer(d: Int, s: Int, like: Node) {
+  if like.float { lower.move-float(d, s) } else { lower.move(d, s) }
 }
 
 # The moves that give a region's phis their values on the edge from `b`. Where
@@ -98,7 +127,7 @@ fn phi-moves(b: Block, s: Block) {
     var j = 0
     for u in users(h) {
       if phi-of?(u, h) {
-        lower.move(int(u), temps[j])
+        transfer(int(u), temps[j], u)
         j = j + 1
       }
     }

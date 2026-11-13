@@ -24,7 +24,8 @@
 (const K-LABEL 5)
 (const K-SYMBOL 6)
 
-(defstruct Class [(name (slice u8)) (width i64)])
+;;; base: the number of the class's first register among all registers.
+(defstruct Class [(name (slice u8)) (width i64) (base i64)])
 
 (defstruct Reg [(name (slice u8)) (number i64) (class (slice u8))])
 
@@ -57,6 +58,12 @@
   (let [(mut width) 0]
     (for c (.classes spec) (when (= (.name c) name) (set! width (.width c))))
     width))
+
+(defn class-index [(spec Spec) (name (slice u8))] (-> i64)
+  (let [(mut found) 0]
+    (for i (range 0 (len (.classes spec)))
+      (when (= (.name (get (.classes spec) i)) name) (set! found i)))
+    found))
 
 (defn reg-number [(spec Spec) (name (slice u8))] (-> i64)
   (let [(mut number) -1]
@@ -245,9 +252,11 @@
         (cond
           (t/tok-is? tok "word") (set! (.word spec) (cast i64 (t/num! (mut c) "the word's bits")))
           (t/tok-is? tok "class")
-            (let [name (t/name! (mut c) "a class name")]
+            (let [name (t/name! (mut c) "a class name")
+                  width (cast i64 (t/num! (mut c) "the field width"))]
+              ; Each class has room for 32 registers, one class after another.
               (push! (mut (.classes spec))
-                     (Class :name name :width (cast i64 (t/num! (mut c) "the field width")))))
+                     (Class :name name :width width :base (* 32 (len (.classes spec))))))
           (t/tok-is? tok "reg")
             (let [names (parse-reg-list (mut c))]
               (t/expect! (mut c) ":")
@@ -265,7 +274,9 @@
                     (when (and (< number 0) (= split (len name)))
                       (t/die (mut c) tok (t/cat2 "this register needs a number: " name)))
                     (push! (mut (.regs spec))
-                           (Reg :name name :number (if (< number 0) own number) :class class))))))
+                           (Reg :name name
+                                :number (+ (* 32 (class-index spec class)) (if (< number 0) own number))
+                                :class class))))))
           (t/tok-is? tok "set")
             (let [name (t/name! (mut c) "a set name")]
               (t/expect! (mut c) "=")
@@ -339,6 +350,19 @@
                                              (.kind (get (.operands inst) i))
                                              K-NONE))))))
     (t/line! (mut o) "])")
+    ; The register class of each operand that is a register, five per instruction.
+    (t/emit! (mut o) "(def CLASSES [0 0 0 0 0")
+    (for inst (.insts spec)
+      (for i (range 0 5)
+        (t/emit! (mut o)
+                 (t/cat2 " " (t/int-text (if (and (< i (len (.operands inst)))
+                                                  (!= (.class (get (.operands inst) i)) ""))
+                                             (class-index spec (.class (get (.operands inst) i)))
+                                             0))))))
+    (t/line! (mut o) "])")
+    (t/line! (mut o) (t/cat3 "(const REGISTERS " (t/int-text (* 32 (len (.classes spec)))) ")"))
+    (t/line! (mut o) "(defn operand-class [(op i64) (i i64)] (-> i64) (get CLASSES (+ (* op 5) i)))")
+    (t/line! (mut o) "(defn reg-class [(r i64)] (-> i64) (/ r 32))")
     (t/emit! (mut o) "(def REG-NAMES [")
     (for n (range 0 64)
       (let [(mut name) "?"]

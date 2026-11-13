@@ -11,9 +11,15 @@ type u16 : 16 unsigned
 type u32 : 32 unsigned
 type u64 : 64 unsigned
 type ptr : 64 unsigned
+type f32 : 32 float
+type f64 : 64 float
 
 set int = i8 i16 i32 i64 u8 u16 u32 u64 ptr
 set word = bool i8 i16 i32 i64 u8 u16 u32 u64 ptr
+set float = f32 f64
+set value = bool i8 i16 i32 i64 u8 u16 u32 u64 ptr f32 f64
+set signed-wide = i32 i64
+set unsigned-wide = u32 u64
 
 # Control. A control node's first operand is the control it follows.
 node START : ctrl                               role start
@@ -29,7 +35,7 @@ node RESULT(call: ctrl) : T                     role result
 
 # Memory. A load and a store sit in the control chain, in the order they happen;
 # a load is also the value it read. The width is the type's.
-node LOAD(c: ctrl, addr: ptr) : T in word       role load
+node LOAD(c: ctrl, addr: ptr) : T in value      role load
 node STORE(c: ctrl, addr: ptr, value) : ctrl    role store
 
 # Addresses. SLOT is a frame object of `size` bytes, its own for each call of
@@ -68,8 +74,32 @@ node ZEXT(a: S) : T in int, S in word, bits(S) < bits(T)   = a
 node SEXT(a: S) : T in int, S in int, bits(S) < bits(T)    = sext(a)
 node TRUNC(a: S) : T in word, S in int, bits(T) <= bits(S) = a
 
+# Floating point. Comparisons are false when either side is not a number,
+# except FNE, which is then true. To an integer is toward zero, with the
+# nearest end of the range for what does not fit and 0 for what is not a number.
+node FADD(a: T, b: T) : T in float  commutative = fadd(a, b)
+node FSUB(a: T, b: T) : T in float              = fsub(a, b)
+node FMUL(a: T, b: T) : T in float  commutative = fmul(a, b)
+node FDIV(a: T, b: T) : T in float              = fdiv(a, b)
+node FNEG(a: T) : T in float                    = fneg(a)
+node FABS(a: T) : T in float                    = fabs(a)
+node FSQRT(a: T) : T in float                   = fsqrt(a)
+node FEQ(a: S, b: S) : bool, S in float  commutative = feq(a, b)
+node FNE(a: S, b: S) : bool, S in float  commutative = fne(a, b)
+node FLT(a: S, b: S) : bool, S in float         = flt(a, b)
+node FLE(a: S, b: S) : bool, S in float         = fle(a, b)
+node SITOF(a: S) : T in float, S in int         = sitof(a)
+node UITOF(a: S) : T in float, S in int         = uitof(a)
+node FTOSI(a: S) : T in signed-wide, S in float = ftosi(a)
+node FTOUI(a: S) : T in unsigned-wide, S in float = ftoui(a)
+node FEXT(a: S) : T in float, S in float, bits(S) < bits(T)   = fext(a)
+node FTRUNC(a: S) : T in float, S in float, bits(T) < bits(S) = ftrunc(a)
+
+# The same bits as another type of the same width.
+node BITCAST(a: S) : T in value, S in value, bits(S) <= bits(T), bits(T) <= bits(S) = a
+
 # One of two values.
-node COND(c: bool, a: T, b: T) : T in word      = select(c, a, b)
+node COND(c: bool, a: T, b: T) : T in value     = select(c, a, b)
 
 # Comparisons.
 node EQ(a: S, b: S)  : bool, S in int  commutative = a == b

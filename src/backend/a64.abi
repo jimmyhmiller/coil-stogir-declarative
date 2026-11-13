@@ -1,6 +1,8 @@
-# The C calling convention on AArch64, as far as integers go.
+# The C calling convention on AArch64 for integers and floating point.
 target backend.a64
 integers x0..x7
 result x0
+floats v0..v7
+float-result v0
 link x30
 frame x29
