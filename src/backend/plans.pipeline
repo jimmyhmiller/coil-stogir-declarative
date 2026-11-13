@@ -19,6 +19,7 @@ plan default {
   switches.settle
   atomics.run
   until-stable { simplify.run }
+  copies.run
   blocks.run
   split.run
   cfg.build

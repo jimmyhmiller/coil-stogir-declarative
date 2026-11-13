@@ -29,6 +29,7 @@ setting trial: Bool
 #   12 loads and stores in pairs   13 branches that only choose made choices
 #   14 the frame opened only where it is needed   15 switches by table
 #   16 the last case of a switch that names every value is its default
+#   17 copies of records that need not be made
 setting off: Int
 # The program is to be looked at as it runs: frame objects stay in memory,
 # where what looks can find them.

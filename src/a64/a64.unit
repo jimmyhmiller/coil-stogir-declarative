@@ -14,6 +14,7 @@ pass a64.loops
 pass a64.switches
 pass a64.tails
 pass a64.selects
+pass a64.copies
 pass a64.schedule
 pass a64.mach
 lower a64.lower
