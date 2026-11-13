@@ -71,6 +71,11 @@
         (= role "case") 20
         (= role "default") 21
         (= role "tailcall") 22
+        ; In the control chain, on memory: the node is what was at its address,
+        ; and its meaning, which may read that as `old`, is what it leaves there.
+        (= role "update") 23
+        ; In the control chain, and nothing to the values a program computes.
+        (= role "barrier") 24
         :else -1))
 
 ;;; A type's number; 0 is "no type". Numbers follow declaration order from 1.
@@ -102,6 +107,7 @@
 ;;; sits in the control chain and is also its value, and a return, which ends it.
 (defn control-node? [(spec Spec) (node Node)] (-> bool)
   (or (control-type? spec (.result node)) (= (.role node) "load") (= (.role node) "return")
+      (= (.role node) "update")
       (= (.role node) "trap") (= (.role node) "tailcall")))
 
 (defn fixed-count [(node Node)] (-> i64)
@@ -214,12 +220,16 @@
           (t/accept! (mut c) "(") (meaning-call (mut c) node (.text tok) tok)
           (= (.text tok) "bits") "(cast u64 bits)"
           :else
-            (let [i (operand-index node (.text tok))]
-              (cond (= i 0) "a"
+            ; An update's meaning reads what was in memory and the operands
+            ; after the address.
+            (let [update (= (.role node) "update")
+                  i (- (operand-index node (.text tok)) (if update 1 0))]
+              (cond (and update (= (.text tok) "old")) "a"
+                    (and (not update) (= i 0)) "a"
                     (= i 1) "b"
                     (= i 2) "c"
                     :else (t/die (mut c) tok
-                                 (t/cat2 "a meaning reads the node's first three operands; this is not one: "
+                                 (t/cat2 "a meaning reads the node's first three value operands; this is not one: "
                                          (.text tok))))))
       :else (t/die (mut c) tok (t/cat2 "expected a value, found " (.text tok))))))
 
@@ -601,7 +611,7 @@
   (t/line! (mut o) "  (bv/cut (match operation")
   (for index (range 0 (len (.nodes spec)))
     (let [node (get (.nodes spec) index)]
-      (when (foldable? node)
+      (when (or (foldable? node) (and (= (.role node) "update") (!= (.meaning node) "")))
         (t/line! (mut o) (t/cat4 "    (" (t/int-text (+ index 1)) " " (t/cat2 (.meaning node) ")"))))))
   (t/line! (mut o) "    (_ (: 0 u64))) rbits))"))
 
@@ -646,7 +656,7 @@
   (t/line! (mut o) "    (cond")
   (t/line! (mut o) "      (= r 10) (graph/payload g n)")
   (t/line! (mut o) "      (= r 9) (bv/cut (get args (cast i64 (graph/payload g n))) (type-bits (graph/ty g n)))")
-  (t/line! (mut o) "      (or (= r 8) (= r 13)) (get (.phi it) at)")
+  (t/line! (mut o) "      (or (= r 8) (= r 13) (= r 23)) (get (.phi it) at)")
   (t/line! (mut o) "      ; A frame object is memory of its own, made the first time it is asked for.")
   (t/line! (mut o) "      (= r 15)")
   (t/line! (mut o) "        (do (when (= (get (.phi it) at) 0)")
@@ -763,6 +773,16 @@
   (t/line! (mut o) "        (memory/write (value g (mut it) args (graph/input g n 1))")
   (t/line! (mut o) "                      (type-bits (graph/ty g (graph/input g n 2)))")
   (t/line! (mut o) "                      (value g (mut it) args (graph/input g n 2)))")
+  (t/line! (mut o) "      ; An update: what was there is its value, and its meaning goes back.")
+  (t/line! (mut o) "      (= r 23)")
+  (t/line! (mut o) "        (let [address (value g (mut it) args (graph/input g n 1))")
+  (t/line! (mut o) "              bits (type-bits (graph/ty g n))")
+  (t/line! (mut o) "              old (memory/read address bits)")
+  (t/line! (mut o) "              b (if (> (graph/arity g n) 2) (value g (mut it) args (graph/input g n 2)) (: 0 u64))")
+  (t/line! (mut o) "              c (if (> (graph/arity g n) 3) (value g (mut it) args (graph/input g n 3)) (: 0 u64))]")
+  (t/line! (mut o) "          (memory/write address bits (eval (graph/op g n) bits bits old b c))")
+  (t/line! (mut o) "          (set! (mut (.phi it)) (cast i64 n) old)")
+  (t/line! (mut o) "          (set! (.epoch it) (+ (.epoch it) 1)))")
   (t/line! (mut o) "      :else (do))))")
   (t/line! (mut o) ";;; The control node that follows `c` inside its block: a branch, a switch, a")
   (t/line! (mut o) ";;; return, a trap, a call, a load or a store.")
@@ -773,7 +793,7 @@
   (t/line! (mut o) "      (let [u (graph/user g e)")
   (t/line! (mut o) "            r (get ROLES (cast i64 (graph/op g u)))]")
   (t/line! (mut o) "        (when (and (= (graph/input g u 0) c)")
-  (t/line! (mut o) "                   (or (= r 5) (= r 2) (= r 11) (= r 13) (= r 14) (= r 18) (= r 19) (= r 22)))")
+  (t/line! (mut o) "                   (or (= r 5) (= r 2) (= r 11) (= r 13) (= r 14) (= r 18) (= r 19) (= r 22) (= r 23) (= r 24)))")
   (t/line! (mut o) "          (set! found u)))")
   (t/line! (mut o) "      (set! e (graph/next-use g e)))")
   (t/line! (mut o) "    found))")

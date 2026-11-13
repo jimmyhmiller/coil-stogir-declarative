@@ -27,8 +27,14 @@ fn head?(n: Node) -> Bool =
 # What a block ends with, when it does not just go on to a region.
 fn end?(n: Node) -> Bool = n is IF or n is SWITCH or n is RETURN or n is TRAP or n is TAILCALL
 
+# An update of memory, which is the value that was there.
+fn update?(n: Node) -> Bool =
+  n is SWAP or n is CAS or n is FETCH-ADD or n is FETCH-SUB or n is FETCH-AND or n is FETCH-NAND or n is FETCH-OR or
+  n is FETCH-XOR or n is FETCH-SMAX or n is FETCH-SMIN or n is FETCH-UMAX or n is FETCH-UMIN
+
 # In the control chain inside a block: it happens where it stands.
-fn chain?(n: Node) -> Bool = n is CALL or n is LOAD or n is STORE
+fn chain?(n: Node) -> Bool =
+  n is CALL or n is LOAD or n is STORE or n is ATOMIC-LOAD or n is ATOMIC-STORE or n is FENCE or update?(n)
 
 fn control?(n: Node) -> Bool = head?(n) or end?(n) or chain?(n)
 

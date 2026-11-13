@@ -53,6 +53,29 @@ node TAILCALL(c: ctrl, target: ptr, args...) : T  role tailcall
 node LOAD(c: ctrl, addr: ptr) : T in value      role load
 node STORE(c: ctrl, addr: ptr, value) : ctrl    role store
 
+# Memory that other threads share. ATOMIC-LOAD and ATOMIC-STORE are a load and
+# a store that every thread sees in one order. An update happens whole: nothing
+# else reads or writes its address between its read and its write. The update
+# is the value that was there, and on the right is what it leaves there.
+node ATOMIC-LOAD(c: ctrl, addr: ptr) : T in int                  role load
+node ATOMIC-STORE(c: ctrl, addr: ptr, value) : ctrl              role store
+node SWAP(c: ctrl, addr: ptr, v: T) : T in int                   role update  = v
+node FETCH-ADD(c: ctrl, addr: ptr, v: T) : T in int              role update  = old + v
+node FETCH-SUB(c: ctrl, addr: ptr, v: T) : T in int              role update  = old - v
+node FETCH-AND(c: ctrl, addr: ptr, v: T) : T in int              role update  = old & v
+node FETCH-NAND(c: ctrl, addr: ptr, v: T) : T in int             role update  = ~(old & v)
+node FETCH-OR(c: ctrl, addr: ptr, v: T) : T in int               role update  = old | v
+node FETCH-XOR(c: ctrl, addr: ptr, v: T) : T in int              role update  = old ^ v
+node FETCH-SMAX(c: ctrl, addr: ptr, v: T) : T in int             role update  = smax(old, v)
+node FETCH-SMIN(c: ctrl, addr: ptr, v: T) : T in int             role update  = smin(old, v)
+node FETCH-UMAX(c: ctrl, addr: ptr, v: T) : T in int             role update  = umax(old, v)
+node FETCH-UMIN(c: ctrl, addr: ptr, v: T) : T in int             role update  = umin(old, v)
+# `new` goes there only if `expected` was there.
+node CAS(c: ctrl, addr: ptr, expected: T, new: T) : T in int     role update  = select(old == expected, new, old)
+# Every access to memory before this one is seen by the other threads before
+# any after it.
+node FENCE(c: ctrl) : ctrl                                       role barrier
+
 # Addresses. SLOT is a frame object of `size` bytes, its own for each call of
 # the function. SYMBOL is something in the same image, EXTERN something outside.
 node SLOT : ptr                                 role object  payload size

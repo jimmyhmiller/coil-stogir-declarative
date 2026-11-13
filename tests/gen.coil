@@ -301,11 +301,52 @@
     (set! (.control r) node)
     (ir/result! (mut (.g r)) (.type r) 0 node)))
 
+;;; A value of the program's type as one of type `t`.
+(defn fitted! [(r (mut Gen)) (t i32) (v i32)] (-> i32)
+  (let [bits (ir/type-bits t)]
+    (cond (> bits (ir/type-bits (.type r))) (ir/zext! (mut (.g r)) t v)
+          (= t (.type r)) v
+          :else (ir/trunc! (mut (.g r)) t v))))
+
+;;; Something done to memory the way threads that share it do: an ordered load
+;;; or store, a fence, a swap, a compare-and-swap, or one of the updates.
+(defn shared! [(r (mut Gen))] (-> void)
+  (let [t (memory-type! (mut r))
+        bits (ir/type-bits t)
+        kind (below! (mut r) 16)
+        c (.control r)
+        address (address! (mut r) bits)
+        v (fitted! (mut r) t (pick! (mut r)))
+        node (cond (= kind 0) (ir/atomic-load! (mut (.g r)) t c address)
+                   (= kind 1) (ir/atomic-store! (mut (.g r)) c address v)
+                   (= kind 2) (ir/fence! (mut (.g r)) c)
+                   (= kind 3) (ir/swap! (mut (.g r)) t c address v)
+                   (= kind 4) (ir/fetch-add! (mut (.g r)) t c address v)
+                   (= kind 5) (ir/fetch-sub! (mut (.g r)) t c address v)
+                   (= kind 6) (ir/fetch-and! (mut (.g r)) t c address v)
+                   (= kind 7) (ir/fetch-nand! (mut (.g r)) t c address v)
+                   (= kind 8) (ir/fetch-or! (mut (.g r)) t c address v)
+                   (= kind 9) (ir/fetch-xor! (mut (.g r)) t c address v)
+                   (= kind 10) (ir/fetch-smax! (mut (.g r)) t c address v)
+                   (= kind 11) (ir/fetch-smin! (mut (.g r)) t c address v)
+                   (= kind 12) (ir/fetch-umax! (mut (.g r)) t c address v)
+                   (= kind 13) (ir/fetch-umin! (mut (.g r)) t c address v)
+                   ; Half the time what is expected is what was just read there.
+                   (= kind 14) (ir/cas! (mut (.g r)) t c address (fitted! (mut r) t (pick! (mut r))) v)
+                   :else (let [seen (ir/atomic-load! (mut (.g r)) t c address)]
+                           (ir/cas! (mut (.g r)) t seen address seen v)))]
+    (set! (.control r) node)
+    (unless (or (= kind 1) (= kind 2))
+      (push! (mut (.env r))
+             (if (< bits (ir/type-bits (.type r)))
+                 (widen! (mut r) node)
+                 (ir/trunc! (mut (.g r)) (.type r) node))))))
+
 ;;; A few statements: new values, calls, diamonds and counted loops.
 (defn statements! [(r (mut Gen)) (depth i64)] (-> void)
   (let [count (+ 1 (below! (mut r) 6))]
     (for _ (range 0 count)
-      (let [choice (below! (mut r) (if (.rich r) 21 10))]
+      (let [choice (below! (mut r) (if (.rich r) 23 10))]
         (set! (.budget r) (- (.budget r) 1))
         (cond
           (or (< choice (if (.rich r) 5 6)) (>= depth 3) (< (.budget r) 0))
@@ -318,6 +359,7 @@
           (= choice 13) (push! (mut (.env r)) (read! (mut r)))
           (= choice 16) (if (< depth 2) (switch! (mut r) depth) (trap! (mut r)))
           (= choice 17) (trap! (mut r))
+          (or (= choice 21) (= choice 22)) (shared! (mut r))
           (= choice 18)
             (set! (.control r)
                   (ir/store-node! (mut (.g r)) (.control r) (get (.vars r) (below! (mut r) 3)) (pick! (mut r))))

@@ -674,7 +674,7 @@
                              (arg-name (operand-index inst (.field piece)))
                              (t/cat3 ") " (t/int-text (.low piece)) ") ")
                              (t/cat4 (t/u64-text mask) ") " (t/int-text shift) ")"))))))
-    (t/cat4 (t/cat3 "(do" (range-checks inst) " (primitive/cast u32 (| ") (t/u64-text literal) (t/text-of (mut o)) ")))")))
+    (t/cat4 (t/cat3 "(do" (range-checks inst) " (primitive/cast u32 (| ") (t/u64-text literal) (t/text-of (mut o)) " 0)))")))
 
 (defn module-text [(src (slice u8)) (path (slice u8))] (-> (slice u8))
   (let [spec (parse src path)

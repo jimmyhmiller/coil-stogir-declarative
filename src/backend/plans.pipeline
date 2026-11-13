@@ -3,6 +3,7 @@ pipeline in unit
 
 # From a graph to code, with no optimization beyond what building the graph did.
 plan quick {
+  atomics.run
   cfg.build
   schedule.build
   select.run
@@ -14,6 +15,7 @@ plan quick {
 # changes, solve the facts, simplify with them, and compile.
 # Then what the facts allow, and what that opens up.
 plan default {
+  atomics.run
   cfg.build
   promote.run
   start-over

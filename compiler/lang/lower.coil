@@ -182,6 +182,12 @@
               (if operand
                   (t/cat4 "(isa/" name "-code " (t/cat2 x ")"))
                   (t/cat4 "(>= (isa/" name "-code " (t/cat2 x ") 0)")))))
+      ; `log2(k)`: which power of two k is.
+      (and call (= name "log2"))
+        (do (t/advance! (mut (.c l)))
+            (let [x (value-expr (mut l) 0 false)]
+              (t/expect! (mut (.c l)) ")")
+              (t/cat3 "(bv/lowest (cast u64 " x "))")))
       ; `repeat32(k)`: the low 32 bits of k, twice.
       (and call (= name "repeat32"))
         (do (t/advance! (mut (.c l)))

@@ -160,3 +160,20 @@ inst load8(dst: def gpr, base: use gpr, disp: s32)   = rex(0, dst, base) byte(0x
 inst store(w: u1, src: use gpr, base: use gpr, disp: s32)  = rex(w, src, base) byte(0x89) mem(src, base, disp)
 inst store16(src: use gpr, base: use gpr, disp: s32) = byte(0x66) rex(0, src, base) byte(0x89) mem(src, base, disp)
 inst store8(src: use gpr, base: use gpr, disp: s32)  = rex8(0, src, base) byte(0x88) mem(src, base, disp)
+
+# Memory shared between threads, 8, 16, 32 or 64 bits of it at `base`: the
+# prefix that makes an operation 16 bits, the prefix byte, and an opcode whose
+# low bit is clear for 8.
+form narrow(bits) when bits == 16 = byte(0x66)
+form narrow(bits)                 = nothing
+form rex-bits(bits, reg, base) when bits == 8  = rex8(0, reg, base)
+form rex-bits(bits, reg, base) when bits == 64 = rex(1, reg, base)
+form rex-bits(bits, reg, base)                 = rex(0, reg, base)
+form sized(bits, code) when bits == 8 = byte(code)
+form sized(bits, code)                = byte(code | 1)
+# src and memory change places; src is added to memory and becomes what was
+# there; and src goes to memory if rax was there, rax then being what was.
+inst swap-memory(bits: u7, src: mod gpr, base: use gpr)  = narrow(bits) rex-bits(bits, src, base) sized(bits, 0x86) mem(src, base, 0)
+inst add-memory(bits: u7, src: mod gpr, base: use gpr)   = byte(0xF0) narrow(bits) rex-bits(bits, src, base) byte(0x0F) sized(bits, 0xC0) mem(src, base, 0)
+inst compare-swap(bits: u7, src: use gpr, base: use gpr) = byte(0xF0) narrow(bits) rex-bits(bits, src, base) byte(0x0F) sized(bits, 0xB0) mem(src, base, 0)   reads rax writes rax
+inst barrier()                                           = byte(0x0F) byte(0xAE) byte(0xF0)

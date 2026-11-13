@@ -12,6 +12,7 @@ pass a64.promote
 pass a64.schedule
 pass a64.mach
 lower a64.lower
+pass a64.atomics
 pass a64.select
 pass a64.alloc
 pass a64.emit

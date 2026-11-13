@@ -233,3 +233,18 @@ rule IF(_, FLE(a, b))  => cmpf(sf(a), b, a) ; jcc(above-equal, then) ; jump(else
 rule IF(_, FEQ(a, b))  => cmpf(sf(a), a, b) ; jcc(parity, else) ; jcc(equal, then) ; jump(else)
 rule IF(_, FNE(a, b))  => cmpf(sf(a), a, b) ; jcc(parity, then) ; jcc(not-equal, then) ; jump(else)
 rule IF(_, c)          => test(0, c, c) ; jcc(not-equal, then) ; jump(else)
+
+# Memory shared between threads. Every thread already sees this machine's
+# loads and stores in one order, except that a store must be seen before the
+# loads after it, which a swap is. What the machine cannot do in one
+# instruction is done by a loop around CAS before any of this is asked.
+rule ATOMIC-LOAD(_, p) when width == 64 => load(1, out, p, 0)
+rule ATOMIC-LOAD(_, p) when width == 32 => load(0, out, p, 0)
+rule ATOMIC-LOAD(_, p) when width == 16 => load16(out, p, 0)
+rule ATOMIC-LOAD(_, p)                  => load8(out, p, 0)
+rule ATOMIC-STORE(_, p, v) => move($t, v) ; swap-memory(bits(v), $t, p)
+rule SWAP(_, p, v)         => move(out, v) ; swap-memory(width, out, p)
+rule FETCH-ADD(_, p, v)    => move(out, v) ; add-memory(width, out, p)
+rule FETCH-SUB(_, p, v)    => move(out, v) ; neg(sf, out) ; add-memory(width, out, p)
+rule CAS(_, p, e, v)       => move(rax, e) ; compare-swap(width, v, p) ; move(out, rax)
+rule FENCE                 => barrier()
