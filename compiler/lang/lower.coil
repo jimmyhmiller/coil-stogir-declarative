@@ -79,8 +79,7 @@
             (push! (mut (.bindings l))
                    (Binding
                      :name (.payload p)
-                     :code (t/cat4 "(bv/signed (graph/payload (.g cx) " at ") (ir/type-bits (graph/ty (.g cx) "
-                                   (t/cat2 at ")))"))
+                     :code (t/cat3 "(payload-value (mut cx) " at ")")
                      :is-node false)))
           (for i (range 0 (len (.kids p)))
             (let [slot (if (and swap (= (len (.kids p)) 2)) (- 1 i) i)]
@@ -154,7 +153,20 @@
           (let [x (value-expr (mut l) 0 false)]
             (t/expect! (mut (.c l)) ")")
             (fits-text (= (get name 0) #\s) width x)))
+      ; `sx(x)`, `zx(x)`, `ex(x)`: x in a register with its value carried up to 32
+      ; bits, by sign, by zeros, or by whichever its type is.
+      (and call operand (or (= name "sx") (= name "zx") (= name "ex")))
+        (do (t/advance! (mut (.c l)))
+            (let [at (t/peek (mut (.c l)))
+                  var (t/name! (mut (.c l)) "a node the pattern names")
+                  index (binding-of (mut l) var)]
+              (when (or (< index 0) (not (.is-node (get (.bindings l) index))))
+                (t/die (mut (.c l)) at "sx, zx and ex take a node the pattern names"))
+              (t/expect! (mut (.c l)) ")")
+              (t/cat4 "(extended (mut cx) " (.code (get (.bindings l) index)) " "
+                      (cond (= name "sx") "1)" (= name "zx") "0)" :else "2)"))))
       (= name "out") "out"
+      (= name "width") "(ir/type-bits (graph/ty (.g cx) n))"
       (= name "sf") "(if (= (ir/type-bits (graph/ty (.g cx) n)) 64) 1 0)"
       (= name "then") (t/cat3 "(" "mach/target" " (mut cx) n 1)")
       (= name "else") (t/cat3 "(" "mach/target" " (mut cx) n 0)")
@@ -270,7 +282,10 @@
           (mut selects) (t/out-new)
           (mut marks) (t/out-new)
           (mut emits) (t/out-new)
-          (mut rule) 0]
+          (mut rule) 0
+          names (templates (t/source-of context) path)
+          (mut extends) false]
+      (for one names (when (= (get one 0) "sign-extend") (set! extends true)))
       (t/line! (mut o) (t/cat4 "(depends-on \"" nodes-file "\" \"" (t/cat2 target-file "\")")))
       (t/line! (mut o) "(import \"coil.primitive\" :as primitive)")
       (t/line! (mut o) "(import \"rt.graph\" :as graph)")
@@ -359,6 +374,24 @@
       (t/line! (mut o) "              (mach/set-local (mut cx) n fresh)")
       (t/line! (mut o) "              (emit (mut cx) n (mach/rule-of (mut cx) n) fresh)")
       (t/line! (mut o) "              fresh)))))")
+      (t/line! (mut o) ";;; A constant's value as a rule sees it: signed if its type is.")
+      (t/line! (mut o) "(defn payload-value [(cx (mut st/State)) (n i32)] (-> i64)")
+      (t/line! (mut o) "  (if (ir/type-signed? (graph/ty (.g cx) n))")
+      (t/line! (mut o) "      (bv/signed (graph/payload (.g cx) n) (ir/type-bits (graph/ty (.g cx) n)))")
+      (t/line! (mut o) "      (primitive/cast i64 (graph/payload (.g cx) n))))")
+      (when extends
+        (t/line! (mut o) ";;; `n` in a register with its value carried up to 32 bits: by sign (1), by")
+        (t/line! (mut o) ";;; zeros (0) or as its type says (2). A value 32 bits wide or more is as it is.")
+        (t/line! (mut o) "(defn extended [(cx (mut st/State)) (n i32) (how i64)] (-> i64)")
+        (t/line! (mut o) "  (let [bits (ir/type-bits (graph/ty (.g cx) n))")
+        (t/line! (mut o) "        r (operand (mut cx) n)]")
+        (t/line! (mut o) "    (if (>= bits 32)")
+        (t/line! (mut o) "        r")
+        (t/line! (mut o) "        (let [t (mach/fresh (mut cx))]")
+        (t/line! (mut o) "          (if (or (= how 1) (and (= how 2) (ir/type-signed? (graph/ty (.g cx) n))))")
+        (t/line! (mut o) "              (sign-extend (mut cx) t r bits)")
+        (t/line! (mut o) "              (zero-extend (mut cx) t r bits))")
+        (t/line! (mut o) "          t))))"))
       (t/line! (mut o) ";;; The instructions of rule `rule` for `n`, leaving its value in `out`.")
       (t/line! (mut o) "(defn emit [(cx (mut st/State)) (n i32) (rule i64) (out i64)] (-> void)")
             (t/line! (mut o) "  (match rule")

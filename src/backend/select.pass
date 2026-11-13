@@ -18,6 +18,18 @@ fn choose(n: Node) {
   if n is PHI or n is CALL { for i in 1..n.arity { mach.need(n.in(i)) } }
 }
 
+# An argument's value into register `d`. The convention wants a value narrower
+# than 32 bits carried up to 32 by its own kind of extension.
+fn widened(d: Int, n: Node) {
+  if n.bits >= 32 { copy(d, n) } else { lower.move(d, lower.extended(n, 2)) }
+}
+
+# A value arriving in machine register `r`, a parameter or a call's result.
+# A boolean is kept as exactly 0 or 1, whatever the other side left above it.
+fn arrive(n: Node, r: Int) {
+  if n.bits == 1 { lower.zero-extend(int(n), r, 1) } else { lower.move(int(n), r) }
+}
+
 # A call: arguments to where the convention wants them, the call, the result
 # out of its register. The call reads the argument registers and may write
 # every register the convention does not preserve.
@@ -27,10 +39,10 @@ fn call(n: Node) {
     let k = i - 2
     let r = abi.int-arg(k)
     if r >= 0 {
-      copy(0 - r - 1, n.in(i))
+      widened(0 - r - 1, n.in(i))
       passed = set-bit(passed, r)
     } else {
-      lower.to-frame(lower.operand(n.in(i)), k - abi.INT-ARGS)
+      lower.to-frame(lower.extended(n.in(i), 2), k - abi.INT-ARGS)
       out-slots = max(out-slots, k - abi.INT-ARGS + 1)
     }
   }
@@ -38,14 +50,14 @@ fn call(n: Node) {
   mach.implicit(passed, set-bit(isa.CALLER-SAVED, abi.LINK))
   calls = true
   let result = first u in users(n): u is RESULT and u.needed
-  if result != none { lower.move(int(result), 0 - abi.RESULT - 1) }
+  if result != none { arrive(result, 0 - abi.RESULT - 1) }
 }
 
 # A parameter: out of its register, or out of the caller's frame.
 fn param(n: Node) {
   let k = int(n.payload)
   if abi.int-arg(k) >= 0 {
-    lower.move(int(n), 0 - abi.int-arg(k) - 1)
+    arrive(n, 0 - abi.int-arg(k) - 1)
   } else {
     lower.from-frame(int(n), k - abi.INT-ARGS)
     mach.from-caller()

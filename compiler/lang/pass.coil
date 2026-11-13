@@ -229,6 +229,10 @@
                 (push! (mut (.funcs d)) (Func :module name :name "emit" :params three :result "Void")))
               (push! (mut (.funcs d)) (Func :module name :name "operand" :params node-rule :result "Int"))
               (push! (mut (.funcs d)) (Func :module name :name "local?" :params node-rule :result "Bool"))
+              (let [(mut ext) (ArrayList::new [Field] (malloc-allocator))]
+                (push! (mut ext) (Field :name "n" :type "Node"))
+                (push! (mut ext) (Field :name "how" :type "Int"))
+                (push! (mut (.funcs d)) (Func :module name :name "extended" :params ext :result "Int")))
               (for template (lower/templates (project/read-file lower-file file) lower-file)
                 (let [(mut params) (ArrayList::new [Field] (malloc-allocator))]
                   (for i (range 1 (len template))

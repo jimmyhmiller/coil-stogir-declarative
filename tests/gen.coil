@@ -35,7 +35,8 @@
   (helper10 (low a) (low b) (low c) (low d) (low e) (low f) (low g) (low h) (low i) (low j)))
 
 (defstruct Gen
-  [(g graph/Graph) (state u64) (control i32) (env (ArrayList i32)) (type i32) (budget i64)])
+  [(g graph/Graph) (state u64) (control i32) (env (ArrayList i32)) (type i32) (budget i64)
+   (memory u64)])
 
 (defn next! [(r (mut Gen))] (-> u64)
   (let [(mut x) (.state r)]
@@ -65,31 +66,108 @@
 (defn operand! [(r (mut Gen))] (-> i32)
   (if (= (below! (mut r) 4) 0) (constant! (mut r)) (pick! (mut r))))
 
+(defn binary! [(r (mut Gen)) (t i32) (op i64) (a i32) (b i32)] (-> i32)
+  (cond (= op 0) (ir/add! (mut (.g r)) t a b)
+        (= op 1) (ir/sub! (mut (.g r)) t a b)
+        (= op 2) (ir/mul! (mut (.g r)) t a b)
+        (= op 3) (ir/and! (mut (.g r)) t a b)
+        (= op 4) (ir/or! (mut (.g r)) t a b)
+        (= op 5) (ir/xor! (mut (.g r)) t a b)
+        (= op 6) (ir/shl! (mut (.g r)) t a b)
+        (= op 7) (ir/shr! (mut (.g r)) t a b)
+        (= op 8) (ir/sar! (mut (.g r)) t a b)
+        (= op 9) (ir/udiv! (mut (.g r)) t a b)
+        (= op 10) (ir/sdiv! (mut (.g r)) t a b)
+        (= op 11) (ir/urem! (mut (.g r)) t a b)
+        (= op 12) (ir/srem! (mut (.g r)) t a b)
+        (= op 13) (ir/neg! (mut (.g r)) t a)
+        :else (ir/not! (mut (.g r)) t a)))
+
+(defn compare! [(r (mut Gen)) (op i64) (a i32) (b i32)] (-> i32)
+  (cond (= op 0) (ir/eq! (mut (.g r)) a b)
+        (= op 1) (ir/ne! (mut (.g r)) a b)
+        (= op 2) (ir/lt! (mut (.g r)) a b)
+        (= op 3) (ir/le! (mut (.g r)) a b)
+        (= op 4) (ir/ult! (mut (.g r)) a b)
+        :else (ir/ule! (mut (.g r)) a b)))
+
 (defn arithmetic! [(r (mut Gen))] (-> i32)
   (let [a (pick! (mut r))
         b (operand! (mut r))
-        t (.type r)
-        op (below! (mut r) 9)]
-    (cond (= op 0) (ir/add! (mut (.g r)) t a b)
-          (= op 1) (ir/sub! (mut (.g r)) t a b)
-          (= op 2) (ir/mul! (mut (.g r)) t a b)
-          (= op 3) (ir/and! (mut (.g r)) t a b)
-          (= op 4) (ir/or! (mut (.g r)) t a b)
-          (= op 5) (ir/xor! (mut (.g r)) t a b)
-          (= op 6) (ir/shl! (mut (.g r)) t a b)
-          (= op 7) (ir/shr! (mut (.g r)) t a b)
-          :else (ir/sar! (mut (.g r)) t a b))))
+        op (below! (mut r) 16)]
+    (if (= op 15)
+        (ir/cond! (mut (.g r)) (.type r) (comparison! (mut r)) a b)
+        (binary! (mut r) (.type r) op a b))))
+
+;;; A type narrower than the program's, or as wide.
+(defn other-type! [(r (mut Gen))] (-> i32)
+  (let [k (below! (mut r) (if (>= (ir/type-bits (.type r)) 64) 6 4))]
+    (cond (= k 0) ir/T-I8 (= k 1) ir/T-U8 (= k 2) ir/T-I16 (= k 3) ir/T-U16 (= k 4) ir/T-I32
+          :else ir/T-U32)))
+
+(defn widen! [(r (mut Gen)) (v i32)] (-> i32)
+  (if (= (below! (mut r) 2) 0)
+      (ir/sext! (mut (.g r)) (.type r) v)
+      (ir/zext! (mut (.g r)) (.type r) v)))
+
+;;; A few operations at another width: cut two values down, compute, compare,
+;;; choose, and carry the result back up.
+(defn narrow! [(r (mut Gen))] (-> i32)
+  (let [t (other-type! (mut r))
+        (mut a) (ir/trunc! (mut (.g r)) t (pick! (mut r)))
+        b (ir/trunc! (mut (.g r)) t (pick! (mut r)))
+        steps (+ 1 (below! (mut r) 3))]
+    (for _ (range 0 steps) (set! a (binary! (mut r) t (below! (mut r) 15) a b)))
+    (let [flag (compare! (mut r) (below! (mut r) 6) a b)
+          kind (below! (mut r) 4)]
+      (cond
+        (= kind 0) (widen! (mut r) a)
+        (= kind 1) (widen! (mut r) (ir/cond! (mut (.g r)) t flag a b))
+        (= kind 2)
+          (ir/zext! (mut (.g r)) (.type r)
+                    (ir/xor! (mut (.g r)) ir/T-BOOL (ir/not! (mut (.g r)) ir/T-BOOL flag)
+                             (ir/trunc! (mut (.g r)) ir/T-BOOL (pick! (mut r)))))
+        :else (ir/cond! (mut (.g r)) (.type r)
+                        (ir/and! (mut (.g r)) ir/T-BOOL flag (compare! (mut r) (below! (mut r) 6) b a))
+                        (pick! (mut r)) (pick! (mut r)))))))
+
+;;; An address inside the scratch memory, right for a value of `bits` bits.
+(defn address! [(r (mut Gen)) (bits i64)] (-> i32)
+  (let [size (/ (+ bits 7) 8)
+        offset (* size (below! (mut r) (/ 256 size)))
+        base (ir/const! (mut (.g r)) ir/T-PTR (.memory r))]
+    (if (= (below! (mut r) 5) 0)
+        (ir/const! (mut (.g r)) ir/T-PTR (+ (.memory r) (cast u64 offset)))
+        (ir/add! (mut (.g r)) ir/T-PTR base (ir/const! (mut (.g r)) ir/T-PTR (cast u64 offset))))))
+
+(defn memory-type! [(r (mut Gen))] (-> i32)
+  (let [k (below! (mut r) 8)]
+    (cond (= k 0) ir/T-I8 (= k 1) ir/T-U8 (= k 2) ir/T-I16 (= k 3) ir/T-U16 (= k 4) ir/T-I32
+          (= k 5) ir/T-U32 (= k 6) ir/T-I64 :else ir/T-U64)))
+
+(defn write! [(r (mut Gen))] (-> void)
+  (let [t (memory-type! (mut r))
+        bits (ir/type-bits t)
+        v (pick! (mut r))
+        fitted (cond (< bits (ir/type-bits (.type r))) (ir/trunc! (mut (.g r)) t v)
+                     (> bits (ir/type-bits (.type r))) (ir/zext! (mut (.g r)) t v)
+                     :else v)]
+    (set! (.control r) (ir/store-node! (mut (.g r)) (.control r) (address! (mut r) bits) fitted))))
+
+(defn read! [(r (mut Gen))] (-> i32)
+  (let [t (memory-type! (mut r))
+        bits (ir/type-bits t)
+        v (ir/load-node! (mut (.g r)) t (.control r) (address! (mut r) bits))]
+    (set! (.control r) v)
+    ; TRUNC to a type as wide is how a value changes between signed and unsigned.
+    (if (< bits (ir/type-bits (.type r)))
+        (widen! (mut r) v)
+        (ir/trunc! (mut (.g r)) (.type r) v))))
 
 (defn comparison! [(r (mut Gen))] (-> i32)
   (let [a (pick! (mut r))
-        b (operand! (mut r))
-        op (below! (mut r) 6)]
-    (cond (= op 0) (ir/eq! (mut (.g r)) a b)
-          (= op 1) (ir/ne! (mut (.g r)) a b)
-          (= op 2) (ir/lt! (mut (.g r)) a b)
-          (= op 3) (ir/le! (mut (.g r)) a b)
-          (= op 4) (ir/ult! (mut (.g r)) a b)
-          :else (ir/ule! (mut (.g r)) a b))))
+        b (operand! (mut r))]
+    (compare! (mut r) (below! (mut r) 6) a b)))
 
 ;;; A call to one of the helpers, with one, three or ten arguments.
 (defn call! [(r (mut Gen))] (-> i32)
@@ -103,7 +181,7 @@
                       :else (if narrow (primitive/cast u64 (primitive/cast (ptr i8) (fnptr-of helper10-32)))
                                 (primitive/cast u64 (primitive/cast (ptr i8) (fnptr-of helper10)))))
         target (ir/const! (mut (.g r)) ir/T-PTR address)
-        node (ir/call! (mut (.g r)) (.control r) target count)]
+        node (ir/call-node! (mut (.g r)) (.control r) target count)]
     (for i (range 0 count) (graph/set-input! (mut (.g r)) node (+ i 2) (operand! (mut r))))
     (set! (.control r) node)
     (ir/result! (mut (.g r)) (.type r) node)))
@@ -112,12 +190,16 @@
 (defn statements! [(r (mut Gen)) (depth i64)] (-> void)
   (let [count (+ 1 (below! (mut r) 6))]
     (for _ (range 0 count)
-      (let [choice (below! (mut r) 10)]
+      (let [choice (below! (mut r) 14)]
         (set! (.budget r) (- (.budget r) 1))
         (cond
           (or (< choice 5) (>= depth 3) (< (.budget r) 0))
             (push! (mut (.env r)) (arithmetic! (mut r)))
           (< choice 6) (push! (mut (.env r)) (call! (mut r)))
+          (= choice 10) (push! (mut (.env r)) (narrow! (mut r)))
+          (= choice 11) (push! (mut (.env r)) (narrow! (mut r)))
+          (= choice 12) (write! (mut r))
+          (= choice 13) (push! (mut (.env r)) (read! (mut r)))
           (< choice 8) (diamond! (mut r) depth)
           :else (counted-loop! (mut r) depth))))))
 
@@ -190,16 +272,17 @@
     (set! (.control r) exit)))
 
 ;;; One random function of ten parameters (two arrive on the stack), of about `size` statements beyond
-;;; its first few. Its result mixes every value still
+;;; its first few. `memory` is the address of 256 bytes it may read and write. Its result mixes every value still
 ;;; in scope, so all of them stay live to the end.
-(defn program [(seed u64) (type i32) (size i64)] (-> graph/Graph)
+(defn program [(seed u64) (type i32) (size i64) (memory u64)] (-> graph/Graph)
   (let [(mut r) (Gen
                   :g (graph/create (malloc-allocator))
                   :state (| (primitive/imul seed (: 0x9E3779B97F4A7C15 u64)) 1)
                   :control 0
                   :env (ArrayList::new [i32] (malloc-allocator))
                   :type type
-                  :budget size)]
+                  :budget size
+                  :memory memory)]
     (set! (.control r) (ir/start! (mut (.g r))))
     (for i (range 0 10) (push! (mut (.env r)) (ir/param! (mut (.g r)) type (cast u64 i))))
     (statements! (mut r) 0)

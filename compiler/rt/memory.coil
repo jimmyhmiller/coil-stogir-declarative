@@ -1,0 +1,20 @@
+;;; Reads and writes of the process's own memory at a width in bits: what a
+;;; reference interpreter does for a load or a store. A width that is not a
+;;; whole number of bytes takes the bytes that hold it.
+(module rt.memory)
+(import "coil.primitive" :as primitive)
+
+(defn read [(address u64) (bits i64)] (-> u64)
+  (let [p (primitive/cast (ptr u8) address)
+        bytes (/ (+ bits 7) 8)
+        (mut v) (: 0 u64)]
+    (for i (range 0 bytes)
+      (set! v (| v (<< (cast u64 (primitive/load (primitive/index p i))) (cast u64 (* i 8))))))
+    (if (>= bits 64) v (& v (- (<< (: 1 u64) (cast u64 bits)) 1)))))
+
+(defn write [(address u64) (bits i64) (v u64)] (-> void)
+  (let [p (primitive/cast (ptr u8) address)
+        bytes (/ (+ bits 7) 8)
+        kept (if (>= bits 64) v (& v (- (<< (: 1 u64) (cast u64 bits)) 1)))]
+    (for i (range 0 bytes)
+      (primitive/store! (primitive/index p i) (primitive/cast u8 (& (>> kept (cast u64 (* i 8))) 255))))))

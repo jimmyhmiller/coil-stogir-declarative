@@ -39,6 +39,11 @@ inst madd(sf: u1, rd: def gpr, rn: use gpr, rm: use gpr, ra: use gpr) = sf 00 11
 inst lslv(sf: u1, rd: def gpr, rn: use gpr, rm: use gpr)  = sf 0 0 11010110 rm 0010 00 rn rd
 inst lsrv(sf: u1, rd: def gpr, rn: use gpr, rm: use gpr)  = sf 0 0 11010110 rm 0010 01 rn rd
 inst asrv(sf: u1, rd: def gpr, rn: use gpr, rm: use gpr)  = sf 0 0 11010110 rm 0010 10 rn rd
+inst orn(sf: u1, rd: def gpr, rn: use gpr, rm: use gpr)   = sf 01 01010 00 1 rm 000000 rn rd
+inst msub(sf: u1, rd: def gpr, rn: use gpr, rm: use gpr, ra: use gpr) = sf 00 11011 000 rm 1 ra rn rd
+inst udiv(sf: u1, rd: def gpr, rn: use gpr, rm: use gpr)  = sf 0 0 11010110 rm 00001 0 rn rd
+inst sdiv(sf: u1, rd: def gpr, rn: use gpr, rm: use gpr)  = sf 0 0 11010110 rm 00001 1 rn rd
+inst csel(sf: u1, rd: def gpr, rn: use gpr, rm: use gpr, cond: u4) = sf 0 0 11010100 rm cond 0 0 rn rd
 inst csinc(sf: u1, rd: def gpr, rn: use gpr, rm: use gpr, cond: u4) = sf 0 0 11010100 rm cond 0 1 rn rd
 
 # Arithmetic with a 12-bit immediate.
@@ -48,6 +53,10 @@ inst subs-imm(sf: u1, rd: def gpr, rn: use gpr, imm: u12) = sf 1 1 100010 0 imm 
 # The same with the immediate times 4096.
 inst add-imm-hi(sf: u1, rd: def gpr, rn: use gpr, imm: u12) = sf 0 0 100010 1 imm rn rd
 inst sub-imm-hi(sf: u1, rd: def gpr, rn: use gpr, imm: u12) = sf 1 0 100010 1 imm rn rd
+
+# Bit fields: bits 0..last of rn, with the rest zeros (ubfm) or the sign (sbfm).
+inst ubfm(sf: u1, rd: def gpr, rn: use gpr, first: u6, last: u6) = sf 10 100110 sf first last rn rd
+inst sbfm(sf: u1, rd: def gpr, rn: use gpr, first: u6, last: u6) = sf 00 100110 sf first last rn rd
 
 # Constants, sixteen bits at a time: `hw` is which sixteen.
 inst movz(sf: u1, rd: def gpr, imm: u16, hw: u2)          = sf 10 100101 hw imm rd
@@ -61,6 +70,14 @@ inst cbz(sf: u1, rt: use gpr, to: label)                  = sf 0110100 to:19 rt
 inst cbnz(sf: u1, rt: use gpr, to: label)                 = sf 0110101 to:19 rt
 inst ret(rn: use gpr)                                     = 1101011001011111000000 rn 00000
 inst blr(rn: use gpr)                                     = 1101011000111111000000 rn 00000
+
+# Memory at a base plus an offset counted in units of the access's width.
+inst ldrb(rt: def gpr, rn: use gpr, imm: u12)             = 0011100101 imm rn rt
+inst ldrh(rt: def gpr, rn: use gpr, imm: u12)             = 0111100101 imm rn rt
+inst ldrw(rt: def gpr, rn: use gpr, imm: u12)             = 1011100101 imm rn rt
+inst strb(rt: use gpr, rn: use gpr, imm: u12)             = 0011100100 imm rn rt
+inst strh(rt: use gpr, rn: use gpr, imm: u12)             = 0111100100 imm rn rt
+inst strw(rt: use gpr, rn: use gpr, imm: u12)             = 1011100100 imm rn rt
 
 # The frame: 64-bit loads and stores at a multiple of eight from a base.
 inst ldr(rt: def gpr, rn: use gpr, imm: u12)              = 1111100101 imm rn rt

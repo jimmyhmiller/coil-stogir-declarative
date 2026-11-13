@@ -13,6 +13,7 @@ type u64 : 64 unsigned
 type ptr : 64 unsigned
 
 set int = i8 i16 i32 i64 u8 u16 u32 u64 ptr
+set word = bool i8 i16 i32 i64 u8 u16 u32 u64 ptr
 
 # Control. A control node's first operand is the control it follows.
 node START : ctrl                               role start
@@ -26,6 +27,11 @@ node FALSE(branch: ctrl) : ctrl                 role false
 node CALL(c: ctrl, target: ptr, args...) : ctrl role call
 node RESULT(call: ctrl) : T                     role result
 
+# Memory. A load and a store sit in the control chain, in the order they happen;
+# a load is also the value it read. The width is the type's.
+node LOAD(c: ctrl, addr: ptr) : T in word       role load
+node STORE(c: ctrl, addr: ptr, value) : ctrl    role store
+
 # Values that come from outside the graph.
 node PARAM : T                                  role param  payload index
 node CONST : T                                  role const  payload value
@@ -35,12 +41,29 @@ node PHI(region: ctrl, in...: T) : T            role phi
 node ADD(a: T, b: T) : T in int   commutative   = a + b
 node SUB(a: T, b: T) : T in int                 = a - b
 node MUL(a: T, b: T) : T in int   commutative   = a * b
-node AND(a: T, b: T) : T in int   commutative   = a & b
-node OR(a: T, b: T)  : T in int   commutative   = a | b
-node XOR(a: T, b: T) : T in int   commutative   = a ^ b
+node AND(a: T, b: T) : T in word  commutative   = a & b
+node OR(a: T, b: T)  : T in word  commutative   = a | b
+node XOR(a: T, b: T) : T in word  commutative   = a ^ b
+node NEG(a: T) : T in int                       = 0 - a
+node NOT(a: T) : T in word                      = ~a
 node SHL(a: T, n: T) : T in int                 = a << (n % bits)
 node SHR(a: T, n: T) : T in int                 = a >> (n % bits)
 node SAR(a: T, n: T) : T in int                 = sar(a, n % bits)
+
+# Division. By zero, and the smallest signed value by -1, are for the program
+# to avoid: their results here are only what the machines without a trap give.
+node UDIV(a: T, b: T) : T in int                = udiv(a, b)
+node SDIV(a: T, b: T) : T in int                = sdiv(a, b)
+node UREM(a: T, b: T) : T in int                = urem(a, b)
+node SREM(a: T, b: T) : T in int                = srem(a, b)
+
+# Between widths. TRUNC keeps the low bits; ZEXT and SEXT fill the new ones.
+node ZEXT(a: S) : T in int, S in word           = a
+node SEXT(a: S) : T in int, S in int            = sext(a)
+node TRUNC(a: S) : T in word, S in int          = a
+
+# One of two values.
+node COND(c: bool, a: T, b: T) : T in word      = select(c, a, b)
 
 # Comparisons.
 node EQ(a: S, b: S)  : bool, S in int  commutative = a == b

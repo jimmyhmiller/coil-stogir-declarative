@@ -73,7 +73,7 @@ fn order-block(b: Block) {
   for u in users(h) { if u is PHI and u.in(0) == h { place(u, b) } }
   if h is START { for n in Node { if n is PARAM and not n.dead { place(n, b) } } }
   var c = cfg.follower(h)
-  while c != none and c is CALL {
+  while c != none and cfg.chain?(c) {
     place(c, b)
     for u in users(c) { if u is RESULT { place(u, b) } }
     c = cfg.follower(c)

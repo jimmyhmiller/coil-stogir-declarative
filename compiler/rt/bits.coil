@@ -32,7 +32,7 @@
   (primitive/cast u64 (>> (primitive/cast i64 v) (if (>= n 64) (: 63 i64) (primitive/cast i64 n)))))
 
 (defn urem [(v u64) (n u64)] (-> u64) :inline (Always)
-  (if (= n 0) (: 0 u64) (% v n)))
+  (if (= n 0) v (% v n)))
 
 ;;; The number of the lowest set bit of a nonzero word.
 (defn lowest [(v u64)] (-> i64)
@@ -54,3 +54,22 @@
       (set! x (& x (primitive/isub x (: 1 u64))))
       (set! n (+ n 1)))
     n))
+
+;;; Division as machines without a trap do it: by zero gives zero, and the one
+;;; signed overflow gives the dividend back.
+(defn udiv [(v u64) (n u64)] (-> u64) :inline (Always)
+  (if (= n 0) (: 0 u64) (/ v n)))
+
+(defn sdiv [(v u64) (n u64)] (-> u64) :inline (Always)
+  (let [a (primitive/cast i64 v)
+        b (primitive/cast i64 n)]
+    (cond (= b 0) (: 0 u64)
+          (= b -1) (primitive/isub (: 0 u64) v)
+          :else (primitive/cast u64 (/ a b)))))
+
+(defn srem [(v u64) (n u64)] (-> u64) :inline (Always)
+  (let [a (primitive/cast i64 v)
+        b (primitive/cast i64 n)]
+    (cond (= b 0) v
+          (= b -1) (: 0 u64)
+          :else (primitive/cast u64 (% a b)))))

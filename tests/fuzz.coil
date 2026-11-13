@@ -5,6 +5,9 @@
 (import "coil.arraylist" :use [ArrayList])
 (import "coil.primitive" :as primitive)
 (import "coil.cc" :as cc)
+
+(extern scratch-memory :as "malloc" :cc (cc/C) [i64] (-> (ptr u8)))
+
 (import "coil.str" :as str)
 (import "coil.slice" :use [subslice])
 (import "rt.graph" :as graph)
@@ -16,12 +19,23 @@
 
 (defstruct Stats [(spilled i64) (slots i64) (words i64) (nodes i64)])
 
-(defn check [(seed u64) (type i32) (show bool) (stats (mut Stats))] (-> bool)
-  (let [g (gen/program seed type 60)
+(defn reset-memory! [(memory (ptr u8)) (round i64)] (-> void)
+  (for i (range 0 256)
+    (primitive/store! (primitive/index memory i) (primitive/cast u8 (& (+ (* i 37) (* round 11)) 255)))))
+
+(defn memory-sum [(memory (ptr u8))] (-> u64)
+  (let [(mut h) (: 1469598103934665603 u64)]
+    (for i (range 0 256)
+      (set! h (primitive/imul (^ h (cast u64 (primitive/load (primitive/index memory i)))) (: 1099511628211 u64))))
+    h))
+
+(defn check [(seed u64) (type i32) (show bool) (stats (mut Stats)) (memory (ptr u8))] (-> bool)
+  (let [g (gen/program seed type 60 (primitive/cast u64 memory))
         problem (ir/verify g)
         bits (ir/type-bits type)
         (mut args) (ArrayList::new [u64] (malloc-allocator))
         (mut want) (ArrayList::new [u64] (malloc-allocator))
+        (mut sums) (ArrayList::new [u64] (malloc-allocator))
         (mut state) (| seed 1)
         (mut ok) true]
     (when (!= problem "")
@@ -32,9 +46,11 @@
       (for i (range 0 10)
         (set! state (primitive/iadd (primitive/imul state (: 6364136223846793005 u64)) (: 1442695040888963407 u64)))
         (push! (mut args) (if (= round 0) (cast u64 (+ i 1)) (>> state (if (= round 1) 40 0)))))
+      (reset-memory! memory round)
       (match (ir/interpret g (subslice (slice args) (* round 10) (+ (* round 10) 10)) 10000000)
         (Some [v] (push! (mut want) v))
-        (None [] (do (println "seed {}: the interpreter did not finish" seed) (set! ok false) (push! (mut want) 0)))))
+        (None [] (do (println "seed {}: the interpreter did not finish" seed) (set! ok false) (push! (mut want) 0))))
+      (push! (mut sums) (memory-sum memory)))
     (let [(mut cx) (st/create g (malloc-allocator))]
       (st/begin! (mut cx))
       (driver/compile (mut cx))
@@ -47,6 +63,7 @@
             f (primitive/cast (fnptr (cc/C) [u64 u64 u64 u64 u64 u64 u64 u64 u64 u64] u64) (.base code))
             mask (if (>= bits 64) (: 0xFFFFFFFFFFFFFFFF u64) (- (<< (: 1 u64) (cast u64 bits)) 1))]
         (for round (range 0 3)
+          (reset-memory! memory round)
           (let [at (* round 10)
                 got (& (f (get args at) (get args (+ at 1)) (get args (+ at 2)) (get args (+ at 3))
                           (get args (+ at 4)) (get args (+ at 5)) (get args (+ at 6))
@@ -55,6 +72,10 @@
             (when (!= got (get want round))
               (println "seed {} type {} round {}: machine code gave {:x}, the interpreter {:x}"
                        seed (ir/type-name type) round got (get want round))
+              (set! ok false))
+            (when (!= (memory-sum memory) (get sums round))
+              (println "seed {} type {} round {}: machine code left memory different from the interpreter"
+                       seed (ir/type-name type) round)
               (set! ok false))))
         (jit/release! code)))
     ok))
@@ -69,10 +90,11 @@
                     (Some [n] n) (None [] 1))
                   1)
         (mut failed) 0
-        (mut stats) (Stats :spilled 0 :slots 0 :words 0 :nodes 0)]
+        (mut stats) (Stats :spilled 0 :slots 0 :words 0 :nodes 0)
+        memory (scratch-memory 256)]
     (for seed (range first (+ first count))
-      (unless (check (cast u64 seed) ir/T-I64 (= count 1) (mut stats)) (set! failed (+ failed 1)))
-      (unless (check (cast u64 seed) ir/T-I32 false (mut stats)) (set! failed (+ failed 1))))
+      (unless (check (cast u64 seed) ir/T-I64 (= count 1) (mut stats) memory) (set! failed (+ failed 1)))
+      (unless (check (cast u64 seed) ir/T-I32 false (mut stats) memory) (set! failed (+ failed 1))))
     (println "{} programs, {} failed" (* count 2) failed)
     (println "{} spilled something ({} slots); {} nodes became {} instructions"
              (.spilled stats) (.slots stats) (.nodes stats) (.words stats))

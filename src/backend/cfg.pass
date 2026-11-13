@@ -23,10 +23,13 @@ state root: Block                     # where control starts
 
 fn head?(n: Node) -> Bool = n is START or n is REGION or n is LOOP or n is TRUE or n is FALSE
 
-fn control?(n: Node) -> Bool = head?(n) or n is IF or n is RETURN or n is CALL
+# In the control chain inside a block: it happens where it stands.
+fn chain?(n: Node) -> Bool = n is CALL or n is LOAD or n is STORE
+
+fn control?(n: Node) -> Bool = head?(n) or n is IF or n is RETURN or chain?(n)
 
 # The control node that follows `c` inside its block, if any.
-fn follower(c: Node) -> Node = first u in users(c): (u is CALL or u is IF or u is RETURN) and u.in(0) == c
+fn follower(c: Node) -> Node = first u in users(c): (chain?(u) or u is IF or u is RETURN) and u.in(0) == c
 
 fn blocks() {
   for n in Node {
@@ -42,7 +45,7 @@ fn blocks() {
     while next != none {
       next.block-of = b
       c = next
-      next = if c is CALL then follower(c) else none
+      next = if chain?(c) then follower(c) else none
     }
     b.last = c
   }

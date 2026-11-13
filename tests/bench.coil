@@ -4,6 +4,10 @@
 (import "coil.alloc" :use [malloc-allocator])
 (import "coil.arraylist" :use [ArrayList])
 (import "coil.primitive" :as primitive)
+(import "coil.cc" :as cc)
+
+(extern scratch-memory :as "malloc" :cc (cc/C) [i64] (-> (ptr u8)))
+
 (import "coil.str" :as str)
 (import "coil.time" :as time)
 (import "rt.graph" :as graph)
@@ -33,7 +37,7 @@
         (mut words) 0
         (mut histogram) (ArrayList::new [i64] (malloc-allocator))]
     (for _ (range 0 64) (push! (mut histogram) 0))
-    (for seed (range 1 (+ programs 1)) (push! (mut graphs) (gen/program (cast u64 seed) ir/T-I64 size)))
+    (for seed (range 1 (+ programs 1)) (push! (mut graphs) (gen/program (cast u64 seed) ir/T-I64 size (primitive/cast u64 (scratch-memory 256)))))
     ; One state for every compile, as a compiler thread would keep.
     (let [start (now-ns)
           (mut cx) (st/create (get graphs 0) (malloc-allocator))]
