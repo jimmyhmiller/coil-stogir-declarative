@@ -319,7 +319,7 @@
         (t/emit! (mut o) (t/cat4 "(" (.name f) " " (t/cat2 (coil-type d (.type f) "") ") "))))
       (t/line! (mut o) "])"))
     ; The state: the graph, a count per entity, a column per column, a cell per state.
-    (t/line! (mut o) "(defstruct State [(g graph/Graph) (alc (dyn Allocator)) (fired i64)")
+    (t/line! (mut o) "(defstruct State [(g graph/Graph) (alc (dyn Allocator)) (fired i64) (swept bool)")
     (for e (.entities d) (t/line! (mut o) (t/cat3 "  (" (t/lower e) "-count i32)")))
     (for column (.columns d)
       (t/line! (mut o)
@@ -331,7 +331,7 @@
       (t/line! (mut o) (t/cat4 "  (" (.name cell) " " (t/cat2 (coil-type d (.type cell) "") ")"))))
     (t/line! (mut o) "])")
     (t/line! (mut o) "(defn create [(g graph/Graph) (a (dyn Allocator))] (-> State)")
-    (t/line! (mut o) "  (State :g g :alc a :fired 0")
+    (t/line! (mut o) "  (State :g g :alc a :fired 0 :swept true")
     (for e (.entities d) (t/line! (mut o) (t/cat3 "    :" (t/lower e) "-count 0")))
     (for column (.columns d)
       (t/line! (mut o)
@@ -370,6 +370,7 @@
     ; Start over: no entities, every column empty, node columns sized to the graph.
     (t/line! (mut o) "(defn begin! [(cx (mut State))] (-> void)")
     (t/line! (mut o) "  (let [a (.alc cx)]")
+    (t/line! (mut o) "  (set! (.swept cx) true)")
     (for e (.entities d) (t/line! (mut o) (t/cat3 "  (set! (." (t/lower e) "-count cx) 0)")))
     (for column (.columns d)
       (if (list-type? (.type column))

@@ -91,6 +91,10 @@ rule NOT(x) when width == 1        => movz(0, $one, 1, 0) ; eor(0, out, x, $one)
 rule NOT(x)                        => orn(sf, out, zr, x)
 
 # Shifts count modulo the width, which the machine does for 32 and 64 bits.
+# By a constant, a shift is a bit field.
+rule SHL(x, CONST k) when width >= 32 => ubfm(sf, out, x, (width - (k & (width - 1))) & (width - 1), width - 1 - (k & (width - 1)))
+rule SHR(x, CONST k) when width >= 32 => ubfm(sf, out, x, k & (width - 1), width - 1)
+rule SAR(x, CONST k) when width >= 32 => sbfm(sf, out, x, k & (width - 1), width - 1)
 rule SHL(x, y) when width == 8     => ubfm(0, $n, y, 0, 2) ; lslv(0, out, x, $n)
 rule SHL(x, y) when width == 16    => ubfm(0, $n, y, 0, 3) ; lslv(0, out, x, $n)
 rule SHL(x, y)                     => lslv(sf, out, x, y)
