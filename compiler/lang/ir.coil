@@ -946,6 +946,12 @@
       (when (= (.role node) "const")
         (t/line! (mut o) (t/cat3 "(defn make-const! [(g (mut graph/Graph)) (type i32) (value u64)] (-> i32) ("
                                  (builder-name (.name node)) " (mut g) type value))")))
+      (when (= (.role node) "phi")
+        (t/line! (mut o) (t/cat3 "(defn make-phi! [(g (mut graph/Graph)) (type i32) (region i32) (count i64)] (-> i32) ("
+                                 (builder-name (.name node)) " (mut g) type region count))")))
+      (when (= (.role node) "region")
+        (t/line! (mut o) (t/cat3 "(defn make-region! [(g (mut graph/Graph)) (count i64)] (-> i32) ("
+                                 (builder-name (.name node)) " (mut g) count))")))
       (when (= (.role node) "param")
         (t/line! (mut o) (t/cat3 "(defn make-param! [(g (mut graph/Graph)) (type i32) (index u64)] (-> i32) ("
                                  (builder-name (.name node)) " (mut g) type index))"))))
