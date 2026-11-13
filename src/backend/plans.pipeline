@@ -18,6 +18,7 @@ plan quick {
 plan default {
   atomics.run
   blocks.run
+  split.run
   cfg.build
   promote.run
   start-over

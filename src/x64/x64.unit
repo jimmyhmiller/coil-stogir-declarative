@@ -14,6 +14,7 @@ pass x64.mach
 lower x64.lower
 pass x64.atomics
 pass x64.blocks
+pass x64.split
 pass x64.select
 pass x64.alloc
 pass x64.emit

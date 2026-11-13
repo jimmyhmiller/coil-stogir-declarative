@@ -397,7 +397,13 @@
 
 ;;; if (cond) { … } else { … }, then phis for the values either side changed.
 (defn diamond! [(r (mut Gen)) (depth i64)] (-> void)
-  (let [branch (ir/if! (mut (.g r)) (.control r) (comparison! (mut r)))
+  ; One rich diamond in five asks about two constants, as a function put in
+  ; place of a call with constant arguments does: one side can never run.
+  (let [settled (and (.rich r) (= (below! (mut r) 5) 0))
+        test (if settled
+                 (compare! (mut r) (below! (mut r) (tests (mut r) (.type r))) (constant! (mut r)) (constant! (mut r)))
+                 (comparison! (mut r)))
+        branch (ir/if! (mut (.g r)) (.control r) test)
         base (len (.env r))
         yes (ir/true! (mut (.g r)) branch)
         no (ir/false! (mut (.g r)) branch)]

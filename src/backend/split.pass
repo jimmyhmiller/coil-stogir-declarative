@@ -1,0 +1,77 @@
+# A frame object that is only ever read and written in parts, each part always
+# as a whole and no two overlapping, is as many objects as it has parts. Each
+# part can then become a value, which the whole could not.
+pass in unit
+
+state part-at: [Int]                  # the parts of the object in hand: where each starts,
+state part-bytes: [Int]               # how many bytes it is,
+state part-object: [Node]             # and the object it becomes
+state accesses: [Node]                # the loads and stores of the object in hand
+state access-part: [Int]
+state split: Int                      # how many objects were taken apart
+
+# The part at `at` of `bytes` bytes, made if it is new; -1 if it overlaps
+# another part without being it.
+fn part(at: Int, bytes: Int) -> Int {
+  for i in 0..part-at.len {
+    if part-at[i] == at and part-bytes[i] == bytes { return i }
+    if at < part-at[i] + part-bytes[i] and part-at[i] < at + bytes { return -1 }
+  }
+  part-at.push(at)
+  part-bytes.push(bytes)
+  part-object.push(none)
+  part-at.len - 1
+}
+
+# `u` reads or writes `bytes` bytes at `at` through address `address`, and
+# does nothing else with it: note the access. False if it does anything else.
+fn access(u: Node, address: Node, at: Int) -> Bool {
+  var bytes = 0
+  if u is LOAD and u.in(1) == address and u.payload == 0 { bytes = type-bytes(u.type) }
+  else if u is STORE and u.in(1) == address and u.in(2) != address and u.payload == 0 { bytes = type-bytes(u.in(2).type) }
+  else { return false }
+  let p = part(at, bytes)
+  if p < 0 { return false }
+  accesses.push(u)
+  access-part.push(p)
+  true
+}
+
+# The constant an address adds to object `s`, or -1 if `a` is not that.
+fn offset-of(a: Node, s: Node) -> Int {
+  if not (a is ADD) { return -1 }
+  if a.in(0) == s and a.in(1) is CONST { return int(a.in(1).payload) }
+  if a.in(1) == s and a.in(0) is CONST { return int(a.in(0).payload) }
+  -1
+}
+
+fn consider(s: Node) {
+  part-at.clear()
+  part-bytes.clear()
+  part-object.clear()
+  accesses.clear()
+  access-part.clear()
+  let size = int(s.payload)
+  for u in users(s) {
+    let at = offset-of(u, s)
+    if at >= 0 and at < size {
+      # An address inside the object: every use of it must be an access there.
+      for w in users(u) { if not access(w, u, at) { return } }
+    } else if not access(u, s, 0) { return }
+  }
+  # One part that is the whole object is the object as it was.
+  if part-at.len < 2 { return }
+  for i in 0..accesses.len {
+    let p = access-part[i]
+    if part-object[p] == none {
+      part-object[p] = ir.slot!(mut graph, word(part-bytes[p]))
+      grow-nodes()
+    }
+    set-input(accesses[i], 1, part-object[p])
+  }
+  split = split + 1
+}
+
+fn run() {
+  for n in Node { if not n.dead and n is SLOT { consider(n) } }
+}
