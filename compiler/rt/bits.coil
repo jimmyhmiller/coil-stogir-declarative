@@ -128,6 +128,72 @@
       (of-f32 (cast f32 (math/sqrt (cast f64 (f32-of a)))))
       (of-f64 (math/sqrt (f64-of a)))))
 
+;;; Not a number: every exponent bit set and some bit below them. The highest
+;;; of those lower bits says it is a quiet one, which arithmetic passes along;
+;;; without it, it is a signaling one, which arithmetic first makes quiet.
+(defn quiet-bit [(bits i64)] (-> u64)
+  (if (= bits 32) (: 0x400000 u64) (: 0x8000000000000 u64)))
+
+(defn nan? [(a u64) (bits i64)] (-> bool)
+  (if (= bits 32)
+      (and (= (& a (: 0x7F800000 u64)) (: 0x7F800000 u64)) (!= (& a (: 0x7FFFFF u64)) 0))
+      (and (= (& a (: 0x7FF0000000000000 u64)) (: 0x7FF0000000000000 u64)) (!= (& a (: 0xFFFFFFFFFFFFF u64)) 0))))
+
+(defn signaling? [(a u64) (bits i64)] (-> bool)
+  (and (nan? a bits) (= (& a (quiet-bit bits)) 0)))
+
+;;; Of two values at least one of which is not a number, the one an operation
+;;; gives: a signaling one before a quiet one, the first before the second.
+(defn nan-of [(a u64) (b u64) (bits i64)] (-> u64)
+  (cond (signaling? a bits) (| a (quiet-bit bits))
+        (signaling? b bits) (| b (quiet-bit bits))
+        (nan? a bits) a
+        :else b))
+
+;;; The smaller and the larger. Zero with its sign set is below zero without.
+(defn fmin [(a u64) (b u64) (bits i64)] (-> u64)
+  (cond (or (nan? a bits) (nan? b bits)) (nan-of a b bits)
+        (< (fvalue a bits) (fvalue b bits)) a
+        (< (fvalue b bits) (fvalue a bits)) b
+        :else (| a b)))
+
+(defn fmax [(a u64) (b u64) (bits i64)] (-> u64)
+  (cond (or (nan? a bits) (nan? b bits)) (nan-of a b bits)
+        (> (fvalue a bits) (fvalue b bits)) a
+        (> (fvalue b bits) (fvalue a bits)) b
+        :else (& a b)))
+
+;;; The same, but with one quiet value that is not a number, the other value.
+(defn fmin-number [(a u64) (b u64) (bits i64)] (-> u64)
+  (cond (and (nan? a bits) (not (signaling? a bits)) (not (nan? b bits))) b
+        (and (nan? b bits) (not (signaling? b bits)) (not (nan? a bits))) a
+        :else (fmin a b bits)))
+
+(defn fmax-number [(a u64) (b u64) (bits i64)] (-> u64)
+  (cond (and (nan? a bits) (not (signaling? a bits)) (not (nan? b bits))) b
+        (and (nan? b bits) (not (signaling? b bits)) (not (nan? a bits))) a
+        :else (fmax a b bits)))
+
+;;; To a whole number. `mode` 0 is the nearest with halves to the even one, 1
+;;; the next up, 2 the next down, 3 toward zero, 4 the nearest with halves away
+;;; from zero. Every single-precision value is a double, and rounds the same.
+(defn fround [(a u64) (mode u64) (bits i64)] (-> u64)
+  (if (nan? a bits)
+      (| a (quiet-bit bits))
+      (let [x (fvalue a bits)]
+        (of-fvalue (cond (= mode 0) (math/round-even x)
+                         (= mode 1) (math/ceil x)
+                         (= mode 2) (math/floor x)
+                         (= mode 3) (math/trunc x)
+                         :else (math/round x))
+                   bits))))
+
+;;; a * b + c, rounded once.
+(defn fma [(a u64) (b u64) (c u64) (bits i64)] (-> u64)
+  (if (= bits 32)
+      (of-f32 (math/mul-add (f32-of a) (f32-of b) (f32-of c)))
+      (of-f64 (math/mul-add (f64-of a) (f64-of b) (f64-of c)))))
+
 ;;; Comparisons are false when either side is not a number, but for `fne`.
 (defn feq [(a u64) (b u64) (bits i64)] (-> bool)
   (if (= bits 32) (= (f32-of a) (f32-of b)) (= (f64-of a) (f64-of b))))
@@ -193,6 +259,13 @@
 
 (defn popcount [(v u64) (bits i64)] (-> u64)
   (cast u64 (count (cut v bits))))
+
+;;; The bits of a `bits`-wide value in the opposite order.
+(defn bitrev [(v u64) (bits i64)] (-> u64)
+  (let [(mut out) (: 0 u64)]
+    (for i (range 0 bits)
+      (set! out (| out (<< (& (>> v (cast u64 i)) 1) (cast u64 (- (- bits 1) i))))))
+    out))
 
 ;;; The bytes of a `bits`-wide value in the opposite order.
 (defn bswap [(v u64) (bits i64)] (-> u64)

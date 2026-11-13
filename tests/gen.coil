@@ -105,11 +105,12 @@
         (= op 23) (ir/rol! (mut (.g r)) t a b)
         (= op 24) (ir/ror! (mut (.g r)) t a b)
         (= op 25) (ir/umulh! (mut (.g r)) t a b)
-        :else (ir/smulh! (mut (.g r)) t a b)))
+        (= op 26) (ir/smulh! (mut (.g r)) t a b)
+        :else (ir/bitrev! (mut (.g r)) t a)))
 
-;;; How many of `binary!`'s operations a type has: the last five need 32 bits.
+;;; How many of `binary!`'s operations a type has: the last six need 32 bits.
 (defn operations [(t i32)] (-> i64)
-  (if (>= (ir/type-bits t) 32) 27 22))
+  (if (>= (ir/type-bits t) 32) 28 22))
 
 (defn compare! [(r (mut Gen)) (op i64) (a i32) (b i32)] (-> i32)
   (cond (= op 0) (ir/eq! (mut (.g r)) a b)
@@ -207,8 +208,18 @@
         b (float-operand! (mut r) ft)
         steps (+ 1 (below! (mut r) 3))]
     (for _ (range 0 steps)
-      (let [op (below! (mut r) 7)]
-        (set! a (cond (= op 0) (ir/fadd! (mut (.g r)) ft a b)
+      (let [op (below! (mut r) 17)]
+        (set! a (cond (= op 7) (ir/fmin! (mut (.g r)) ft a b)
+                      (= op 8) (ir/fmax! (mut (.g r)) ft a b)
+                      (= op 9) (ir/fmin-number! (mut (.g r)) ft a b)
+                      (= op 10) (ir/fmax-number! (mut (.g r)) ft a b)
+                      (= op 11) (ir/round-even! (mut (.g r)) ft a)
+                      (= op 12) (ir/round-up! (mut (.g r)) ft a)
+                      (= op 13) (ir/round-down! (mut (.g r)) ft a)
+                      (= op 14) (ir/round-zero! (mut (.g r)) ft a)
+                      (= op 15) (ir/round-away! (mut (.g r)) ft a)
+                      (= op 16) (ir/fma! (mut (.g r)) ft a b (float-operand! (mut r) ft))
+                      (= op 0) (ir/fadd! (mut (.g r)) ft a b)
                       (= op 1) (ir/fsub! (mut (.g r)) ft a b)
                       (= op 2) (ir/fmul! (mut (.g r)) ft a b)
                       (= op 3) (ir/fdiv! (mut (.g r)) ft a b)

@@ -113,6 +113,7 @@ node CLZ(a: T) : T in int                       = clz(a)
 node CTZ(a: T) : T in int                       = ctz(a)
 node POPCNT(a: T) : T in int                    = popcount(a)
 node BSWAP(a: T) : T in wide                    = bswap(a)
+node BITREV(a: T) : T in wide                   = bitrev(a)
 node ROL(a: T, n: T) : T in wide                = rol(a, n)
 node ROR(a: T, n: T) : T in wide                = ror(a, n)
 
@@ -147,6 +148,22 @@ node FDIV(a: T, b: T) : T in float              = fdiv(a, b)
 node FNEG(a: T) : T in float                    = fneg(a)
 node FABS(a: T) : T in float                    = fabs(a)
 node FSQRT(a: T) : T in float                   = fsqrt(a)
+# The smaller and the larger; zero with its sign set is below zero without.
+# With a value that is not a number, so are FMIN and FMAX; FMIN-NUMBER and
+# FMAX-NUMBER are then the other value, if that is a number.
+node FMIN(a: T, b: T) : T in float              = fmin(a, b)
+node FMAX(a: T, b: T) : T in float              = fmax(a, b)
+node FMIN-NUMBER(a: T, b: T) : T in float       = fmin-number(a, b)
+node FMAX-NUMBER(a: T, b: T) : T in float       = fmax-number(a, b)
+# To a whole number: the nearest, a half going to the even one or away from
+# zero; the next one up; the next one down; and the next one toward zero.
+node ROUND-EVEN(a: T) : T in float              = fround(a, 0)
+node ROUND-UP(a: T) : T in float                = fround(a, 1)
+node ROUND-DOWN(a: T) : T in float              = fround(a, 2)
+node ROUND-ZERO(a: T) : T in float              = fround(a, 3)
+node ROUND-AWAY(a: T) : T in float              = fround(a, 4)
+# a * b + c, rounded once.
+node FMA(a: T, b: T, c: T) : T in float         = fma(a, b, c)
 node FEQ(a: S, b: S) : bool, S in float  commutative = feq(a, b)
 node FNE(a: S, b: S) : bool, S in float  commutative = fne(a, b)
 node FLT(a: S, b: S) : bool, S in float         = flt(a, b)

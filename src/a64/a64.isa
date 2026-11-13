@@ -134,6 +134,12 @@ inst fmov(ty: u1, rd: def simd, rn: use simd)                = 00011110 0 ty 1 0
 inst fabs(ty: u1, rd: def simd, rn: use simd)                = 00011110 0 ty 1 0000 01 10000 rn rd
 inst fneg(ty: u1, rd: def simd, rn: use simd)                = 00011110 0 ty 1 0000 10 10000 rn rd
 inst fsqrt(ty: u1, rd: def simd, rn: use simd)               = 00011110 0 ty 1 0000 11 10000 rn rd
+# The larger and the smaller, as FMAX, FMIN, FMAX-NUMBER and FMIN-NUMBER (`how` 0 to 3).
+inst fextreme(ty: u1, how: u2, rd: def simd, rn: use simd, rm: use simd) = 00011110 0 ty 1 rm 01 how 10 rn rd
+# To a whole number: `mode` 0 nearest even, 1 up, 2 down, 3 toward zero, 4 nearest away.
+inst fround(ty: u1, mode: u3, rd: def simd, rn: use simd)    = 00011110 0 ty 1 001 mode 10000 rn rd
+# ra + rn * rm, rounded once.
+inst fmadd(ty: u1, rd: def simd, rn: use simd, rm: use simd, ra: use simd) = 00011111 0 ty 0 rm 0 ra rn rd
 inst fcmp(ty: u1, rn: use simd, rm: use simd)                = 00011110 0 ty 1 rm 001000 rn 00000
 inst fcsel(ty: u1, rd: def simd, rn: use simd, rm: use simd, cond: u4) = 00011110 0 ty 1 rm cond 11 rn rd
 inst fcvt-to-double(rd: def simd, rn: use simd)              = 00011110 00 1 0001 01 10000 rn rd

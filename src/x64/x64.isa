@@ -83,6 +83,11 @@ inst shl-cl(w: u1, dst: mod gpr)                     = rex(w, 0, dst) byte(0xD3)
 inst shr-cl(w: u1, dst: mod gpr)                     = rex(w, 0, dst) byte(0xD3) modrm(5, dst)   reads rcx
 inst sar-cl(w: u1, dst: mod gpr)                     = rex(w, 0, dst) byte(0xD3) modrm(7, dst)   reads rcx
 
+# Shifts by a constant count.
+inst shl-imm(w: u1, dst: mod gpr, count: u6)         = rex(w, 0, dst) byte(0xC1) modrm(4, dst) byte(count)
+inst shr-imm(w: u1, dst: mod gpr, count: u6)         = rex(w, 0, dst) byte(0xC1) modrm(5, dst) byte(count)
+inst sar-imm(w: u1, dst: mod gpr, count: u6)         = rex(w, 0, dst) byte(0xC1) modrm(7, dst) byte(count)
+
 # Division of rdx:rax, leaving the quotient in rax and the remainder in rdx.
 inst sign-extend-rax(w: u1)                          = rex(w, 0, 0) byte(0x99)                   reads rax writes rdx
 inst div(w: u1, src: use gpr)                        = rex(w, 0, src) byte(0xF7) modrm(6, src)   reads rax rdx writes rax rdx
@@ -138,7 +143,20 @@ inst subf(ty: u1, dst: mod simd, src: use simd)      = scalar(ty) rex(0, dst, sr
 inst divf(ty: u1, dst: mod simd, src: use simd)      = scalar(ty) rex(0, dst, src) byte(0x0F) byte(0x5E) modrm(dst, src)
 inst sqrtf(ty: u1, dst: def simd, src: use simd)     = scalar(ty) rex(0, dst, src) byte(0x0F) byte(0x51) modrm(dst, src)
 inst xorf(dst: mod simd, src: use simd)              = byte(0x66) rex(0, dst, src) byte(0x0F) byte(0x57) modrm(dst, src)
+# dst = src with the bits of dst cleared.
+inst andnotf(dst: mod simd, src: use simd)           = byte(0x66) rex(0, dst, src) byte(0x0F) byte(0x55) modrm(dst, src)
 inst andf(dst: mod simd, src: use simd)              = byte(0x66) rex(0, dst, src) byte(0x0F) byte(0x54) modrm(dst, src)
+inst orf(dst: mod simd, src: use simd)               = byte(0x66) rex(0, dst, src) byte(0x0F) byte(0x56) modrm(dst, src)
+# The smaller and the larger; src when the two are equal or either is not a number.
+inst minf(ty: u1, dst: mod simd, src: use simd)      = scalar(ty) rex(0, dst, src) byte(0x0F) byte(0x5D) modrm(dst, src)
+inst maxf(ty: u1, dst: mod simd, src: use simd)      = scalar(ty) rex(0, dst, src) byte(0x0F) byte(0x5F) modrm(dst, src)
+# Every bit of dst set if either is not a number, and cleared otherwise.
+inst unordered(ty: u1, dst: mod simd, src: use simd) = scalar(ty) rex(0, dst, src) byte(0x0F) byte(0xC2) modrm(dst, src) byte(3)
+# To a whole number: `mode` 0 nearest even, 1 down, 2 up, 3 toward zero.
+inst roundf(ty: u1, mode: u2, dst: def simd, src: use simd) = byte(0x66) rex(0, dst, src) byte(0x0F) byte(0x3A) byte(0x0A | ty) modrm(dst, src) byte(8 | mode)
+# dst = x * dst + y, rounded once. The prefix names all three registers.
+form vex(w, reg, other, rm) = byte(0xC4) byte((1 - ((reg >> 3) & 1)) << 7 | 0x40 | (1 - ((rm >> 3) & 1)) << 5 | 2) byte(w << 7 | (15 - (other & 15)) << 3 | 1)
+inst fma(ty: u1, dst: mod simd, x: use simd, y: use simd) = vex(ty, dst, x, y) byte(0xA9) modrm(dst, y)
 # Compare, into the flags: equal, below and parity all set when either is not a number.
 inst cmpf(ty: u1, x: use simd, y: use simd)          = packed(ty) rex(0, x, y) byte(0x0F) byte(0x2E) modrm(x, y)
 inst single-to-double(dst: def simd, src: use simd)  = byte(0xF3) rex(0, dst, src) byte(0x0F) byte(0x5A) modrm(dst, src)
