@@ -3,7 +3,7 @@ flow in unit
 nodes backend.nodes
 
 # How many of a value's low bits may be set: every bit above them is zero.
-fact width
+fact width holds bit-length(value) <= width
   CONST k          = bit-length(k)
   ZEXT(x)          = width(x)
   TRUNC(x)         = width(x)
