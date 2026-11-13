@@ -46,3 +46,4 @@ source-roots = ["compiler", "tests"]
 "x64.alloc" = "src/x64/alloc.pass"
 "x64.emit" = "src/x64/emit.pass"
 "x64.plans" = "src/x64/plans.pipeline"
+"x64.elf" = "src/x64/elf.layout"
