@@ -423,13 +423,8 @@ fn others(keeping: Bool) {
 }
 
 fn enter() {
-  let sp = marker(abi.STACK)
-  lower.grow-stack(frame)
-  if keeps-record?() {
-    if abi.LINK >= 0 { lower.to-frame-pair(marker(abi.FRAME), marker(abi.LINK), sp, record-slot()) }
-    else { lower.to-frame(marker(abi.FRAME), sp, record-slot()) }
-    lower.frame-record(sp, record-slot() * 8)
-  }
+  # The frame, with its record if it keeps one, as the machine opens frames.
+  if keeps-record?() { lower.open-record(record-slot() * 8) } else { lower.grow-stack(frame) }
   others(true)
   if dynamic { lower.base-from-stack(marker(abi.BASE)) }
 }

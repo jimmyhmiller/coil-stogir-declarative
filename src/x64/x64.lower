@@ -72,6 +72,10 @@ template above-arguments(d, n) = lea(d, rsp, n)
 template grow-stack(n)            = sub-imm(1, rsp, n)
 template shrink-stack(n)          = add-imm(1, rsp, n)
 template frame-record(base, n)    = lea(rbp, base, n)
+# A frame with its record at the top and `rest` bytes below: opened the way
+# every debugger and unwinder on this machine knows a frame to open.
+template open-record(rest) when rest == 0 = push(rbp) ; mov(1, rbp, rsp)
+template open-record(rest)                = push(rbp) ; mov(1, rbp, rsp) ; sub-imm(1, rsp, rest)
 # And the base from rbp, which is n bytes above it.
 template base-from-frame(d, n)    = lea(d, rbp, 0 - n)
 # Go to `to` if register v holds k; `w` is 1 to compare all 64 bits.

@@ -65,6 +65,9 @@ form memx(reg, base, index, scale, disp) when disp == 0 and base & 7 != 5 = byte
 form memx(reg, base, index, scale, disp) when s8(disp)                    = byte(0x40 | (reg & 7) << 3 | 4) byte(scale << 6 | (index & 7) << 3 | base & 7) byte(disp)
 form memx(reg, base, index, scale, disp)                                  = byte(0x80 | (reg & 7) << 3 | 4) byte(scale << 6 | (index & 7) << 3 | base & 7) le32(disp)
 
+# A register onto the stack, the stack pointer going down by eight.
+inst push(src: use gpr)                              = rex(0, 0, src) byte(0x50 | src & 7)
+
 # Copies and constants. `w` picks 64-bit (1) or 32-bit (0) registers; a 32-bit
 # write clears the upper half.
 inst mov(w: u1, dst: def gpr, src: use gpr)          = rex(w, src, dst) byte(0x89) modrm(src, dst)

@@ -104,6 +104,8 @@ template shrink-stack(n)               = add-imm(1, sp, sp, n % 4096) ; add-imm-
 # x29 to the frame record, n bytes above the stack pointer.
 template frame-record(base, n) when n < 4096 = add-imm(1, x29, base, n)
 template frame-record(base, n)               = add-imm(1, x29, base, n % 4096) ; add-imm-hi(1, x29, x29, n / 4096)
+# A frame with its record at the top and `rest` bytes below.
+template open-record(rest) = grow-stack(rest + 16) ; to-frame-pair(x29, x30, sp, rest / 8) ; frame-record(sp, rest)
 # And the base from x29, which is n bytes above it.
 template base-from-frame(d, n) when n < 4096 = sub-imm(1, d, x29, n)
 template base-from-frame(d, n)               = sub-imm(1, d, x29, n % 4096) ; sub-imm-hi(1, d, d, n / 4096)
