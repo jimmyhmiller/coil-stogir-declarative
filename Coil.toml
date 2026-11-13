@@ -11,6 +11,7 @@ source-roots = ["compiler", "tests"]
 ".lower" = "lang.readers"
 ".abi" = "lang.readers"
 ".rewrite" = "lang.readers"
+".layout" = "lang.readers"
 
 [modules]
 "backend.nodes" = "src/backend/nodes.ir"
@@ -21,6 +22,7 @@ source-roots = ["compiler", "tests"]
 "backend.a64" = "src/backend/a64.isa"
 "backend.a64-lower" = "src/backend/a64.lower"
 "backend.a64-abi" = "src/backend/a64.abi"
+"backend.macho" = "src/backend/macho.layout"
 "backend.mach" = "src/backend/mach.pass"
 "backend.select" = "src/backend/select.pass"
 "backend.alloc" = "src/backend/alloc.pass"

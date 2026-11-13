@@ -9,6 +9,7 @@
 (import "lang.lower" :as lower)
 (import "lang.abi" :as abi)
 (import "lang.rewrite" :as rewrite)
+(import "lang.layout" :as layout)
 
 (reader-provider "lang.readers" read-any)
 
@@ -25,4 +26,5 @@
           (t/ends-with path ".lower") (lower/module-text context)
           (t/ends-with path ".abi") (abi/module-text context)
           (t/ends-with path ".rewrite") (rewrite/module-text context)
+          (t/ends-with path ".layout") (layout/module-text context)
           :else (t/fail-at path 1 1 "no language reads a file with this extension"))))

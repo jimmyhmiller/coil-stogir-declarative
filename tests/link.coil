@@ -1,4 +1,5 @@
-;;; Two functions and a helper from outside, linked in memory:
+;;; Two functions and a helper from outside, linked in memory and written as an
+;;; object file (tests/link-main.c is the program that links against it):
 ;;;   triple(x) = x * 3 + 1
 ;;;   both(x)   = triple(x) + helper(x + 1), where the address of triple is also
 ;;;               taken and called through a register.
@@ -14,6 +15,8 @@
 (import "backend.unit" :as st)
 (import "backend.driver" :as driver)
 (import "backend.a64" :as isa)
+(import "backend.macho" :as macho)
+(import "coil.fs" :as fs)
 
 (defn helper [(a u64)] (-> u64)
   (primitive/isub (primitive/imul a (: 7 u64)) (: 2 u64)))
@@ -79,4 +82,9 @@
         (when (!= (f (cast u64 (* x 977))) (expected (cast u64 (* x 977))))
           (set! failures (+ failures 1)))))
     (println "linked in memory: {} failures" failures)
+    ; The same image as an object file, for the system's linker.
+    (let [(mut object) (macho/write im (malloc-allocator))]
+      (match (fs/write-file (malloc-allocator) "out/link.o" (slice object))
+        (Ok [_] (println "wrote out/link.o, {} bytes" (len object)))
+        (Err [_] (do (println "cannot write out/link.o") (set! failures (+ failures 1))))))
     (if (= failures 0) 0 1)))
