@@ -507,6 +507,7 @@ fn run() {
     b.first-inst = Inst.count + 1
     emitting = b
     for n in b.seq {
+      emitting-from = origin(n)
       if n is CALL { call(n) }
       else if n is SWITCH { switch(n) }
       else if n is TAILCALL { tail-call(n) }

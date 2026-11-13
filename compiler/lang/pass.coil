@@ -769,6 +769,8 @@
         ; A node over again, for whoever is about to change an input of it.
         (and (= name "copy") (= n 1)) (t/cat3 "(graph/copy! (mut (.g cx)) " a ")")
         ; Whether a call of this symbol is known to write no memory.
+        ; Where a node came from, as whoever built the graph numbered it; 0 if it said nothing.
+        (and (= name "origin") (= n 1)) (t/cat3 "(graph/origin (.g cx) " a ")")
         (and (= name "reads-only") (= n 1)) (t/cat3 "(graph/reads-only? (.g cx) " a ")")
         ; What else is known of the routine a symbol is: 0 nothing, 1 it only
         ; reads, 2 memcpy, 3 memmove, 4 memset, 5 memcmp.

@@ -30,6 +30,9 @@ setting trial: Bool
 #   14 the frame opened only where it is needed   15 switches by table
 #   16 the last case of a switch that names every value is its default
 setting off: Int
+# The program is to be looked at as it runs: frame objects stay in memory,
+# where what looks can find them.
+setting debugging: Bool
 fn on?(what: Int) -> Bool = not has-bit(word(off), what)
 state post: [Block]
 state order: [Block]                  # the blocks as the code has them: reverse postorder from the

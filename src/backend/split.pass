@@ -97,5 +97,6 @@ fn consider(s: Node) {
 }
 
 fn run() {
+  if debugging { return }
   for n in Node { if not n.dead and n is SLOT { consider(n) } }
 }

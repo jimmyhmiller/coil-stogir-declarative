@@ -26,6 +26,8 @@ state reloc-at: [Int]                  # the words that depend on a symbol's add
 state reloc-symbol: [Int]              # the symbol,
 state reloc-op: [Int]                  # and the instruction there
 state dropped: Int                     # a jump that the branch before it made needless
+state row-at: [Int]                    # where in the code what is computed starts to come from
+state row-from: [Int]                  # somewhere else in the source, and from where
 
 fn marker(r: Int) -> Int = 0 - r - 1
 
@@ -271,6 +273,7 @@ fn goes(i: Inst) -> Int {
 
 fn rewrite(i: Inst, next: Int) {
   if int(i) == dropped { return }
+  emitting-from = i.came-from
   let op = i.inst-op
   let x0 = resolve(i, 0)
   let x1 = resolve(i, 1)
@@ -351,8 +354,14 @@ fn symbol-of(i: Inst) -> Int {
 
 # Every final instruction gets its place, then its bytes.
 fn encode() {
+  var last-from = 0
   for at in final-start + 1..Inst.count + 1 {
     let i = id(at)
+    if i.came-from != 0 and i.came-from != last-from {
+      row-at.push(code-bytes)
+      row-from.push(i.came-from)
+      last-from = i.came-from
+    }
     i.offset = code-bytes
     code-bytes = code-bytes + isa.size(mut code, i.inst-op, encoded(i, 0, false), encoded(i, 1, false), encoded(i, 2, false), encoded(i, 3, false), encoded(i, 4, false))
   }

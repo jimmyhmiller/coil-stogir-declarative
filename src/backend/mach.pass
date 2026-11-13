@@ -20,6 +20,8 @@ column caller-bytes: Inst -> Int       # for a read of the caller's frame: how m
 column copy-to: Inst -> Int            # for a copy: the register written
 column copy-from: Inst -> Int          # and the register read
 column calling: Inst -> Bool           # it calls a function
+column came-from: Inst -> Int               # where the node it computes came from (`origin`), or 0
+state emitting-from: Int               # that, for the instructions being emitted
 column first-inst: Block -> Int       # a block's instructions are first..last
 column last-inst: Block -> Int
 column needed: Node -> Bool           # must be in a register
@@ -41,6 +43,7 @@ state wide-temps: [Int]               # the fresh registers that hold sixteen by
 
 fn emit(op: Int, a: Int, b: Int, c: Int, d: Int, e: Int) {
   let i = Inst.new()
+  i.came-from = emitting-from
   i.inst-op = op
   i.a0 = a
   i.a1 = b
