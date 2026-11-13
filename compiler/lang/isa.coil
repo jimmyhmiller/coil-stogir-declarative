@@ -47,7 +47,10 @@
   [(name (slice u8)) (operands (ArrayList Operand)) (pieces (ArrayList Piece)) (line i64)
    (reloc (slice u8)) (formula (slice u8))
    (reads (ArrayList (slice u8))) (writes (ArrayList (slice u8)))
-   (body (slice u8))])
+   (body (slice u8))
+   ; For a branch: what branches when this does not, another instruction or
+   ; this one with an operand's low bit turned.
+   (opposite (slice u8))])
 
 (defstruct Spec
   [(word i64)
@@ -161,7 +164,8 @@
                      :formula ""
                      :reads (ArrayList::new [(slice u8)] (malloc-allocator))
                      :writes (ArrayList::new [(slice u8)] (malloc-allocator))
-                     :body "")
+                     :body ""
+                     :opposite "")
         (mut total) 0]
     (when (!= (inst-number spec name) 0) (t/die (mut c) at (t/cat2 "instruction declared twice: " name)))
     (t/expect! (mut c) "(")
@@ -179,7 +183,7 @@
         (for operand (.operands inst) (push! (mut names) (.name operand)))
         (set! (.body inst) (byte-pieces (mut c) spec names "" true))))
     (while (and (!= (.word spec) 0) (not (t/at-line-start? (mut c))) (not (t/at? (mut c) "reloc"))
-                (not (t/at? (mut c) "reads")) (not (t/at? (mut c) "writes")))
+                (not (t/at? (mut c) "reads")) (not (t/at? (mut c) "writes")) (not (t/at? (mut c) "opposite")))
       (let [tok (t/advance! (mut c))]
         (cond
           (= (.kind tok) t/T-NUM)
@@ -221,6 +225,8 @@
       (while more
         (cond (t/accept! (mut c) "reads") (set! (.reads inst) (parse-until-keyword (mut c)))
               (t/accept! (mut c) "writes") (set! (.writes inst) (parse-until-keyword (mut c)))
+              ; `opposite NAME`: the branch that goes when this one does not.
+              (t/accept! (mut c) "opposite") (set! (.opposite inst) (t/name! (mut c) "an instruction or an operand"))
               :else (set! more false))))
     (push! (mut (.insts spec)) inst)))
 
@@ -228,7 +234,7 @@
 (defn parse-until-keyword [(c (mut t/Cur))] (-> (ArrayList (slice u8)))
   (let [(mut out) (ArrayList::new [(slice u8)] (malloc-allocator))]
     (while (and (t/at-ident? (mut c)) (not (t/at-line-start? (mut c)))
-                (not (t/at? (mut c) "reads")) (not (t/at? (mut c) "writes")))
+                (not (t/at? (mut c) "reads")) (not (t/at? (mut c) "writes")) (not (t/at? (mut c) "opposite")))
       (let [at (t/peek (mut c))
             name (t/name! (mut c) "a register")]
         (if (t/accept! (mut c) "..")
@@ -466,7 +472,7 @@
                    (in-inst bool)] (-> (slice u8))
   (let [(mut o) (t/out-new)]
     (while (and (not (t/at-line-start? (mut c))) (not (t/at? (mut c) "reloc"))
-                (not (t/at? (mut c) "reads")) (not (t/at? (mut c) "writes")))
+                (not (t/at? (mut c) "reads")) (not (t/at? (mut c) "writes")) (not (t/at? (mut c) "opposite")))
       (let [tok (t/advance! (mut c))
             name (.text tok)]
         (if (= name "nothing")
@@ -791,6 +797,20 @@
         (for name (.writes inst) (set! mask (| mask (<< (: 1 u64) (cast u64 (reg-number spec name))))))
         (t/emit! (mut o) (t/cat2 " " (t/u64-text mask)))))
     (t/line! (mut o) "])")
+    ; A branch's opposite: the instruction (0 if it is this one or there is
+    ; none), and the operand whose low bit turns (-1 if none).
+    (t/emit! (mut o) "(def OPPOSITE-OPS [0")
+    (for inst (.insts spec) (t/emit! (mut o) (t/cat2 " " (t/int-text (inst-number spec (.opposite inst))))))
+    (t/line! (mut o) "])")
+    (t/emit! (mut o) "(def OPPOSITE-TURNS [-1")
+    (for inst (.insts spec)
+      (when (and (!= (.opposite inst) "") (= (inst-number spec (.opposite inst)) 0)
+                 (< (operand-index inst (.opposite inst)) 0))
+        (t/fail-at "" (.line inst) 1 (t/cat2 "opposite names no instruction and no operand: " (.opposite inst))))
+      (t/emit! (mut o) (t/cat2 " " (t/int-text (if (= (.opposite inst) "") -1 (operand-index inst (.opposite inst)))))))
+    (t/line! (mut o) "])")
+    (t/line! (mut o) "(defn opposite-op [(op i64)] (-> i64) (get OPPOSITE-OPS op))")
+    (t/line! (mut o) "(defn opposite-turn [(op i64)] (-> i64) (get OPPOSITE-TURNS op))")
     (t/line! (mut o) "(defn implicit-reads [(op i64)] (-> u64) (get IMPLICIT-READS op))")
     (t/line! (mut o) "(defn implicit-writes [(op i64)] (-> u64) (get IMPLICIT-WRITES op))")
     (t/emit! (mut o) (.immediate-text spec))

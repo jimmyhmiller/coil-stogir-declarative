@@ -12,6 +12,7 @@ import target as isa
 import abi as abi
 
 column final-first: Block -> Int      # a block's first final instruction
+column onward: Block -> Block         # for a block that is only a jump: where it jumps
 state final-start: Int                # final instructions follow the selected ones
 state frame: Int                      # bytes of frame, a multiple of 16
 state saved: Word                     # the registers the caller expects back unchanged
@@ -24,6 +25,7 @@ state code-bytes: Int
 state reloc-at: [Int]                  # the words that depend on a symbol's address,
 state reloc-symbol: [Int]              # the symbol,
 state reloc-op: [Int]                  # and the instruction there
+state dropped: Int                     # a jump that the branch before it made needless
 
 fn marker(r: Int) -> Int = 0 - r - 1
 
@@ -170,7 +172,71 @@ fn bring(p: Block, s: Block) {
   flush-moves()
 }
 
+# Whether `i` is a branch with an opposite.
+fn turns?(i: Inst) -> Bool = isa.opposite-op(i.inst-op) != 0 or isa.opposite-turn(i.inst-op) >= 0
+
+# Branch `i` the other way round, to block `to`: its opposite instruction, or
+# itself with the operand that says which way turned.
+fn turned(i: Inst, to: Int) {
+  let op = i.inst-op
+  let turn = isa.opposite-turn(op)
+  var x0 = resolve(i, 0)
+  var x1 = resolve(i, 1)
+  var x2 = resolve(i, 2)
+  if isa.operand-kind(op, 0) == isa.K-LABEL { x0 = to }
+  if isa.operand-kind(op, 1) == isa.K-LABEL { x1 = to }
+  if isa.operand-kind(op, 2) == isa.K-LABEL { x2 = to }
+  if turn == 0 { x0 = if x0 % 2 == 0 then x0 + 1 else x0 - 1 }
+  if turn == 1 { x1 = if x1 % 2 == 0 then x1 + 1 else x1 - 1 }
+  if turn == 2 { x2 = if x2 % 2 == 0 then x2 + 1 else x2 - 1 }
+  mach.emit(if isa.opposite-op(op) != 0 then isa.opposite-op(op) else op, x0, x1, x2, resolve(i, 3), resolve(i, 4))
+}
+
+# Whether the values live into `s` are, at the end of `p`, already where `s`
+# expects them: the edge needs no moves.
+fn settled?(p: Block, s: Block) -> Bool {
+  for v in s.live-in {
+    if v.first-piece.next-piece != none {
+      let to = alloc.piece-at(v, 2 * s.first-inst)
+      let from = alloc.piece-at(v, 2 * p.last-inst + 1)
+      if not to.in-frame and to.reg != 0 {
+        if from.in-frame or from.reg == 0 or from.reg != to.reg { return false }
+      }
+    }
+  }
+  true
+}
+
+# A block that is one jump, reached and left with nothing to move, is no code
+# at all: what goes to it goes to where it jumps.
+fn find-onward() {
+  for b in order {
+    if b.first-inst == b.last-inst and id(b.first-inst).kind == 2 and b.preds.len == 1 and b.succs.len == 1 and b.succs[0] != b {
+      let i: Inst = id(b.first-inst)
+      if settled?(b.preds[0], b) and settled?(b, b.succs[0]) { b.onward = b.succs[0] }
+    }
+  }
+}
+
+# Where a jump to block `b` ends up, through blocks that are only jumps.
+fn lands(b: Block) -> Block {
+  var x = b
+  var steps = 0
+  while x.onward != none and steps < 64 {
+    x = x.onward
+    steps = steps + 1
+  }
+  x
+}
+
+# The block `i` jumps or branches to, as it lands; 0 if `i` names no block.
+fn goes(i: Inst) -> Int {
+  let l = label-of(i)
+  if l == 0 then 0 else int(lands(id(l)))
+}
+
 fn rewrite(i: Inst, next: Int) {
+  if int(i) == dropped { return }
   let op = i.inst-op
   let x0 = resolve(i, 0)
   let x1 = resolve(i, 1)
@@ -178,7 +244,7 @@ fn rewrite(i: Inst, next: Int) {
   let x3 = resolve(i, 3)
   let x4 = resolve(i, 4)
   let same-register = i.kind == 1 and placed(i.copy-to, 2 * int(i) + 1) == placed(i.copy-from, 2 * int(i))
-  let falls-through = i.kind == 2 and label-of(i) == next
+  let falls-through = i.kind == 2 and goes(i) == next
   if i.kind == 4 {
     # A parameter from the caller's frame, now that this frame's size is known.
     let d = placed(i.copy-to, 2 * int(i) + 1)
@@ -215,7 +281,7 @@ fn encoded(i: Inst, k: Int, placed: Bool) -> Int {
   let kind = isa.operand-kind(op, k)
   let a = mach.arg(i, k)
   if alloc.reg-kind?(kind) { return 0 - a - 1 }
-  if kind == isa.K-LABEL { return if placed then block-offset(id(a)) - i.offset else 0 }
+  if kind == isa.K-LABEL { return if placed then block-offset(lands(id(a))) - i.offset else 0 }
   if kind == isa.K-SYMBOL { return 0 }
   a
 }
@@ -306,6 +372,28 @@ fn leave() {
   lower.shrink-stack(frame)
 }
 
+# The final code of block `b`, which block `next` follows.
+fn block-code(b: Block, next: Int) {
+  # A block with one way in, from a block with two ways out, takes its values here.
+  if b.preds.len == 1 and b.preds[0].succs.len > 1 { bring(b.preds[0], b) }
+  for at in b.first-inst..b.last-inst + 1 {
+    let i = id(at)
+    if at != b.first-inst {
+      for p in i.starts-even { transition(p) }
+      flush-moves()
+    }
+    # Before a block's closing jump, the values the next block expects.
+    if at == b.last-inst and b.succs.len == 1 { bring(b, b.succs[0]) }
+    # A branch to the next block, then a jump elsewhere, is the opposite
+    # branch to elsewhere, if the branch is the block's only one.
+    let last = id(b.last-inst)
+    if at + 1 == b.last-inst and turns?(i) and goes(i) == next and next != 0 and last.kind == 2 and goes(last) != next and (at == b.first-inst or label-of(id(at - 1)) == 0) {
+      turned(i, goes(last))
+      dropped = b.last-inst
+    } else { rewrite(i, next) }
+  }
+}
+
 fn run() {
   saved = (used | pinned-writes) & isa.CALLEE-SAVED
   if dynamic { saved = set-bit(saved, abi.BASE) }
@@ -318,22 +406,14 @@ fn run() {
   frame = ((out-slots + slots + bit-count(saved) + abi.RETURN-SLOTS) * 8 + object-bytes + 15) / 16 * 16 - abi.RETURN-SLOTS * 8
   final-start = Inst.count
   if frame > 0 { enter() }
+  find-onward()
   for index in 0..order.len {
     let b = order[index]
-    let next = if index + 1 < order.len then int(order[index + 1]) else 0
+    # The next block that is code.
+    var after = index + 1
+    while after < order.len and order[after].onward != none { after = after + 1 }
     b.final-first = Inst.count + 1
-    # A block with one way in, from a block with two ways out, takes its values here.
-    if b.preds.len == 1 and b.preds[0].succs.len > 1 { bring(b.preds[0], b) }
-    for at in b.first-inst..b.last-inst + 1 {
-      let i = id(at)
-      if at != b.first-inst {
-        for p in i.starts-even { transition(p) }
-        flush-moves()
-      }
-      # Before a block's closing jump, the values the next block expects.
-      if at == b.last-inst and b.succs.len == 1 { bring(b, b.succs[0]) }
-      rewrite(i, next)
-    }
+    if b.onward == none { block-code(b, if after < order.len then int(order[after]) else 0) }
   }
   # The entry block's code starts at the frame's opening.
   order[0].final-first = final-start + 1

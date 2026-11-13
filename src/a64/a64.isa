@@ -99,9 +99,10 @@ inst movk(sf: u1, rd: mod gpr, imm: u16, hw: u2)          = sf 11 100101 hw imm 
 # Control. A label is a distance in bytes, of which a field holds all but the
 # two low bits, which are always zero.
 inst b(to: label)                                         = 000101 to[27:2]
-inst b-cond(cond: u4, to: label)                          = 01010100 to[20:2] 0 cond
-inst cbz(sf: u1, rt: use gpr, to: label)                  = sf 0110100 to[20:2] rt
-inst cbnz(sf: u1, rt: use gpr, to: label)                 = sf 0110101 to[20:2] rt
+# A conditional branch names its opposite: the branch taken when it is not.
+inst b-cond(cond: u4, to: label)                          = 01010100 to[20:2] 0 cond      opposite cond
+inst cbz(sf: u1, rt: use gpr, to: label)                  = sf 0110100 to[20:2] rt        opposite cbnz
+inst cbnz(sf: u1, rt: use gpr, to: label)                 = sf 0110101 to[20:2] rt        opposite cbz
 inst brk(imm: u16)                                        = 11010100001 imm 00000
 inst ret(rn: use gpr)                                     = 1101011001011111000000 rn 00000
 # Machine code given as it is.
