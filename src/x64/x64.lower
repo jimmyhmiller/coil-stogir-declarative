@@ -273,8 +273,8 @@ rule COND(c, x, y) when not float  => move(out, y) ; test(0, c, c) ; cmov(sf, no
 # Against a constant that fits, the constant needs no register.
 rule EQ(a, CONST k) when s32(k)   => cmp-imm(sf(a), zx(a), k) ; setcc(equal, $t) ; movzx8(out, $t)
 rule NE(a, CONST k) when s32(k)   => cmp-imm(sf(a), zx(a), k) ; setcc(not-equal, $t) ; movzx8(out, $t)
-rule LT(a, CONST k) when s32(k)   => cmp-imm(sf(a), sx(a), k) ; setcc(less, $t) ; movzx8(out, $t)
-rule LE(a, CONST k) when s32(k)   => cmp-imm(sf(a), sx(a), k) ; setcc(less-equal, $t) ; movzx8(out, $t)
+rule LT(a, CONST k) when s32(k) and (bits(a) >= 32 or k < 128)   => cmp-imm(sf(a), sx(a), k) ; setcc(less, $t) ; movzx8(out, $t)
+rule LE(a, CONST k) when s32(k) and (bits(a) >= 32 or k < 128)   => cmp-imm(sf(a), sx(a), k) ; setcc(less-equal, $t) ; movzx8(out, $t)
 rule ULT(a, CONST k) when s32(k)  => cmp-imm(sf(a), zx(a), k) ; setcc(below, $t) ; movzx8(out, $t)
 rule ULE(a, CONST k) when s32(k)  => cmp-imm(sf(a), zx(a), k) ; setcc(below-equal, $t) ; movzx8(out, $t)
 rule EQ(a, b)   => cmp(sf(a), zx(a), zx(b)) ; setcc(equal, $t) ; movzx8(out, $t)
@@ -284,11 +284,14 @@ rule LE(a, b)   => cmp(sf(a), sx(a), sx(b)) ; setcc(less-equal, $t) ; movzx8(out
 rule ULT(a, b)  => cmp(sf(a), zx(a), zx(b)) ; setcc(below, $t) ; movzx8(out, $t)
 rule ULE(a, b)  => cmp(sf(a), zx(a), zx(b)) ; setcc(below-equal, $t) ; movzx8(out, $t)
 
+# A signed comparison of a value narrower than 32 bits with a constant takes
+# this way only if the constant is not negative: a negative one is held as its
+# low bits, which is not the number.
 # A branch on a comparison uses its flags directly.
 rule IF(_, EQ(a, CONST k)) when s32(k)  => cmp-imm(sf(a), zx(a), k) ; jcc(equal, then) ; jump(else)
 rule IF(_, NE(a, CONST k)) when s32(k)  => cmp-imm(sf(a), zx(a), k) ; jcc(not-equal, then) ; jump(else)
-rule IF(_, LT(a, CONST k)) when s32(k)  => cmp-imm(sf(a), sx(a), k) ; jcc(less, then) ; jump(else)
-rule IF(_, LE(a, CONST k)) when s32(k)  => cmp-imm(sf(a), sx(a), k) ; jcc(less-equal, then) ; jump(else)
+rule IF(_, LT(a, CONST k)) when s32(k) and (bits(a) >= 32 or k < 128)  => cmp-imm(sf(a), sx(a), k) ; jcc(less, then) ; jump(else)
+rule IF(_, LE(a, CONST k)) when s32(k) and (bits(a) >= 32 or k < 128)  => cmp-imm(sf(a), sx(a), k) ; jcc(less-equal, then) ; jump(else)
 rule IF(_, ULT(a, CONST k)) when s32(k) and (k >= 0 or bits(a) == 64) => cmp-imm(sf(a), zx(a), k) ; jcc(below, then) ; jump(else)
 rule IF(_, ULE(a, CONST k)) when s32(k) and (k >= 0 or bits(a) == 64) => cmp-imm(sf(a), zx(a), k) ; jcc(below-equal, then) ; jump(else)
 rule IF(_, EQ(a, b))   => cmp(sf(a), zx(a), zx(b)) ; jcc(equal, then) ; jump(else)
