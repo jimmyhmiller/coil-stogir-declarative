@@ -15,6 +15,40 @@ state forwarded: Int
 fn clobbers?(n: Node) -> Bool =
   n is CALL or n is COPY or n is FILL or n is ATOMIC-STORE or n is RESERVE or cfg.update?(n)
 
+# What an address is an offset from, and the offset.
+fn base(a: Node) -> Node =
+  if a is ADD and a.in(1) is CONST then a.in(0) else if a is ADD and a.in(0) is CONST then a.in(1) else a
+
+fn offset(a: Node) -> Int =
+  if a is ADD and a.in(1) is CONST then int(a.in(1).payload) else if a is ADD and a.in(0) is CONST then int(a.in(0).payload) else 0
+
+# Whether `bytes` bytes at address `a` and what is known at address `b` are
+# surely different memory: offsets from one base that do not overlap, or two
+# different frame objects.
+fn apart?(a: Node, bytes: Int, b: Node, value: Node) -> Bool {
+  let x = base(a)
+  let y = base(b)
+  if x == y { return offset(a) + bytes <= offset(b) or offset(b) + type-bytes(value.type) <= offset(a) }
+  x is SLOT and y is SLOT
+}
+
+# A store of `bytes` bytes at `address`: what is known of memory it may have
+# written is known no longer.
+fn written(address: Node, bytes: Int) {
+  var kept = 0
+  for i in 0..at.len {
+    if apart?(address, bytes, at[i], as[i]) {
+      at[kept] = at[i]
+      as[kept] = as[i]
+      kept = kept + 1
+    }
+  }
+  while at.len > kept {
+    at.pop()
+    as.pop()
+  }
+}
+
 # `l`, a load, is value `v`: what followed it in control follows what it
 # followed, and what read it reads `v`.
 fn replace(l: Node, v: Node) {
@@ -55,10 +89,9 @@ fn walk(b: Block) {
         as.push(c)
       }
     } else if c is STORE {
-      # A store may write what any known address holds; what it wrote is known.
-      at.clear()
-      as.clear()
-      if c.payload == 0 {
+      # What the store may have written is known no longer; what it wrote is known.
+      written(c.in(1), type-bytes(c.in(2).type))
+      if c.payload == 0 and at.len < 24 {
         at.push(c.in(1))
         as.push(c.in(2))
       }
