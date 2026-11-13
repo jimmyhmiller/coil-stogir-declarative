@@ -243,6 +243,17 @@ rule BITCAST(x) when float and not float(x)  => fmov-from-gpr(sf, out, x)
 rule BITCAST(x) when float(x) and not float  => fmov-to-gpr(sf, out, x)
 rule BITCAST(x)                              => x
 
+# A frame object near the frame record, and a place inside one, is read and
+# written from the frame register: no address is computed.
+rule LOAD(_, p) when width <= 64 and slot(p) and object(p) <= 256 and float => ldur-f(log2(width / 8), out, x29, (512 - object(p)) & 511)
+rule LOAD(_, p) when width <= 64 and slot(p) and object(p) <= 256 => ldur(log2((width + 7) / 8), out, x29, (512 - object(p)) & 511)
+rule LOAD(_, ADD(p, CONST k)) when width <= 64 and slot(p) and k >= 0 and k < object(p) and object(p) - k <= 256 and float => ldur-f(log2(width / 8), out, x29, (512 - (object(p) - k)) & 511)
+rule LOAD(_, ADD(p, CONST k)) when width <= 64 and slot(p) and k >= 0 and k < object(p) and object(p) - k <= 256 => ldur(log2((width + 7) / 8), out, x29, (512 - (object(p) - k)) & 511)
+rule STORE(_, p, v) when bits(v) <= 64 and slot(p) and object(p) <= 256 and float(v) => stur-f(log2(bits(v) / 8), v, x29, (512 - object(p)) & 511)
+rule STORE(_, p, v) when bits(v) <= 64 and slot(p) and object(p) <= 256 => stur(log2((bits(v) + 7) / 8), v, x29, (512 - object(p)) & 511)
+rule STORE(_, ADD(p, CONST k), v) when bits(v) <= 64 and slot(p) and k >= 0 and k < object(p) and object(p) - k <= 256 and float(v) => stur-f(log2(bits(v) / 8), v, x29, (512 - (object(p) - k)) & 511)
+rule STORE(_, ADD(p, CONST k), v) when bits(v) <= 64 and slot(p) and k >= 0 and k < object(p) and object(p) - k <= 256 => stur(log2((bits(v) + 7) / 8), v, x29, (512 - (object(p) - k)) & 511)
+
 rule LOAD(_, ADD(p, CONST k)) when width == 128 and k >= 0 and k < 65536 and k & 15 == 0 => ldr-q(out, p, k >> 4)
 rule LOAD(_, p) when width == 128            => ldr-q(out, p, 0)
 rule STORE(_, ADD(p, CONST k), v) when bits(v) == 128 and k >= 0 and k < 65536 and k & 15 == 0 => str-q(v, p, k >> 4)

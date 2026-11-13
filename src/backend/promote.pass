@@ -32,34 +32,43 @@ fn access-type(u: Node, s: Node) -> Int =
   else if u is STORE and u.in(1) == s and u.in(2) != s and u.payload == 0 then int(u.in(2).type)
   else 0
 
-# Whether a value of type `have` read as type `want` is its low bits: the same
-# type, or integers and `want` no wider.
-fn low-bits?(want: Int, have: Int) -> Bool =
-  want == have or (not float-type?(id(want)) and not float-type?(id(have)) and type-bytes(id(want)) <= type-bytes(id(have)))
+# Whether a value of type `have` can be read as type `want`: the same bytes
+# taken as another type, or integers and `want` the low bits.
+fn readable?(want: Int, have: Int) -> Bool =
+  type-bytes(id(want)) == type-bytes(id(have)) or (not float-type?(id(want)) and not float-type?(id(have)) and type-bytes(id(want)) < type-bytes(id(have)))
 
-# The one type an object is written as, every load being that or the low bits
-# of it, or 0 if it cannot be a value. An object nothing writes is what it is
-# read as, if that is one type.
+# The type an object is as a value: what it is first written as, every other
+# store writing as many bytes and every load reading those or, of an integer,
+# the low ones; or 0 if it cannot be a value. An object nothing writes is what
+# it is read as, if that is one type.
 fn object-type(s: Node) -> Int {
   var t = 0
   for u in users(s) {
     let a = access-type(u, s)
     if a == 0 { return 0 }
     if u is STORE {
-      if t != 0 and a != t { return 0 }
-      t = a
+      if t != 0 and type-bytes(id(a)) != type-bytes(id(t)) { return 0 }
+      if t == 0 { t = a }
     }
   }
   var read = 0
   for u in users(s) {
     if u is LOAD {
       let a = int(u.type)
-      if t != 0 and not low-bits?(a, t) { return 0 }
+      if t != 0 and not readable?(a, t) { return 0 }
       if t == 0 and read != 0 and a != read { return 0 }
       read = a
     }
   }
   if t != 0 then t else read
+}
+
+# Value `v` as type `t`, which is as many bytes: itself, or its bits as `t`.
+fn as-type(v: Node, t: Int) -> Node {
+  if int(v.type) == t { return v }
+  let cast = ir.bitcast!(mut graph, id(t), v)
+  grow-nodes()
+  cast
 }
 
 # The object's value on entry to `b`: what leaves the one block before it, a
@@ -92,7 +101,7 @@ fn entering(b: Block, t: Int) -> Node {
 }
 
 fn leaving(b: Block, t: Int) -> Node =
-  if b.store-mark == serial then b.out-store.in(2) else entering(b, t)
+  if b.store-mark == serial then as-type(b.out-store.in(2), t) else entering(b, t)
 
 # A value that is itself a load of the object stands for what reached that load.
 fn settled(v: Node, s: Node) -> Node {
@@ -103,7 +112,7 @@ fn settled(v: Node, s: Node) -> Node {
 
 # What load `l` reads of value `v`: `v`, or its low bits if the load is narrower.
 fn as-read(l: Node, v: Node) -> Node {
-  if l.type == v.type { return v }
+  if type-bytes(l.type) == type-bytes(v.type) { return as-type(v, int(l.type)) }
   let low = ir.trunc!(mut graph, l.type, v)
   grow-nodes()
   low
@@ -133,7 +142,7 @@ fn promote(s: Node) {
           before = w
         }
       }
-      l.reaching = if before != none then before.in(2) else entering(l.block-of, t)
+      l.reaching = if before != none then as-type(before.in(2), t) else entering(l.block-of, t)
     }
   }
   # Whatever followed an access in control follows what it followed; whatever

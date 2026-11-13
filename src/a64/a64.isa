@@ -174,6 +174,13 @@ inst strb(rt: use gpr, rn: use gpr, imm: u12)             = 0011100100 imm rn rt
 inst strh(rt: use gpr, rn: use gpr, imm: u12)             = 0111100100 imm rn rt
 inst strw(rt: use gpr, rn: use gpr, imm: u12)             = 1011100100 imm rn rt
 
+# Memory at a base plus any offset from -256 to 255, in bytes: `size` is which
+# power of two bytes are read or written, and `-f` is a floating register.
+inst ldur(size: u2, rt: def gpr, rn: use gpr, imm: u9)      = size 111 0 00 01 0 imm 00 rn rt
+inst stur(size: u2, rt: use gpr, rn: use gpr, imm: u9)      = size 111 0 00 00 0 imm 00 rn rt
+inst ldur-f(size: u2, rt: def simd, rn: use gpr, imm: u9)   = size 111 1 00 01 0 imm 00 rn rt
+inst stur-f(size: u2, rt: use simd, rn: use gpr, imm: u9)   = size 111 1 00 00 0 imm 00 rn rt
+
 # The frame: 64-bit loads and stores at a multiple of eight from a base.
 inst ldr(rt: def gpr, rn: use gpr, imm: u12)              = 1111100101 imm rn rt
 inst str(rt: use gpr, rn: use gpr, imm: u12)              = 1111100100 imm rn rt

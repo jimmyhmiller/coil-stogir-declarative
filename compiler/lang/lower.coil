@@ -194,6 +194,18 @@
             (let [x (value-expr (mut l) 0 false)]
               (t/expect! (mut (.c l)) ")")
               (t/cat3 "(let [v* (& " x " 4294967295)] (| v* (<< v* 32)))")))
+      ; `slot(p)`: whether node p is a frame object's address; `object(p)`: how
+      ; far below the frame record that object lies.
+      (and call (= name "slot"))
+        (do (t/advance! (mut (.c l)))
+            (let [x (value-expr (mut l) 0 false)]
+              (t/expect! (mut (.c l)) ")")
+              (t/cat3 "(= (graph/op (.g cx) (primitive/cast i32 " x ")) ir/SLOT)")))
+      (and call (= name "object"))
+        (do (t/advance! (mut (.c l)))
+            (let [x (value-expr (mut l) 0 false)]
+              (t/expect! (mut (.c l)) ")")
+              (t/cat3 "(mach/object-offset (mut cx) (primitive/cast i32 " x "))")))
       (and call (= name "float"))
         (do (t/advance! (mut (.c l)))
             (let [x (value-expr (mut l) 0 false)]

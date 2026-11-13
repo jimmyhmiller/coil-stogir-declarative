@@ -13,7 +13,7 @@ fn at(p: Node, offset: Int) -> Node =
 
 # The type of a piece `bytes` wide.
 fn piece(bytes: Int) -> Int =
-  if bytes == 8 then int(ir.T-U64) else if bytes == 4 then int(ir.T-U32) else if bytes == 2 then int(ir.T-U16) else int(ir.T-U8)
+  if bytes == 8 then int(ir.T-PTR) else if bytes == 4 then int(ir.T-U32) else if bytes == 2 then int(ir.T-U16) else int(ir.T-U8)
 
 # One piece `width` wide at `offset`: copied, or written from `value`, a whole
 # word of what a fill writes. Returns the control after its store.
