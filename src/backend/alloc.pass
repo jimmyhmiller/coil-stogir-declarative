@@ -84,14 +84,8 @@ fn writes?(kind: Int) -> Bool = kind == isa.K-DEF or kind == isa.K-MOD
 
 fn allocatable?(r: Int) -> Bool = isa.in-set?(isa.ALLOCATABLE, r)
 
-# Which operand a copy reads, or -1: `orr d, zr, s` copies an integer
-# register and `fmov d, s` a floating one. Either writes operand 1.
-fn move-operand(i: Inst) -> Int =
-  if i.inst-op == isa.ORR and i.a0 == 1 and i.a2 == 0 - isa.ZR - 1 then 3
-  else if i.inst-op == isa.FMOV and i.a0 == 1 then 2
-  else -1
-
-fn move-source(i: Inst) -> Int = if move-operand(i) < 0 then 0 else mach.arg(i, move-operand(i))
+# What a copy reads, or 0 for an instruction that is not one.
+fn move-source(i: Inst) -> Int = if i.kind == 1 then i.copy-from else 0
 
 # A register `v` may live in: one the allocator may use, of `v`'s class.
 fn fits?(v: Vreg, r: Int) -> Bool = allocatable?(r) and isa.reg-class(r) == v.class
@@ -146,12 +140,12 @@ fn occurrences() {
         let kind = isa.operand-kind(op, k)
         if reg-kind?(kind) { touch(i, kind, mach.arg(i, k), isa.operand-class(op, k)) }
       }
-      also(i, i.also-reads, isa.K-USE)
-      also(i, i.also-writes, isa.K-DEF)
+      also(i, i.also-reads | isa.implicit-reads(op), isa.K-USE)
+      also(i, i.also-writes | isa.implicit-writes(op), isa.K-DEF)
       # Each side of a copy would like the other's register.
       let source = move-source(i)
       if source != 0 {
-        let target = i.a1
+        let target = i.copy-to
         if target > 0 and id(target).hint == 0 { id(target).hint = source }
         if source > 0 and id(source).hint == 0 { id(source).hint = target }
       }

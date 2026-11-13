@@ -12,6 +12,10 @@
 ;;; must be in a register, so its own rule runs; a node matched inside a pattern
 ;;; is computed by this rule and needs none of its own.
 ;;;
+;;; A template may have several cases, each `when` something of its parameters,
+;;; and may say what its instruction is to the passes: `is copy`, `is jump`,
+;;; `is return`. A rule's sequence may use templates as it uses instructions.
+;;;
 ;;; `rule TRUNC(x) => x` says a node is another node: it has no instructions and
 ;;; no register of its own.
 ;;;
@@ -46,7 +50,8 @@
    (bindings (ArrayList Binding))
    (temps (ArrayList (slice u8)))
    (params (ArrayList (slice u8)))
-   (locals (ArrayList (slice u8)))])
+   (locals (ArrayList (slice u8)))
+   (template-names (ArrayList (slice u8)))])
 
 (defn parse-pattern [(l (mut L))] (-> Pat)
   (let [tok (t/peek (mut (.c l)))
@@ -108,7 +113,7 @@
         (= op "&") 6
         (or (= op "<<") (= op ">>")) 7
         (or (= op "+") (= op "-")) 8
-        (= op "*") 9
+        (or (= op "*") (= op "/") (= op "%")) 9
         :else 0))
 
 (defn fits-text [(signed bool) (width i64) (v (slice u8))] (-> (slice u8))
@@ -223,6 +228,23 @@
       (let [tok (t/peek (mut (.c l)))
             name (t/name! (mut (.c l)) "an instruction")
             number (isa/inst-number (.target l) name)]
+        (if (>= (t/index-of (.template-names l) name) 0)
+            ; A template, with whatever it marks its instruction as.
+            (do (t/emit! (mut o) (t/cat3 " (" name " (mut cx)"))
+                (t/expect! (mut (.c l)) "(")
+                (unless (t/at? (mut (.c l)) ")")
+                  (let [(mut going) true]
+                    (while going
+                      (t/emit! (mut o) (t/cat2 " " (value-expr (mut l) 0 true)))
+                      (set! going (t/accept! (mut (.c l)) ",")))))
+                (t/expect! (mut (.c l)) ")")
+                (t/emit! (mut o) ")"))
+            (instruction-text! (mut l) (mut o) tok name number)))
+      (set! more (t/accept! (mut (.c l)) ";")))
+    (t/text-of (mut o))))
+
+(defn instruction-text! [(l (mut L)) (o (mut t/Out)) (tok t/Tok) (name (slice u8)) (number i64)] (-> void)
+  (do
         (when (= number 0) (t/die (mut (.c l)) tok (t/cat2 "the target has no instruction " name)))
         (let [inst (get (.insts (.target l)) (- number 1))
               (mut i) 0]
@@ -239,9 +261,7 @@
             (t/die (mut (.c l)) tok
                    (t/cat4 name " takes " (t/int-text (len (.operands inst))) " operands")))
           (for _ (range i 5) (t/emit! (mut o) " 0"))
-          (t/emit! (mut o) ")")))
-      (set! more (t/accept! (mut (.c l)) ";")))
-    (t/text-of (mut o))))
+          (t/emit! (mut o) ")"))))
 
 ;; ---------------------------------------------------------------- the module
 
@@ -262,7 +282,10 @@
         (mut mach-module) ""
         (mut nodes-file) ""
         (mut target-file) ""
-        (mut locals) (ArrayList::new [(slice u8)] (malloc-allocator))]
+        (mut locals) (ArrayList::new [(slice u8)] (malloc-allocator))
+        (mut template-names) (ArrayList::new [(slice u8)] (malloc-allocator))]
+    (for one (templates (t/source-of context) path)
+      (when (< (t/index-of template-names (get one 0)) 0) (push! (mut template-names) (get one 0))))
     (t/expect! (mut c) "lower")
     (t/expect! (mut c) "in")
     (set! unit (project/resolve p (module-name! (mut c)) 1 1))
@@ -288,12 +311,16 @@
                     :bindings (ArrayList::new [Binding] (malloc-allocator))
                     :temps (ArrayList::new [(slice u8)] (malloc-allocator))
                     :params (ArrayList::new [(slice u8)] (malloc-allocator))
-                    :locals locals)
+                    :locals locals
+                    :template-names template-names)
           (mut o) (t/out-new)
           (mut selects) (t/out-new)
           (mut marks) (t/out-new)
           (mut emits) (t/out-new)
           (mut aliases) (t/out-new)
+          (mut template-order) (ArrayList::new [(slice u8)] (malloc-allocator))
+          (mut template-heads) (ArrayList::new [(slice u8)] (malloc-allocator))
+          (mut template-cases) (ArrayList::new [(slice u8)] (malloc-allocator))
           (mut rule) 0
           names (templates (t/source-of context) path)
           (mut extends) false]
@@ -309,20 +336,42 @@
         (let [tok (t/advance! (mut (.c l)))]
           (cond
             (t/tok-is? tok "template")
-              (let [name (t/name! (mut (.c l)) "a template name")]
+              (let [name (t/name! (mut (.c l)) "a template name")
+                    (mut header) (t/out-new)
+                    (mut index) (t/index-of template-order name)]
                 (clear! (mut (.params l)))
                 (clear! (mut (.bindings l)))
                 (clear! (mut (.temps l)))
-                (t/emit! (mut o) (t/cat3 "(defn " name " [(cx (mut st/State))"))
+                (t/emit! (mut header) (t/cat3 "(defn " name " [(cx (mut st/State))"))
                 (t/expect! (mut (.c l)) "(")
                 (while (not (t/accept! (mut (.c l)) ")"))
                   (let [param (t/name! (mut (.c l)) "a parameter")]
                     (push! (mut (.params l)) param)
-                    (t/emit! (mut o) (t/cat3 " (" param " i64)"))
+                    (t/emit! (mut header) (t/cat3 " (" param " i64)"))
                     (t/accept! (mut (.c l)) ",")))
-                (t/expect! (mut (.c l)) "=")
-                (t/line! (mut o) "] (-> void)")
-                (t/line! (mut o) (t/cat3 "  (do" (sequence-text (mut l)) " (do)))")))
+                (t/line! (mut header) "] (-> void)")
+                (when (< index 0)
+                  (push! (mut template-order) name)
+                  (push! (mut template-heads) (t/text-of (mut header)))
+                  (push! (mut template-cases) "")
+                  (set! index (- (len template-order) 1)))
+                ; `is copy`: its instruction copies its second parameter to its
+                ; first. `is jump`: it only goes to its label. `is return`: it
+                ; leaves the function.
+                (let [kind (if (t/accept! (mut (.c l)) "is") (t/name! (mut (.c l)) "copy, jump or return") "")
+                      guard (if (t/accept! (mut (.c l)) "when") (value-expr (mut l) 0 false) "true")]
+                  (t/expect! (mut (.c l)) "=")
+                  (let [body (sequence-text (mut l))
+                        mark (cond (= kind "copy")
+                                     (t/cat4 " (mach/mark-copy (mut cx) " (get (.params l) 0) " "
+                                             (t/cat2 (get (.params l) 1) ")"))
+                                   (= kind "jump") " (mach/mark-jump (mut cx))"
+                                   (= kind "return") " (mach/mark-return (mut cx))"
+                                   (= kind "") ""
+                                   :else (t/die (mut (.c l)) tok "a template is copy, jump or return"))]
+                    (set! (mut template-cases) index
+                          (t/cat4 (get template-cases index) "    " guard
+                                  (t/cat4 " (do" body mark " (do))\n"))))))
             (t/tok-is? tok "rule")
               (let [pattern (parse-pattern (mut l))
                     commutative (and (!= (.node pattern) "")
@@ -370,6 +419,12 @@
                                 (t/emit! (mut emits) (t/cat3 "t*" temp " (mach/fresh (mut cx)) ")))
                               (t/line! (mut emits) (t/cat3 "] (do" body " (do))))")))))))))
             :else (t/die (mut (.c l)) tok (t/cat2 "expected rule or template, found " (.text tok))))))
+      ; A template is its cases, the first whose condition holds.
+      (for i (range 0 (len template-order))
+        (t/emit! (mut o) (get template-heads i))
+        (t/line! (mut o) "  (cond")
+        (t/emit! (mut o) (get template-cases i))
+        (t/line! (mut o) (t/cat3 "    :else (panic \"no case of template " (get template-order i) " applies\")))")))
       (t/line! (mut o) ";;; The rule that computes `n`, or 0 if none matches.")
       (t/line! (mut o) "(defn select [(cx (mut st/State)) (n i32)] (-> i64)")
             (t/line! (mut o) "  (cond")
@@ -435,11 +490,14 @@
     (while (not (t/eof? (mut c)))
       (let [tok (t/advance! (mut c))]
         (when (and (t/tok-is? tok "template") (= (.col tok) 1))
-          (let [(mut one) (ArrayList::new [(slice u8)] (malloc-allocator))]
+          (let [(mut one) (ArrayList::new [(slice u8)] (malloc-allocator))
+                (mut seen) false]
             (push! (mut one) (t/name! (mut c) "a template name"))
             (t/expect! (mut c) "(")
             (while (not (t/accept! (mut c) ")"))
               (push! (mut one) (t/name! (mut c) "a parameter"))
               (t/accept! (mut c) ","))
-            (push! (mut out) one)))))
+            ; A template with several cases is one function.
+            (for other out (when (= (get other 0) (get one 0)) (set! seen true)))
+            (unless seen (push! (mut out) one))))))
     out))

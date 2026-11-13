@@ -3,7 +3,8 @@
 ;;;   target backend.a64
 ;;;   integers x0..x7        # integer arguments, in order; the rest go on the stack
 ;;;   result x0
-;;;   link x30               # where a call leaves its return address
+;;;   link x30               # where a call leaves its return address, or
+;;;   return-address 8       # how many bytes of it a call leaves on the stack
 ;;;   frame x29              # the frame record's register
 ;;;
 ;;; From it: `int-arg` (the register of the i-th integer argument, or -1 for the
@@ -33,7 +34,9 @@
   (let [p (project/open context)
         path (t/path-of context)
         (mut c) (t/cursor (t/source-of context) path)
-        (mut o) (t/out-new)]
+        (mut o) (t/out-new)
+        (mut link) false
+        (mut return-slots) 0]
     (t/expect! (mut c) "target")
     (let [at (t/peek (mut c))
           target (module-name! (mut c))
@@ -71,9 +74,16 @@
             (t/tok-is? tok "result")
               (t/line! (mut o) (t/cat3 "(const RESULT " (t/int-text (reg! (mut c) spec)) ")"))
             (t/tok-is? tok "link")
-              (t/line! (mut o) (t/cat3 "(const LINK " (t/int-text (reg! (mut c) spec)) ")"))
+              (do (set! link true)
+                  (t/line! (mut o) (t/cat3 "(const LINK " (t/int-text (reg! (mut c) spec)) ")")))
+            ; `return-address 8`: a call leaves that many bytes on the stack.
+            (t/tok-is? tok "return-address")
+              (set! return-slots (/ (cast i64 (t/num! (mut c) "a number of bytes")) 8))
             (t/tok-is? tok "frame")
               (t/line! (mut o) (t/cat3 "(const FRAME " (t/int-text (reg! (mut c) spec)) ")"))
             :else (t/die (mut c) tok (t/cat2 "expected integers, result, link or frame, found "
                                              (.text tok)))))))
+    ; A machine whose calls leave the return address on the stack has no link register.
+    (unless link (t/line! (mut o) "(const LINK -1)"))
+    (t/line! (mut o) (t/cat3 "(const RETURN-SLOTS " (t/int-text return-slots) ")"))
     (t/text-of (mut o))))

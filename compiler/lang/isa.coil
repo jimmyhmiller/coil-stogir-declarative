@@ -44,7 +44,8 @@
 ;;; instruction's).
 (defstruct Inst
   [(name (slice u8)) (operands (ArrayList Operand)) (pieces (ArrayList Piece)) (line i64)
-   (reloc (slice u8)) (formula (slice u8))])
+   (reloc (slice u8)) (formula (slice u8))
+   (reads (ArrayList (slice u8))) (writes (ArrayList (slice u8)))])
 
 (defstruct Spec
   [(word i64)
@@ -149,7 +150,9 @@
                      :pieces (ArrayList::new [Piece] (malloc-allocator))
                      :line (.line at)
                      :reloc ""
-                     :formula "")
+                     :formula ""
+                     :reads (ArrayList::new [(slice u8)] (malloc-allocator))
+                     :writes (ArrayList::new [(slice u8)] (malloc-allocator)))
         (mut total) 0]
     (when (!= (inst-number spec name) 0) (t/die (mut c) at (t/cat2 "instruction declared twice: " name)))
     (t/expect! (mut c) "(")
@@ -161,7 +164,8 @@
     (t/expect! (mut c) ")")
     (when (> (len (.operands inst)) 5) (t/die (mut c) at "an instruction has at most five operands"))
     (t/expect! (mut c) "=")
-    (while (and (not (t/at-line-start? (mut c))) (not (t/at? (mut c) "reloc")))
+    (while (and (not (t/at-line-start? (mut c))) (not (t/at? (mut c) "reloc"))
+                (not (t/at? (mut c) "reads")) (not (t/at? (mut c) "writes")))
       (let [tok (t/advance! (mut c))]
         (cond
           (= (.kind tok) t/T-NUM)
@@ -198,7 +202,25 @@
       (set! (.reloc inst) (t/name! (mut c) "a relocation name"))
       (t/expect! (mut c) "=")
       (set! (.formula inst) (formula-expr (mut c) 0)))
+    ; Registers the instruction reads and writes without naming them as operands.
+    (let [(mut more) true]
+      (while more
+        (cond (t/accept! (mut c) "reads") (set! (.reads inst) (parse-until-keyword (mut c)))
+              (t/accept! (mut c) "writes") (set! (.writes inst) (parse-until-keyword (mut c)))
+              :else (set! more false))))
     (push! (mut (.insts spec)) inst)))
+
+;;; Register names up to the end of the line or the next `reads` or `writes`.
+(defn parse-until-keyword [(c (mut t/Cur))] (-> (ArrayList (slice u8)))
+  (let [(mut out) (ArrayList::new [(slice u8)] (malloc-allocator))]
+    (while (and (t/at-ident? (mut c)) (not (t/at-line-start? (mut c)))
+                (not (t/at? (mut c) "reads")) (not (t/at? (mut c) "writes")))
+      (let [at (t/peek (mut c))
+            name (t/name! (mut c) "a register")]
+        (if (t/accept! (mut c) "..")
+            (for r (expand-range (mut c) at name (t/name! (mut c) "a register")) (push! (mut out) r))
+            (push! (mut out) name))))
+    out))
 
 ;;; A relocation's value: arithmetic over S, G and P, and `page(x)`.
 (defn formula-level [(op (slice u8))] (-> i64)
@@ -421,6 +443,20 @@
                                (t/cat4 (.formula inst) "] (| word (primitive/cast u32 (|"
                                        (t/text-of (mut fields)) " (: 0 u64))))))")))))))
       (t/line! (mut o) "    (_ word)))"))
+    (t/emit! (mut o) "(def IMPLICIT-READS [(: 0 u64)")
+    (for inst (.insts spec)
+      (let [(mut mask) (: 0 u64)]
+        (for name (.reads inst) (set! mask (| mask (<< (: 1 u64) (cast u64 (reg-number spec name))))))
+        (t/emit! (mut o) (t/cat2 " " (t/u64-text mask)))))
+    (t/line! (mut o) "])")
+    (t/emit! (mut o) "(def IMPLICIT-WRITES [(: 0 u64)")
+    (for inst (.insts spec)
+      (let [(mut mask) (: 0 u64)]
+        (for name (.writes inst) (set! mask (| mask (<< (: 1 u64) (cast u64 (reg-number spec name))))))
+        (t/emit! (mut o) (t/cat2 " " (t/u64-text mask)))))
+    (t/line! (mut o) "])")
+    (t/line! (mut o) "(defn implicit-reads [(op i64)] (-> u64) (get IMPLICIT-READS op))")
+    (t/line! (mut o) "(defn implicit-writes [(op i64)] (-> u64) (get IMPLICIT-WRITES op))")
     (t/line! (mut o) "(defn word-of [(op i64) (a i64) (b i64) (c i64) (d i64) (e i64)] (-> u32)")
     (t/line! (mut o) "  (match op")
     (for i (range 0 (len (.insts spec)))

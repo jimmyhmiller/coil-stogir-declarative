@@ -47,6 +47,18 @@ fn resolve(i: Inst, k: Int) -> Int {
   marker(p.reg - 1)
 }
 
+# A register operand `a` as the machine register it is at `pos`.
+fn placed(a: Int, pos: Int) -> Int = if a < 0 then a else marker(here(id(a), pos).reg - 1)
+
+# The block an instruction jumps to: its label operand.
+fn label-of(i: Inst) -> Int {
+  let op = i.inst-op
+  for k in 0..isa.operand-count(op) {
+    if isa.operand-kind(op, k) == isa.K-LABEL { return mach.arg(i, k) }
+  }
+  0
+}
+
 # A value that waits in the frame anywhere is stored there wherever it is written.
 fn finish(i: Inst, k: Int) {
   let op = i.inst-op
@@ -148,12 +160,11 @@ fn rewrite(i: Inst, next: Int) {
   var x2 = resolve(i, 2)
   let x3 = resolve(i, 3)
   let x4 = resolve(i, 4)
-  let from = alloc.move-operand(i)
-  let same-register = (from == 3 and x1 == x3) or (from == 2 and x1 == x2)
-  let falls-through = op == isa.B and x0 == next
+  let same-register = i.kind == 1 and placed(i.copy-to, 2 * int(i) + 1) == placed(i.copy-from, 2 * int(i))
+  let falls-through = i.kind == 2 and label-of(i) == next
   if not same-register and not falls-through {
-    if op == isa.RET and frame > 0 { leave() }
-    if i.above-frame { x2 = x2 + frame / 8 }
+    if i.kind == 3 and frame > 0 { leave() }
+    if i.above-frame { x2 = x2 + frame / 8 + abi.RETURN-SLOTS }
     mach.emit(op, x0, x1, x2, x3, x4)
   }
   for k in 0..5 { finish(i, k) }
@@ -206,26 +217,28 @@ fn encode() {
 }
 
 # The frame, from the stack pointer up: arguments for calls, values that have
-# no register, frame objects, then the frame record (x29 and the return
-# address, side by side, with x29 pointing at it) and the other registers the
+# no register, frame objects, then the frame record (the caller's frame register and,
+# on machines with a link register, the return address, with the frame
+# register pointing at it) and the other registers the
 # caller expects back. Frame objects end at the frame record, so each is a
-# fixed distance below x29.
+# fixed distance below the frame register.
 fn record-slot() -> Int = out-slots + slots + object-bytes / 8
 
 fn keeps-record?() -> Bool = has-bit(saved, abi.FRAME)
 
 fn enter() {
-  if frame % 4096 != 0 { lower.grow-stack(frame % 4096) }
-  if frame >= 4096 { lower.grow-pages(frame / 4096) }
+  lower.grow-stack(frame)
   var at = record-slot()
   if keeps-record?() {
     lower.to-frame(marker(abi.FRAME), at)
-    lower.to-frame(marker(abi.LINK), at + 1)
-    lower.frame-record(at * 8 % 4096)
-    if at * 8 >= 4096 { lower.frame-pages(at * 8 / 4096) }
-    at = at + 2
+    at = at + 1
+    if abi.LINK >= 0 {
+      lower.to-frame(marker(abi.LINK), at)
+      at = at + 1
+    }
+    lower.frame-record(record-slot() * 8)
   }
-  var rest = clear-bit(clear-bit(saved, abi.FRAME), abi.LINK)
+  var rest = others-saved()
   while rest != word(0) {
     let r = lowest-bit(rest)
     keep(r, at)
@@ -238,27 +251,37 @@ fn leave() {
   var at = record-slot()
   if keeps-record?() {
     lower.from-frame(marker(abi.FRAME), at)
-    lower.from-frame(marker(abi.LINK), at + 1)
-    at = at + 2
+    at = at + 1
+    if abi.LINK >= 0 {
+      lower.from-frame(marker(abi.LINK), at)
+      at = at + 1
+    }
   }
-  var rest = clear-bit(clear-bit(saved, abi.FRAME), abi.LINK)
+  var rest = others-saved()
   while rest != word(0) {
     let r = lowest-bit(rest)
     fetch(r, at)
     at = at + 1
     rest = clear-bit(rest, r)
   }
-  if frame % 4096 != 0 { lower.shrink-stack(frame % 4096) }
-  if frame >= 4096 { lower.shrink-pages(frame / 4096) }
+  lower.shrink-stack(frame)
 }
+
+# The saved registers that are not part of the frame record.
+fn others-saved() -> Word =
+  if abi.LINK >= 0 then clear-bit(clear-bit(saved, abi.FRAME), abi.LINK) else clear-bit(saved, abi.FRAME)
 
 fn run() {
   saved = used & isa.CALLEE-SAVED
-  if calls or object-bytes > 0 { saved = set-bit(set-bit(saved, abi.FRAME), abi.LINK) }
+  if calls or object-bytes > 0 {
+    saved = set-bit(saved, abi.FRAME)
+    if abi.LINK >= 0 { saved = set-bit(saved, abi.LINK) }
+  }
   # The frame record sits a multiple of 16 above the stack pointer, so that
   # objects aligned below it are aligned in memory.
   if (out-slots + slots) % 2 == 1 { slots = slots + 1 }
-  frame = ((out-slots + slots + bit-count(saved)) * 8 + object-bytes + 15) / 16 * 16
+  # With the return address a call left there, the stack is a multiple of 16.
+  frame = ((out-slots + slots + bit-count(saved) + abi.RETURN-SLOTS) * 8 + object-bytes + 15) / 16 * 16 - abi.RETURN-SLOTS * 8
   final-start = Inst.count
   if frame > 0 { enter() }
   for index in 0..order.len {
