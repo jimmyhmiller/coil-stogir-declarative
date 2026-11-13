@@ -240,6 +240,17 @@ fn occurs(v: Vreg, at: Int, after: Int) {
   if after > v.last-touch { v.last-touch = after }
 }
 
+# `v` is written afresh at `at`, nothing of what it held being read again:
+# between its last reading in this block and here it holds nothing, and its
+# register is free for something else.
+fn rewritten(v: Vreg, at: Int) {
+  if v.open-from != 0 and v.last-touch <= at {
+    add-range(v.first-piece, v.open-from, v.last-touch)
+    v.open-from = at
+    v.last-touch = 0
+  }
+}
+
 # Block by block in layout order: a value's range in a block runs from the
 # block's start if it is live in, else from where it is written, to the
 # block's end if it is live out, else to just after its last use.
@@ -262,12 +273,19 @@ fn build-ranges() {
     for at in b.first-inst..b.last-inst + 1 {
       let i = id(at)
       let op = i.inst-op
+      # What the instruction reads, then what it writes: one that reads a
+      # value and writes it afresh reads the old one first.
       for k in 0..isa.operand-count(op) {
         let kind = isa.operand-kind(op, k)
         let a = mach.arg(i, k)
-        if reg-kind?(kind) and a > 0 {
-          if kind != isa.K-DEF { occurs(id(a), 2 * at, 2 * at + 1) }
-          if writes?(kind) { occurs(id(a), 2 * at + 1, 2 * at + 2) }
+        if reg-kind?(kind) and a > 0 and kind != isa.K-DEF { occurs(id(a), 2 * at, 2 * at + 1) }
+      }
+      for k in 0..isa.operand-count(op) {
+        let kind = isa.operand-kind(op, k)
+        let a = mach.arg(i, k)
+        if reg-kind?(kind) and a > 0 and writes?(kind) {
+          if kind == isa.K-DEF { rewritten(id(a), 2 * at + 1) }
+          occurs(id(a), 2 * at + 1, 2 * at + 2)
         }
       }
     }
