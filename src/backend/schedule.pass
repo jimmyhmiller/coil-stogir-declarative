@@ -175,7 +175,7 @@ fn build() {
   # A constant that takes several instructions to make, placed outside a loop
   # that something reading it is in, is made once there and not every time round.
   for n in Node {
-    if not n.dead and n is CONST and n.block-of != none and (n.float or int(n.payload) > 65535 or int(n.payload) < -65536) {
+    if cfg.on?(8) and not n.dead and n is CONST and n.block-of != none and (n.float or int(n.payload) > 65535 or int(n.payload) < -65536) {
       if any u in users(n): u.block-of != none and u.block-of.loop-depth > n.block-of.loop-depth { n.kept = true }
     }
   }

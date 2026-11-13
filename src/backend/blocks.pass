@@ -3,6 +3,7 @@
 # done when the count is not a multiple of its width. More than that is a call
 # of the routine the unit was told of.
 pass in unit
+use cfg as cfg
 
 setting copy-routine: Int              # one more than the symbols of routines outside the image that
 setting fill-routine: Int              # copy and fill any number of bytes; 0 if there is none
@@ -102,6 +103,7 @@ fn routine(n: Node) -> Int =
 # A call of the C library's memcpy, memmove or memset for a known few bytes is
 # those loads and stores; what the call answers is where it wrote.
 fn known-call(n: Node) {
+  if not cfg.on?(7) { return }
   let kind = routine(n)
   if kind != 2 and kind != 3 and kind != 4 { return }
   if not (n.in(4) is CONST) or n.in(4).payload > word(if kind == 3 then 64 else inline-bytes) { return }
@@ -146,7 +148,7 @@ fn zero-tested?(v: Node, deep: Int) -> Bool {
 # asked is whether they were the same, is those bytes read and compared: the
 # answer is 0 if they were and 1 if not.
 fn compare(n: Node) {
-  if routine(n) != 5 or not (n.in(4) is CONST) or n.in(4).payload > word(16) { return }
+  if not cfg.on?(7) or routine(n) != 5 or not (n.in(4) is CONST) or n.in(4).payload > word(16) { return }
   var result: Node = none
   for u in users(n) {
     if u is RESULT {

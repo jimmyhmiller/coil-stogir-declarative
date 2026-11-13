@@ -20,6 +20,14 @@ column laid: Block -> Bool            # given its place in the code
 # For finding which function something new goes wrong in: whoever compiles
 # sets this for some functions only, and what is being tried asks it.
 setting trial: Bool
+# And for finding which of the things done to a function goes wrong: each is
+# numbered, and is not done if its bit is set here.
+#   0 loops turned   1 loads hoisted   2 ways parted   3 branches learnt from
+#   4 self calls looped   5 switches split   6 unread loads and stores removed
+#   7 known routine calls done in place   8 constants kept out of loops
+#   9 waiting from a loop's start   10 loads and stores forwarded   11 promotion
+setting off: Int
+fn on?(what: Int) -> Bool = not has-bit(word(off), what)
 state post: [Block]
 state order: [Block]                  # the blocks as the code has them: reverse postorder from the
                                       # entry while dominators and loops are found, then as laid out

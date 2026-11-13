@@ -161,6 +161,7 @@ fn promote(s: Node) {
 }
 
 fn run() {
+  if not cfg.on?(11) { return }
   number-chains()
   for n in Node { if not n.dead and n is SLOT { promote(n) } }
 }

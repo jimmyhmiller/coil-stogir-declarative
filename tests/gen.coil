@@ -395,6 +395,12 @@
               (set! (mut (.env r)) gone (get (.env r) (- (len (.env r)) 1)))
               (pop! (mut (.env r))))))))))
 
+;;; A read of memory as the program's own type: the load itself is the value.
+(defn last-read! [(r (mut Gen))] (-> i32)
+  (let [v (ir/load-node! (mut (.g r)) (.type r) 0 (.control r) (address! (mut r) (ir/type-bits (.type r))))]
+    (set! (.control r) v)
+    v))
+
 ;;; if (cond) { … } else { … }, then phis for the values either side changed.
 (defn diamond! [(r (mut Gen)) (depth i64)] (-> void)
   ; One rich diamond in five asks about two constants, as a function put in
@@ -406,6 +412,11 @@
         ; One rich diamond in three reads memory just before it parts, a value
         ; only the first way then sees: a load that can be made on that way alone.
         early (if (and (.rich r) (= (below! (mut r) 3) 0)) (read! (mut r)) 0)
+        ; One rich diamond in four ends each way by reading memory, and what was
+        ; read is itself what the phi takes: the last thing in the flow of
+        ; control on a way is then also a value where the ways meet. (When one
+        ; way can never run, taking it out must not disturb the other.)
+        last (and (.rich r) (= (below! (mut r) 4) 0))
         branch (ir/if! (mut (.g r)) (.control r) test)
         base (len (.env r))
         yes (ir/true! (mut (.g r)) branch)
@@ -415,14 +426,14 @@
       (push! (mut (.env r)) early)
       (push! (mut (.env r)) (ir/add! (mut (.g r)) (.type r) early (pick! (mut r)))))
     (statements! (mut r) (+ depth 1))
-    (let [yes-end (.control r)
-          yes-a (pick! (mut r))
+    (let [yes-a (if last (last-read! (mut r)) (pick! (mut r)))
+          yes-end (.control r)
           yes-b (pick! (mut r))]
       (while (> (len (.env r)) base) (pop! (mut (.env r))))
       (set! (.control r) no)
       (statements! (mut r) (+ depth 1))
-      (let [no-end (.control r)
-            no-a (pick! (mut r))
+      (let [no-a (if last (last-read! (mut r)) (pick! (mut r)))
+            no-end (.control r)
             no-b (pick! (mut r))
             region (ir/region! (mut (.g r)) 2)
             pa (ir/phi! (mut (.g r)) (.type r) region 2)

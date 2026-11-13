@@ -105,7 +105,7 @@ fn joined(region: Node, values: [Node], deep: Int) {
 }
 
 fn run() {
-  if self-symbol == 0 { return }
+  if self-symbol == 0 or not cfg.on?(4) { return }
   for n in Node {
     if not n.dead and ((n is SLOT and not private?(n)) or n is RESERVE) { return }
   }

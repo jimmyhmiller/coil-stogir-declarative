@@ -528,6 +528,7 @@ fn wait-from(a: Piece, pos: Int) -> Int {
   let i: Inst = id(pos / 2)
   var h = i.home.loop-head
   var around: Block = none
+  if not cfg.on?(9) { return pos }
   while h != none and not used-in?(v, h) {
     around = h
     h = h.loop-parent

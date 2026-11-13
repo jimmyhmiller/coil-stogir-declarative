@@ -121,7 +121,7 @@ fn walk(b: Block) {
       }
     } else if c is STORE {
       # A store nothing has read, to the same place and as wide, is written over.
-      if c.payload == 0 {
+      if c.payload == 0 and cfg.on?(6) {
         var kept = 0
         for i in 0..open.len {
           let s = open[i]
@@ -156,6 +156,7 @@ fn walk(b: Block) {
 }
 
 fn run() {
+  if not cfg.on?(10) { return }
   for b in order { walk(b) }
 }
 
@@ -166,6 +167,7 @@ fn unread?(l: Node) -> Bool =
 # A load nothing reads is not made. (A whole record is read to get at one
 # field of it.) Returns how many went, since one going may leave another unread.
 fn prune() -> Int {
+  if not cfg.on?(6) { return 0 }
   var gone = 0
   for n in Node {
     if not n.dead and n is LOAD and n.payload == 0 and unread?(n) {

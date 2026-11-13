@@ -551,14 +551,14 @@ fn round() -> Int {
   let was = turned + hoisted + parted
   # First, while the blocks are as they were found.
   let knew = learned
-  for b in order { learn(b) }
+  if cfg.on?(3) { for b in order { learn(b) } }
   if learned > knew {
     grow-nodes()
     blocks.again()
   }
-  for h in order { if h.head is LOOP { hoist(h) } }
-  for h in order { if h.head is LOOP { turn(h) } }
-  if trial { for h in order { if h.head is REGION { part(h) } } }
+  if cfg.on?(1) { for h in order { if h.head is LOOP { hoist(h) } } }
+  if cfg.on?(0) { for h in order { if h.head is LOOP { turn(h) } } }
+  if cfg.on?(2) { for h in order { if h.head is REGION { part(h) } } }
   turned + hoisted + parted - was
 }
 

@@ -4,6 +4,7 @@
 # comparisons and not a hundred.
 pass in unit
 use loops as loops
+use cfg as cfg
 
 state halved: Int
 
@@ -41,5 +42,6 @@ fn halve(s: Node) {
 }
 
 fn run() {
+  if not cfg.on?(5) { return }
   for n in Node { if not n.dead and n is SWITCH { halve(n) } }
 }
