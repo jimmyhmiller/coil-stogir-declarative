@@ -11,7 +11,6 @@ pass x64.cfg
 pass x64.promote
 pass x64.forward
 pass x64.schedule
-pass x64.order
 pass x64.mach
 lower x64.lower
 pass x64.atomics
