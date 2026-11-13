@@ -35,6 +35,12 @@ state side-one: [Int]                  # one of them,
 state side-meet: [Node]                # and where they meet, if several
 state goes: [Int]                      # for each way into the region in hand: the side it goes to
 state way: [Node]                      # and the control it comes by
+state reduced: Int
+state group-base: [Node]               # for the counter in hand: each base its addresses are offsets from,
+state group-step: [Int]                # how far apart the addresses of one round and the next are,
+state group-next: [Node]               # and the address the next round has
+state spots: [Node]                    # the addresses computed from the counter,
+state spot-group: [Int]                # and which of those each belongs to
 state parted: Int
 state learned: Int
 state turned: Int
@@ -482,7 +488,12 @@ fn steady?(n: Node) -> Bool {
   if n.varies == loop-serial { return false }
   var same = true
   if n is PHI or n is RESULT { same = n.in(0).block-of != none and n.in(0).block-of.member != loop-serial }
-  else if cfg.control?(n) { same = n.block-of != none and n.block-of.member != loop-serial }
+  else if cfg.control?(n) {
+    # By the block its chain now hangs from: a load moved this round is where it was moved to.
+    var top = n
+    while cfg.chain?(top) { top = top.in(0) }
+    same = top.block-of != none and top.block-of.member != loop-serial
+  }
   else if not (n is PARAM) {
     for i in inputs(n) { if i != none and same and not steady?(i) { same = false } }
   }
@@ -546,9 +557,116 @@ fn hoist(h: Block) {
   }
 }
 
+# ---------------------------------------------------------------- counters that only make addresses
+
+# The group for addresses `step` apart from base `x`, made if new; -1 if there are too many.
+fn group(x: Node, step: Int) -> Int {
+  for g in 0..group-base.len { if group-base[g] == x and group-step[g] == step { return g } }
+  if group-base.len == 2 { return -1 }
+  group-base.push(x)
+  group-step.push(step)
+  group-next.push(none)
+  group-base.len - 1
+}
+
+# `scaled` is the counter times `step`: every use of it must be a sum with
+# something that does not change in the loop, which is then an address that
+# moves `step` each round. False if it is used any other way.
+fn addresses?(scaled: Node, step: Int) -> Bool {
+  for u in users(scaled) {
+    if not (u is ADD) { return false }
+    let x = if u.in(0) == scaled then u.in(1) else u.in(0)
+    if x == scaled or not steady?(x) { return false }
+    let g = group(x, step)
+    if g < 0 { return false }
+    spots.push(u)
+    spot-group.push(g)
+  }
+  true
+}
+
+# A loop turned to test at its bottom, counting up by one from a start its
+# first test showed to be below a bound, whose counter is used only to make
+# addresses (a base plus the counter times a size) and to be compared with the
+# bound: the addresses are stepped themselves, the first of them is compared
+# with what it will be at the bound, and the counter goes.
+fn reduce(h: Block) {
+  let l = h.head
+  if l.arity != 2 or h.touched { return }
+  let back = l.in(1)
+  # The way in is the first test's side, past whatever was moved out of the loop to there.
+  var enter = l.in(0)
+  while cfg.chain?(enter) { enter = enter.in(0) }
+  if not (back is TRUE or back is FALSE) or not (enter is TRUE or enter is FALSE) { return }
+  let test = back.in(0)
+  let guard = enter.in(0)
+  if not (test is IF) or not (guard is IF) { return }
+  let cond = test.in(1)
+  let first = guard.in(1)
+  # To stay: `counter < bound` on the true side, or `bound <= counter` on the false.
+  var next: Node = none
+  var bound: Node = none
+  if (cond is LT or cond is ULT) and back is TRUE {
+    next = cond.in(0)
+    bound = cond.in(1)
+  } else if (cond is LE or cond is ULE) and back is FALSE {
+    next = cond.in(1)
+    bound = cond.in(0)
+  } else { return }
+  # And the first test let the loop be entered only with the start below the bound, said either way.
+  var before: Node = none
+  if (first is LT or first is ULT) and enter is TRUE and first.in(1) == bound { before = first.in(0) }
+  else if (first is LE or first is ULE) and enter is FALSE and first.in(0) == bound { before = first.in(1) }
+  else { return }
+  # Signed with signed, unsigned with unsigned.
+  if (cond is LT or cond is LE) != (first is LT or first is LE) { return }
+  if not (next is ADD) or next.bits != 64 { return }
+  let counter = if next.in(1) is CONST and next.in(1).payload == word(1) then next.in(0) else none
+  if counter == none or not (counter is PHI) or counter.in(0) != l or counter.in(2) != next or counter.in(1) != before { return }
+  mark-members(h)
+  if not steady?(bound) { return }
+  # The counter after its step is read only by the phi and the test.
+  for u in users(next) { if u != counter and u != cond { return } }
+  if cond.uses != 1 { return }
+  group-base.clear()
+  group-step.clear()
+  group-next.clear()
+  spots.clear()
+  spot-group.clear()
+  for u in users(counter) {
+    if u == next { }
+    else if u is SHL and u.in(0) == counter and u.in(1) is CONST and u.in(1).payload < word(12) {
+      if not addresses?(u, 1 << int(u.in(1).payload)) { return }
+    } else if u is MUL and u.in(0) == counter and u.in(1) is CONST and u.in(1).payload > word(0) and u.in(1).payload <= word(4096) {
+      if not addresses?(u, int(u.in(1).payload)) { return }
+    } else { return }
+  }
+  if spots.len == 0 { return }
+  # Each group's address: at the start, the base plus the start times the
+  # step; each round, `step` further on.
+  for g in 0..group-base.len {
+    let step = ir.make-const!(mut graph, ir.T-PTR, word(group-step[g]))
+    let start = ir.add!(mut graph, ir.T-PTR, group-base[g], ir.mul!(mut graph, ir.T-PTR, before, step))
+    let moving = ir.phi!(mut graph, ir.T-PTR, l, 2)
+    grow-nodes()
+    let onward = ir.add!(mut graph, ir.T-PTR, moving, step)
+    set-input(moving, 1, start)
+    set-input(moving, 2, onward)
+    group-next[g] = onward
+    for i in 0..spots.len { if spot-group[i] == g { replace-uses(spots[i], moving) } }
+  }
+  # The first group's address is at the bound exactly when the counter is.
+  let last = ir.add!(mut graph, ir.T-PTR, group-base[0], ir.mul!(mut graph, ir.T-PTR, bound, ir.make-const!(mut graph, ir.T-PTR, word(group-step[0]))))
+  let there = if back is TRUE then ir.ne!(mut graph, group-next[0], last) else ir.eq!(mut graph, group-next[0], last)
+  grow-nodes()
+  set-input(test, 1, there)
+  h.touched = true
+  reduced = reduced + 1
+}
+
 # How much was changed: blocks must be found again after any of it.
 fn round() -> Int {
-  let was = turned + hoisted + parted
+  let was = turned + hoisted + parted + reduced
   # First, while the blocks are as they were found.
   let knew = learned
   if cfg.on?(3) { for b in order { learn(b) } }
@@ -559,7 +677,8 @@ fn round() -> Int {
   if cfg.on?(1) { for h in order { if h.head is LOOP { hoist(h) } } }
   if cfg.on?(0) { for h in order { if h.head is LOOP { turn(h) } } }
   if cfg.on?(2) { for h in order { if h.head is REGION { part(h) } } }
-  turned + hoisted + parted - was
+  if cfg.on?(18) { for h in order { if h.head is LOOP { reduce(h) } } }
+  turned + hoisted + parted + reduced - was
 }
 
 fn any-loop?() -> Bool = any n in Node: not n.dead and (n is LOOP or n is REGION)
