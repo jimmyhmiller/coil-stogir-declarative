@@ -40,7 +40,9 @@ fn pair-up(b: Block) {
       let at = address-offset(c.in(1))
       # Of a frame object near the frame record, the two words are reached
       # from the frame register (at most 256 bytes below it, at a multiple of 8).
-      let near = base is SLOT and at >= 0 and at + 16 <= int(base.payload) and mach.object-offset(base) - at <= 256 and (mach.object-offset(base) - at) % 8 == 0
+      # Not for a program to be looked at as it runs: the debugger reads frame
+      # objects, and an argument must be in its own where the prologue ends.
+      let near = base is SLOT and not debugging and at >= 0 and at + 16 <= int(base.payload) and mach.object-offset(base) - at <= 256 and (mach.object-offset(base) - at) % 8 == 0
       let reached = if base is SLOT then near else at >= 0 and at <= 496 and at % 8 == 0
       if address-base(next.in(1)) == base and address-offset(next.in(1)) == at + 8 and reached and base != c {
         c.pair-with = next
