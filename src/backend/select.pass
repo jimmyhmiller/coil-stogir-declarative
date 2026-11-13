@@ -7,7 +7,56 @@ use lower as lower
 import target as isa
 import abi as abi
 
+column pair-with: Node -> Node        # for the first of two loads or stores done together: the second
+column pair-second: Node -> Bool      # the second of such a two,
+column pair-first: Node -> Node       # and its first
+column pair-base: Node -> Node        # for the first: the address both are offsets from,
+column pair-at: Node -> Int           # and the first's offset
+
+# What address `a` is an offset from, and the offset.
+fn address-base(a: Node) -> Node =
+  if a is ADD and a.in(1) is CONST then a.in(0) else if a is ADD and a.in(0) is CONST then a.in(1) else a
+
+fn address-offset(a: Node) -> Int =
+  if a is ADD and a.in(1) is CONST then int(a.in(1).payload) else if a is ADD and a.in(0) is CONST then int(a.in(0).payload) else 0
+
+# Whether `n` is a plain load or store of a whole 64-bit integer.
+fn whole-word?(n: Node) -> Bool =
+  n.payload == 0 and ((n is LOAD and n.bits == 64 and not n.float) or (n is STORE and n.in(2).bits == 64 and not n.in(2).float))
+
+# Two loads, or two stores, one straight after the other, of two words next to
+# each other in memory, are one instruction where the machine has one.
+fn pair-up(b: Block) {
+  var c = cfg.follower(b.head)
+  while c != none and cfg.chain?(c) {
+    let next = cfg.follower(c)
+    if next != none and whole-word?(c) and whole-word?(next) and ((c is LOAD and next is LOAD) or (c is STORE and next is STORE)) and not c.pair-second {
+      let base = address-base(c.in(1))
+      let at = address-offset(c.in(1))
+      if address-base(next.in(1)) == base and address-offset(next.in(1)) == at + 8 and at >= 0 and at <= 496 and at % 8 == 0 and not (base is SLOT) and base != c {
+        c.pair-with = next
+        c.pair-base = base
+        c.pair-at = at
+        next.pair-second = true
+        next.pair-first = c
+      }
+    }
+    c = next
+  }
+}
+
 fn choose(n: Node) {
+  # A pair is emitted as one: neither has a rule of its own, and what they
+  # need in registers is their base and, for stores, what they store.
+  if n.pair-second { return }
+  if n.pair-with != none {
+    mach.need(n.pair-base)
+    if n is STORE {
+      mach.need(n.in(2))
+      mach.need(n.pair-with.in(2))
+    }
+    return
+  }
   let rule = lower.select(n)
   if rule == 0 {
     print("no rule computes {} (node {})", n.name, n)
@@ -295,6 +344,7 @@ fn phi-moves(b: Block, s: Block) {
 
 fn run() {
   next-vreg = Node.count
+  if cfg.on?(12) { for b in order { pair-up(b) } }
   for b in order {
     for n in b.seq { if cfg.control?(n) or n is PHI { mach.need(n) } }
   }
@@ -309,6 +359,16 @@ fn run() {
       else if n is RETURN { returns(n) }
       else if n is RESERVE { reserve(n) }
       else if n is PARAM { if n.tile != 0 { param(n) } }
+      # Two loads are made where the first stands, for whatever reads it before
+      # the second; two stores where the second stands, when both values are there.
+      else if n.pair-with != none {
+        if n is LOAD { lower.load-pair(int(n), int(n.pair-with), lower.operand(n.pair-base), n.pair-at) }
+      } else if n.pair-second {
+        if n is STORE {
+          let first = n.pair-first
+          lower.store-pair(lower.operand(first.in(2)), lower.operand(n.in(2)), lower.operand(first.pair-base), first.pair-at)
+        }
+      }
       else if n.tile != 0 and not lower.local?(n) { lower.emit(n, n.tile, int(n)) }
     }
     if not cfg.end?(b.last) {

@@ -27,6 +27,10 @@ template from-frame(d, base, slot) = add-imm-hi(1, x17, base, slot / 512) ; ldr(
 template to-frame(s, base, slot) when slot < 4096   = str(s, base, slot)
 template to-frame(s, base, slot)   = add-imm-hi(1, x17, base, slot / 512) ; str(s, x17, slot % 512)
 # Sixteen bytes, in two slots of which the first is at a multiple of sixteen.
+# Two words next to each other in memory, `at` bytes from a base, read into
+# and written from two registers.
+template load-pair(a, b, base, at)  = ldp(a, b, base, at / 8)
+template store-pair(a, b, base, at) = stp(a, b, base, at / 8)
 # Two registers to and from two slots next to each other.
 template to-frame-pair(a, b, base, slot) when slot < 63 = stp(a, b, base, slot)
 template to-frame-pair(a, b, base, slot)                = to-frame(a, base, slot) ; to-frame(b, base, slot + 1)

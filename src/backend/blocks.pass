@@ -37,6 +37,14 @@ fn pieces(c: Node, dst: Node, src: Node, value: Node, total: Int) -> Node {
   while width > total { width = width / 2 }
   var control = c
   var done = 0
+  # Words are copied two at a time, both read before either is written: where
+  # the machine reads and writes two words at once, that is half the instructions.
+  while value == none and width == 8 and done + 16 <= total {
+    let a = ir.load-node!(mut graph, ir.T-PTR, word(0), control, at(src, done))
+    let b = ir.load-node!(mut graph, ir.T-PTR, word(0), a, at(src, done + 8))
+    control = ir.store-node!(mut graph, word(0), ir.store-node!(mut graph, word(0), b, at(dst, done), a), at(dst, done + 8), b)
+    done = done + 16
+  }
   while done + width <= total {
     control = one(control, dst, src, value, done, width)
     done = done + width

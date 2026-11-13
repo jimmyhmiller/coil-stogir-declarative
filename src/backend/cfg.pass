@@ -26,6 +26,7 @@ setting trial: Bool
 #   4 self calls looped   5 switches split   6 unread loads and stores removed
 #   7 known routine calls done in place   8 constants kept out of loops
 #   9 waiting from a loop's start   10 loads and stores forwarded   11 promotion
+#   12 loads and stores in pairs
 setting off: Int
 fn on?(what: Int) -> Bool = not has-bit(word(off), what)
 state post: [Block]
