@@ -29,10 +29,10 @@
       (set! ok false))
     ; Three sets of arguments, interpreted before the graph is given away.
     (for round (range 0 3)
-      (for i (range 0 4)
+      (for i (range 0 10)
         (set! state (primitive/iadd (primitive/imul state (: 6364136223846793005 u64)) (: 1442695040888963407 u64)))
         (push! (mut args) (if (= round 0) (cast u64 (+ i 1)) (>> state (if (= round 1) 40 0)))))
-      (match (ir/interpret g (subslice (slice args) (* round 4) (+ (* round 4) 4)) 10000000)
+      (match (ir/interpret g (subslice (slice args) (* round 10) (+ (* round 10) 10)) 10000000)
         (Some [v] (push! (mut want) v))
         (None [] (do (println "seed {}: the interpreter did not finish" seed) (set! ok false) (push! (mut want) 0)))))
     (let [(mut cx) (st/create g (malloc-allocator))]
@@ -44,11 +44,13 @@
       (set! (.words stats) (+ (.words stats) (len (.code cx))))
       (set! (.nodes stats) (+ (.nodes stats) (graph/size (.g cx))))
       (let [code (jit/map-words (.code cx))
-            f (primitive/cast (fnptr (cc/C) [u64 u64 u64 u64] u64) (.base code))
+            f (primitive/cast (fnptr (cc/C) [u64 u64 u64 u64 u64 u64 u64 u64 u64 u64] u64) (.base code))
             mask (if (>= bits 64) (: 0xFFFFFFFFFFFFFFFF u64) (- (<< (: 1 u64) (cast u64 bits)) 1))]
         (for round (range 0 3)
-          (let [got (& (f (get args (* round 4)) (get args (+ (* round 4) 1))
-                          (get args (+ (* round 4) 2)) (get args (+ (* round 4) 3)))
+          (let [at (* round 10)
+                got (& (f (get args at) (get args (+ at 1)) (get args (+ at 2)) (get args (+ at 3))
+                          (get args (+ at 4)) (get args (+ at 5)) (get args (+ at 6))
+                          (get args (+ at 7)) (get args (+ at 8)) (get args (+ at 9)))
                        mask)]
             (when (!= got (get want round))
               (println "seed {} type {} round {}: machine code gave {:x}, the interpreter {:x}"

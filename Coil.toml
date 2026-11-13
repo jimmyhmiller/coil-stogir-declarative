@@ -9,6 +9,7 @@ source-roots = ["compiler", "tests"]
 ".pass" = "lang.readers"
 ".isa" = "lang.readers"
 ".lower" = "lang.readers"
+".abi" = "lang.readers"
 
 [modules]
 "backend.nodes" = "src/backend/nodes.ir"
@@ -17,6 +18,7 @@ source-roots = ["compiler", "tests"]
 "backend.schedule" = "src/backend/schedule.pass"
 "backend.a64" = "src/backend/a64.isa"
 "backend.a64-lower" = "src/backend/a64.lower"
+"backend.a64-abi" = "src/backend/a64.abi"
 "backend.mach" = "src/backend/mach.pass"
 "backend.select" = "src/backend/select.pass"
 "backend.alloc" = "src/backend/alloc.pass"

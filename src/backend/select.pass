@@ -4,6 +4,8 @@ pass in backend.unit
 use backend.cfg as cfg
 use backend.mach as mach
 use backend.a64-lower as lower
+import backend.a64 as isa
+import backend.a64-abi as abi
 
 fn choose(n: Node) {
   let rule = lower.select(n)
@@ -13,7 +15,41 @@ fn choose(n: Node) {
   }
   n.tile = rule
   lower.mark(n, rule)
-  if n is PHI { for i in 1..n.arity { mach.need(n.in(i)) } }
+  if n is PHI or n is CALL { for i in 1..n.arity { mach.need(n.in(i)) } }
+}
+
+# A call: arguments to where the convention wants them, the call, the result
+# out of its register. The call reads the argument registers and may write
+# every register the convention does not preserve.
+fn call(n: Node) {
+  var passed = word(0)
+  for i in 2..n.arity {
+    let k = i - 2
+    let r = abi.int-arg(k)
+    if r >= 0 {
+      copy(0 - r - 1, n.in(i))
+      passed = set-bit(passed, r)
+    } else {
+      lower.to-frame(lower.operand(n.in(i)), k - abi.INT-ARGS)
+      out-slots = max(out-slots, k - abi.INT-ARGS + 1)
+    }
+  }
+  lower.call-register(lower.operand(n.in(1)))
+  mach.implicit(passed, set-bit(isa.CALLER-SAVED, abi.LINK))
+  calls = true
+  let result = first u in users(n): u is RESULT and u.needed
+  if result != none { lower.move(int(result), 0 - abi.RESULT - 1) }
+}
+
+# A parameter: out of its register, or out of the caller's frame.
+fn param(n: Node) {
+  let k = int(n.payload)
+  if abi.int-arg(k) >= 0 {
+    lower.move(int(n), 0 - abi.int-arg(k) - 1)
+  } else {
+    lower.from-frame(int(n), k - abi.INT-ARGS)
+    mach.from-caller()
+  }
 }
 
 fn phi-of?(u: Node, h: Node) -> Bool = u is PHI and u.in(0) == h
@@ -68,7 +104,11 @@ fn run() {
   for b in order {
     b.first-inst = Inst.count + 1
     emitting = b
-    for n in b.seq { if n.tile != 0 and not lower.local?(n) { lower.emit(n, n.tile, int(n)) } }
+    for n in b.seq {
+      if n is CALL { call(n) }
+      else if n is PARAM { if n.tile != 0 { param(n) } }
+      else if n.tile != 0 and not lower.local?(n) { lower.emit(n, n.tile, int(n)) }
+    }
     if not (b.last is IF) and not (b.last is RETURN) {
       for s in b.succs {
         phi-moves(b, s)

@@ -55,6 +55,7 @@
         (= role "param") 9
         (= role "const") 10
         (= role "call") 11
+        (= role "result") 12
         :else -1))
 
 ;;; A type's number; 0 is "no type". Numbers follow declaration order from 1.
@@ -504,6 +505,7 @@
   (t/line! (mut o) "      (= r 10) (graph/payload g n)")
   (t/line! (mut o) "      (= r 9) (bv/cut (get args (cast i64 (graph/payload g n))) (type-bits (graph/ty g n)))")
   (t/line! (mut o) "      (= r 8) (get (.phi it) at)")
+  (t/line! (mut o) "      (= r 12) (bv/cut (get (.phi it) (cast i64 (graph/input g n 0))) (type-bits (graph/ty g n)))")
   (t/line! (mut o) "      (= (get (.stamp it) at) (.epoch it)) (get (.val it) at)")
   (t/line! (mut o) "      :else")
   (t/line! (mut o) "        (let [k (graph/arity g n)")
@@ -525,6 +527,20 @@
   (t/line! (mut o) "          (set! found u)))")
   (t/line! (mut o) "      (set! e (graph/next-use g e)))")
   (t/line! (mut o) "    found))")
+  (t/line! (mut o) "(defn call-argument [(g graph/Graph) (it (mut Interp)) (args (slice u64)) (n i32) (i i64)] (-> u64)")
+  (t/line! (mut o) "  (if (> (graph/arity g n) (+ i 2)) (value g (mut it) args (graph/input g n (+ i 2))) (: 0 u64)))")
+  (t/line! (mut o) ";;; Control reaches a call: the function at its target runs with the C convention.")
+  (t/line! (mut o) "(defn call-out! [(g graph/Graph) (it (mut Interp)) (args (slice u64)) (n i32)] (-> void)")
+  (t/line! (mut o) "  (let [f (primitive/cast (fnptr (cc/C) [u64 u64 u64 u64 u64 u64 u64 u64 u64 u64 u64 u64] u64)")
+  (t/line! (mut o) "                          (primitive/cast (ptr u8) (value g (mut it) args (graph/input g n 1))))")
+  (t/line! (mut o) "        r (f (call-argument g (mut it) args n 0) (call-argument g (mut it) args n 1)")
+  (t/line! (mut o) "             (call-argument g (mut it) args n 2) (call-argument g (mut it) args n 3)")
+  (t/line! (mut o) "             (call-argument g (mut it) args n 4) (call-argument g (mut it) args n 5)")
+  (t/line! (mut o) "             (call-argument g (mut it) args n 6) (call-argument g (mut it) args n 7)")
+  (t/line! (mut o) "             (call-argument g (mut it) args n 8) (call-argument g (mut it) args n 9)")
+  (t/line! (mut o) "             (call-argument g (mut it) args n 10) (call-argument g (mut it) args n 11))]")
+  (t/line! (mut o) "    (set! (mut (.phi it)) (cast i64 n) r)")
+  (t/line! (mut o) "    (set! (.epoch it) (+ (.epoch it) 1))))")
   (t/line! (mut o) ";;; The graph's result for these arguments, or None if it has not returned")
   (t/line! (mut o) ";;; within `limit` control steps.")
   (t/line! (mut o) "(defn interpret [(g graph/Graph) (args (slice u64)) (limit i64)] (-> (Option u64))")
@@ -556,7 +572,8 @@
   (t/line! (mut o) "            (let [next (let [a (follower g c 5) b (follower g c 2) d (follower g c 11)]")
   (t/line! (mut o) "                         (cond (!= a 0) a (!= b 0) b :else d))]")
   (t/line! (mut o) "              (if (!= next 0)")
-  (t/line! (mut o) "                  (set! c next)")
+  (t/line! (mut o) "                  (do (set! c next)")
+  (t/line! (mut o) "                      (when (= (get ROLES (cast i64 (graph/op g next))) 11) (call-out! g (mut it) args next)))")
   (t/line! (mut o) "                  ; No follower inside the block: control enters a region.")
   (t/line! (mut o) "                  (let [(mut region) (: 0 i32)")
   (t/line! (mut o) "                        (mut slot) 0")
@@ -603,6 +620,7 @@
         (mut o) (t/out-new)]
     (t/line! (mut o) "(import \"coil.primitive\" :as primitive)")
     (t/line! (mut o) "(import \"coil.arraylist\" :use [ArrayList])")
+    (t/line! (mut o) "(import \"coil.cc\" :as cc)")
     (t/line! (mut o) "(import \"rt.graph\" :as graph)")
     (t/line! (mut o) "(import \"rt.bits\" :as bv)")
     (emit-numbers! (mut o) spec)

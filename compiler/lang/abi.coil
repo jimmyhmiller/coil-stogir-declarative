@@ -1,0 +1,67 @@
+;;; The `.abi` language: how a calling convention places arguments and results.
+;;;
+;;;   target backend.a64
+;;;   integers x0..x7        # integer arguments, in order; the rest go on the stack
+;;;   result x0
+;;;   link x30               # where a call leaves its return address
+;;;   frame x29              # the frame record's register
+;;;
+;;; From it: `int-arg` (the register of the i-th integer argument, or -1 for the
+;;; stack), the set of argument registers, and the named registers' numbers.
+(module lang.abi)
+(import "coil.alloc" :use [malloc-allocator])
+(import "coil.arraylist" :use [ArrayList])
+(import "lang.text" :as t)
+(import "lang.isa" :as isa)
+(import "lang.project" :as project)
+
+(defn module-name! [(c (mut t/Cur))] (-> (slice u8))
+  (let [(mut name) (t/name! (mut c) "a module name")]
+    (while (and (t/at? (mut c) ".") (.glued (t/peek (mut c))))
+      (t/advance! (mut c))
+      (set! name (t/cat3 name "." (t/name! (mut c) "a module name"))))
+    name))
+
+(defn reg! [(c (mut t/Cur)) (spec isa/Spec)] (-> i64)
+  (let [at (t/peek (mut c))
+        name (t/name! (mut c) "a register")
+        number (isa/reg-number spec name)]
+    (when (< number 0) (t/die (mut c) at (t/cat2 "the target has no register " name)))
+    number))
+
+(defn module-text [(context Code)] (-> (slice u8))
+  (let [p (project/open context)
+        path (t/path-of context)
+        (mut c) (t/cursor (t/source-of context) path)
+        (mut o) (t/out-new)]
+    (t/expect! (mut c) "target")
+    (let [at (t/peek (mut c))
+          target (module-name! (mut c))
+          file (project/file-of p target (.line at) (.col at))
+          spec (isa/parse (project/read-file file path) file)]
+      (t/line! (mut o) (t/cat3 "(depends-on \"" file "\")"))
+      (while (not (t/eof? (mut c)))
+        (let [tok (t/advance! (mut c))]
+          (cond
+            (t/tok-is? tok "integers")
+              (let [names (isa/parse-reg-list (mut c))
+                    (mut mask) (: 0 u64)]
+                (t/line! (mut o) "(defn int-arg [(i i64)] (-> i64)")
+                (t/emit! (mut o) "  (cond")
+                (for i (range 0 (len names))
+                  (let [number (isa/reg-number spec (get names i))]
+                    (when (< number 0) (t/die (mut c) tok (t/cat2 "the target has no register " (get names i))))
+                    (set! mask (| mask (<< (: 1 u64) (cast u64 number))))
+                    (t/emit! (mut o) (t/cat4 " (= i " (t/int-text i) ") " (t/int-text number)))))
+                (t/line! (mut o) " :else -1))")
+                (t/line! (mut o) (t/cat3 "(const INT-ARGS " (t/int-text (len names)) ")"))
+                (t/line! (mut o) (t/cat3 "(const ARGUMENTS " (t/u64-text mask) ")")))
+            (t/tok-is? tok "result")
+              (t/line! (mut o) (t/cat3 "(const RESULT " (t/int-text (reg! (mut c) spec)) ")"))
+            (t/tok-is? tok "link")
+              (t/line! (mut o) (t/cat3 "(const LINK " (t/int-text (reg! (mut c) spec)) ")"))
+            (t/tok-is? tok "frame")
+              (t/line! (mut o) (t/cat3 "(const FRAME " (t/int-text (reg! (mut c) spec)) ")"))
+            :else (t/die (mut c) tok (t/cat2 "expected integers, result, link or frame, found "
+                                             (.text tok)))))))
+    (t/text-of (mut o))))

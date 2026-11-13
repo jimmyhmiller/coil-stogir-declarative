@@ -11,6 +11,9 @@ column a1: Inst -> Int
 column a2: Inst -> Int
 column a3: Inst -> Int
 column a4: Inst -> Int
+column also-reads: Inst -> Word       # machine registers it reads besides its operands
+column also-writes: Inst -> Word      # and writes
+column above-frame: Inst -> Bool      # its frame slot counts from the caller's frame
 column first-inst: Block -> Int       # a block's instructions are first..last
 column last-inst: Block -> Int
 column needed: Node -> Bool           # must be in a register
@@ -19,6 +22,8 @@ column local-reg: Node -> Int         # for a node computed per block: its regis
 column local-block: Node -> Block
 state emitting: Block                 # the block whose instructions are being emitted
 state next-vreg: Int
+state out-slots: Int                  # frame slots for arguments passed on the stack
+state calls: Bool                     # the function calls another
 state worklist: [Node]
 
 fn emit(op: Int, a: Int, b: Int, c: Int, d: Int, e: Int) {
@@ -65,3 +70,15 @@ fn set-local(n: Node, r: Int) {
 }
 
 fn rule-of(n: Node) -> Int = n.tile
+
+# The instruction just emitted also reads and writes these machine registers.
+fn implicit(reads: Word, writes: Word) {
+  let i = id(Inst.count)
+  i.also-reads = reads
+  i.also-writes = writes
+}
+
+# The instruction just emitted names a slot of the caller's frame.
+fn from-caller() {
+  id(Inst.count).above-frame = true
+}

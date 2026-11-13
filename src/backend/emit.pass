@@ -6,6 +6,7 @@ use backend.mach as mach
 use backend.alloc as alloc
 use backend.a64-lower as lower
 import backend.a64 as isa
+import backend.a64-abi as abi
 
 column final-first: Block -> Int      # a block's first final instruction
 state final-start: Int                # final instructions follow the selected ones
@@ -32,7 +33,7 @@ fn resolve(i: Inst, k: Int) -> Int {
   if kind == isa.K-DEF { return marker(isa.SCRATCH0) }
   let s = marker(scratch(loads))
   loads = loads + 1
-  lower.from-frame(s, v.slot - 1)
+  lower.from-frame(s, out-slots + v.slot - 1)
   s
 }
 
@@ -42,7 +43,7 @@ fn finish(i: Inst, k: Int) {
     let a = mach.arg(i, k)
     if a > 0 and id(a).reg == 0 {
       # A value both read and written was read into the register it is written from.
-      lower.to-frame(if isa.operand-kind(op, k) == isa.K-DEF then marker(isa.SCRATCH0) else marker(isa.SCRATCH1), id(a).slot - 1)
+      lower.to-frame(if isa.operand-kind(op, k) == isa.K-DEF then marker(isa.SCRATCH0) else marker(isa.SCRATCH1), out-slots + id(a).slot - 1)
     }
   }
 }
@@ -52,15 +53,13 @@ fn rewrite(i: Inst, next: Int) {
   loads = 0
   let x0 = resolve(i, 0)
   let x1 = resolve(i, 1)
-  let x2 = resolve(i, 2)
+  var x2 = resolve(i, 2)
   let x3 = resolve(i, 3)
   let x4 = resolve(i, 4)
   if alloc.move-source(i) != 0 and x1 == x3 { return }
   if op == isa.B and x0 == next { return }
-  if op == isa.RET and frame > 0 {
-    restore-saved()
-    lower.shrink-stack(frame)
-  }
+  if op == isa.RET and frame > 0 { leave() }
+  if i.above-frame { x2 = x2 + frame / 8 }
   mach.emit(op, x0, x1, x2, x3, x4)
   for k in 0..5 { finish(i, k) }
 }
@@ -75,37 +74,47 @@ fn encoded(i: Inst, k: Int) -> Int {
   a
 }
 
-# Registers the caller expects back are kept in the frame above the spilled values.
-fn save-saved() {
+# The frame, from the stack pointer up: arguments for calls, values that have
+# no register, then the registers the caller expects back. A function that
+# calls keeps a frame record, x29 and the return address side by side, there.
+fn saved-slot() -> Int = out-slots + slots
+
+fn enter() {
+  if frame % 4096 != 0 { lower.grow-stack(frame % 4096) }
+  if frame >= 4096 { lower.grow-pages(frame / 4096) }
   var rest = saved
-  var at = slots
+  var at = saved-slot()
   while rest != word(0) {
     let r = lowest-bit(rest)
     lower.to-frame(marker(r), at)
+    if r == abi.FRAME {
+      lower.frame-record(at * 8 % 4096)
+      if at * 8 >= 4096 { lower.frame-pages(at * 8 / 4096) }
+    }
     at = at + 1
     rest = clear-bit(rest, r)
   }
 }
 
-fn restore-saved() {
+fn leave() {
   var rest = saved
-  var at = slots
+  var at = saved-slot()
   while rest != word(0) {
     let r = lowest-bit(rest)
     lower.from-frame(marker(r), at)
     at = at + 1
     rest = clear-bit(rest, r)
   }
+  if frame % 4096 != 0 { lower.shrink-stack(frame % 4096) }
+  if frame >= 4096 { lower.shrink-pages(frame / 4096) }
 }
 
 fn run() {
   saved = used & isa.CALLEE-SAVED
-  frame = ((slots + bit-count(saved)) * 8 + 15) / 16 * 16
+  if calls { saved = set-bit(set-bit(saved, abi.FRAME), abi.LINK) }
+  frame = ((out-slots + slots + bit-count(saved)) * 8 + 15) / 16 * 16
   final-start = Inst.count
-  if frame > 0 {
-    lower.grow-stack(frame)
-    save-saved()
-  }
+  if frame > 0 { enter() }
   for index in 0..order.len {
     let b = order[index]
     let next = if index + 1 < order.len then int(order[index + 1]) else 0

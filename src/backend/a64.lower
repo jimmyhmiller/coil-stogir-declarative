@@ -12,8 +12,15 @@ template move(d, s)        = orr(1, d, zr, s)
 template jump(to)          = b(to)
 template from-frame(d, slot) = ldr(d, sp, slot)
 template to-frame(s, slot)   = str(s, sp, slot)
+# The stack pointer down and up by n bytes: n below 4096, or n pages of 4096.
 template grow-stack(n)     = sub-imm(1, sp, sp, n)
 template shrink-stack(n)   = add-imm(1, sp, sp, n)
+template grow-pages(n)     = sub-imm-hi(1, sp, sp, n)
+template shrink-pages(n)   = add-imm-hi(1, sp, sp, n)
+template call-register(f)  = blr(f)
+# x29 to the frame record, n bytes (and pages) above the stack pointer.
+template frame-record(n)   = add-imm(1, x29, sp, n)
+template frame-pages(n)    = add-imm-hi(1, x29, x29, n)
 
 # Control that is only structure.
 rule START   => nothing
@@ -22,8 +29,10 @@ rule LOOP    => nothing
 rule TRUE    => nothing
 rule FALSE   => nothing
 rule PHI     => nothing
+rule CALL    => nothing
+rule RESULT  => nothing
 
-rule PARAM i when i < 8          => orr(1, out, zr, reg(i))
+rule PARAM   => nothing
 rule RETURN(_, v)                => orr(1, x0, zr, v) ; ret(x30)
 
 # Constants, by how many sixteen-bit pieces they need.

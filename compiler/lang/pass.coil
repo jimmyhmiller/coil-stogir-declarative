@@ -40,12 +40,17 @@
    (cells (ArrayList Field))
    (funcs (ArrayList Func))
    (files (ArrayList (slice u8)))
+   (passes (ArrayList (slice u8)))
    (nodes-module (slice u8))
    (unit-module (slice u8))
    (spec ir/Spec)])
 
 (defn entity? [(d Decls) (name (slice u8))] (-> bool)
   (or (= name "Node") (>= (t/index-of (.entities d) name) 0)))
+
+;;; A module written in `.pass`, whose function names are made safe for Coil.
+(defn pass-module? [(d Decls) (name (slice u8))] (-> bool)
+  (>= (t/index-of (.passes d) name) 0))
 
 (defn record? [(d Decls) (name (slice u8))] (-> bool)
   (let [(mut found) false]
@@ -183,6 +188,7 @@
                   :cells (ArrayList::new [Field] (malloc-allocator))
                   :funcs (ArrayList::new [Func] (malloc-allocator))
                   :files (ArrayList::new [(slice u8)] (malloc-allocator))
+                  :passes (ArrayList::new [(slice u8)] (malloc-allocator))
                   :nodes-module ""
                   :unit-module (project/module-of p file)
                   :spec (ir/parse "" file))]
@@ -202,6 +208,7 @@
             (let [name (module-name! (mut c))
                   pass-file (project/file-of p name (.line at) (.col at))]
               (scan! (mut d) (project/read-file pass-file file) pass-file name)
+              (push! (mut (.passes d)) name)
               (push! (mut (.files d)) pass-file))
           ; A .lower file gives the passes its three functions and its templates.
           (t/tok-is? tok "lower")
@@ -617,7 +624,7 @@
             (cond
               (>= (func-index (.d k) (.module k) name) 0)
                 (let [f (get (.funcs (.d k)) (func-index (.d k) (.module k) name))]
-                  (value (cat5 "(" name " (mut cx)" (call-args (mut k) f tok) ")")))
+                  (value (cat5 "(" (local-name name) " (mut cx)" (call-args (mut k) f tok) ")")))
               (record? (.d k) name) (record-literal (mut k) name)
               :else (builtin-call (mut k) name tok)))
       (>= (cell-index (.d k) name) 0)
@@ -714,7 +721,7 @@
               index (func-index (.d k) module name)]
           (when (< index 0) (t/die (mut (.c k)) tok (t/cat4 module " has no function " name "")))
           (t/expect! (mut (.c k)) "(")
-          (value (cat6 "(" (.x e) "/" name " (mut cx)"
+          (value (cat6 "(" (.x e) "/" (if (pass-module? (.d k) module) (local-name name) name) " (mut cx)"
                        (t/cat2 (call-args (mut k) (get (.funcs (.d k)) index) tok) ")"))))
       ; A module that is not a pass: its names as they are, its functions without the state.
       (= (.kind e) E-RAW)
@@ -1012,7 +1019,7 @@
   (let [(mut o) (t/out-new)]
     (clear! (mut (.locals k)))
     (set! (.returns k) false)
-    (t/emit! (mut o) (t/cat3 "(defn " (.name f) " [(cx (mut st/State))"))
+    (t/emit! (mut o) (t/cat3 "(defn " (local-name (.name f)) " [(cx (mut st/State))"))
     (for param (.params f)
       (push! (mut (.locals k)) (.name param))
       (t/emit! (mut o)

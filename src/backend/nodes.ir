@@ -22,7 +22,9 @@ node LOOP(c...: ctrl) : ctrl                    role loop
 node IF(c: ctrl, cond: bool) : ctrl             role if
 node TRUE(branch: ctrl) : ctrl                  role true
 node FALSE(branch: ctrl) : ctrl                 role false
-node CALL(c: ctrl, args...) : T                 role call   payload symbol
+# A call follows the C convention; RESULT is the value it returned.
+node CALL(c: ctrl, target: ptr, args...) : ctrl role call
+node RESULT(call: ctrl) : T                     role result
 
 # Values that come from outside the graph.
 node PARAM : T                                  role param  payload index

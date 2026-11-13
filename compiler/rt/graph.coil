@@ -25,6 +25,7 @@
 (const ROLE-PARAM 9)
 (const ROLE-CONST 10)
 (const ROLE-CALL 11)
+(const ROLE-RESULT 12)
 
 (defstruct Graph
   [(ops (ArrayList u16))

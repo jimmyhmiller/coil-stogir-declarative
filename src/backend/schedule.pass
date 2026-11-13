@@ -10,7 +10,7 @@ column placed: Node -> Bool
 column seq: Block -> [Node]           # a block's nodes, in the order they run
 column members: Block -> [Node]       # the floating nodes scheduled into a block
 
-fn pinned?(n: Node) -> Bool = cfg.control?(n) or n is PHI or n is PARAM
+fn pinned?(n: Node) -> Bool = cfg.control?(n) or n is PHI or n is PARAM or n is RESULT
 
 # Both walks stop at pinned nodes, whose blocks are known: the floating nodes
 # between them form no cycle, so each is placed after all it depends on.
@@ -75,6 +75,7 @@ fn order-block(b: Block) {
   var c = cfg.follower(h)
   while c != none and c is CALL {
     place(c, b)
+    for u in users(c) { if u is RESULT { place(u, b) } }
     c = cfg.follower(c)
   }
   for n in b.members { place(n, b) }
@@ -82,7 +83,7 @@ fn order-block(b: Block) {
 }
 
 fn build() {
-  for n in Node { if n is PHI { n.block-of = n.in(0).block-of } }
+  for n in Node { if n is PHI or n is RESULT { n.block-of = n.in(0).block-of } }
   for n in Node { if n is PARAM { n.block-of = cfg.entry() } }
   for n in Node { if not n.dead { early(n) } }
   for n in Node { if not n.dead { late(n) } }

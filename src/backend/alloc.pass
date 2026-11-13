@@ -59,7 +59,22 @@ fn touch(i: Inst, kind: Int, a: Int) {
       p.busy.push(p.written)
       p.busy.push(at)
     }
-    if writes?(kind) { p.written = at }
+    # A write alone still ends whatever value was there.
+    if writes?(kind) {
+      p.busy.push(at)
+      p.busy.push(at)
+      p.written = at
+    }
+  }
+}
+
+# The machine registers of `set`, read or written by `i` besides its operands.
+fn also(i: Inst, set: Word, kind: Int) {
+  var rest = set
+  while rest != word(0) {
+    let r = lowest-bit(rest)
+    touch(i, kind, 0 - r - 1)
+    rest = clear-bit(rest, r)
   }
 }
 
@@ -75,6 +90,8 @@ fn occurrences() {
         let kind = isa.operand-kind(op, k)
         if reg-kind?(kind) { touch(i, kind, mach.arg(i, k)) }
       }
+      also(i, i.also-reads, isa.K-USE)
+      also(i, i.also-writes, isa.K-DEF)
       # Each side of a copy would like the other's register.
       let source = move-source(i)
       if source != 0 {
