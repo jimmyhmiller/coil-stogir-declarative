@@ -6,6 +6,7 @@ use cfg as cfg
 use lower as lower
 
 tally expanded: Int
+state spelled: Bool                   # an update here was spelled out: its block is now several
 
 # What `n` leaves in memory, from what was there.
 fn left(n: Node, old: Node, v: Node) -> Node {
@@ -49,6 +50,7 @@ fn expand(n: Node) {
   drop(n)
   from(none)
   expanded = expanded + 1
+  spelled = true
 }
 
 fn run() {

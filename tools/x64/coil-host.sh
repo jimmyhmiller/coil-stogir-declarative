@@ -13,7 +13,7 @@ cd "$tree"
 export LLVM_CONFIG=/opt/homebrew/opt/llvm@21/bin/llvm-config
 read -r -a LINK <<<"$(scripts/compiler/llvm-link-flags.sh dynamic)"
 mkdir -p build/x64
-python3 scripts/compiler/stage0.py build/bin/coil-candidate build src/compiler/main.coil -o build/x64/coil-emitter "${LINK[@]}" > /dev/null
+python3 scripts/compiler/stage0.py build/bin/coil-candidate build src/compiler/main.coil --release -o build/x64/coil-emitter "${LINK[@]}" > /dev/null
 build/x64/coil-emitter emit-ir src/compiler/main.coil --target x86_64-unknown-linux-gnu > build/x64/coil-linux.ll
 xz -3 -T0 -f -k build/x64/coil-linux.ll
 rsync -a --delete --exclude .git --exclude '/build' --exclude .worktrees ./ $HOST:csd-coil/

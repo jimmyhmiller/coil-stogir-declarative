@@ -31,6 +31,13 @@ template to-frame(s, base, slot)   = add-imm-hi(1, x17, base, slot / 512) ; str(
 # and written from two registers.
 template load-pair(a, b, base, at)  = ldp(a, b, base, at / 8)
 template store-pair(a, b, base, at) = stp(a, b, base, at / 8)
+# Sixteen bytes `sat` bytes from `s` copied to `dat` bytes from `d`, and a
+# word of `bytes`, through scratch registers: x15 and x16 as a pair near enough
+# for one instruction, else x15 a word at a time (a far address takes x16 and
+# x17).
+template copy-sixteen(s, sat, d, dat) when sat % 8 == 0 and sat >= -512 and sat < 512 and dat % 8 == 0 and dat >= -512 and dat < 512 = ldp(x15, x16, s, (sat / 8) & 127) ; stp(x15, x16, d, (dat / 8) & 127)
+template copy-sixteen(s, sat, d, dat) = copy-word(s, sat, d, dat, 8) ; copy-word(s, sat + 8, d, dat + 8, 8)
+template copy-word(s, sat, d, dat, bytes) = load-word(x15, s, sat, bytes, 0) ; store-word(x15, d, dat, bytes)
 # Two words of a frame object `below` bytes below the frame record, from the frame register.
 template load-pair-object(a, b, below)  = ldp(a, b, x29, (128 - below / 8) & 127)
 template store-pair-object(a, b, below) = stp(a, b, x29, (128 - below / 8) & 127)
@@ -99,6 +106,7 @@ template base-from-stack(d)  = add-imm(1, d, sp, 0)
 template stack-from-base(s)  = add-imm(1, sp, s, 0)
 template reserve(n)          = add-imm(1, $up, n, 15) ; and-imm(1, $whole, $up, logical(0 - 16)) ; add-imm(1, $top, sp, 0) ; sub(1, $low, $top, $whole) ; add-imm(1, sp, $low, 0)
 template above-arguments(d, n) = add-imm(1, d, sp, n)
+template align-up(d, s, a)    = add-imm(1, d, s, a - 1) ; and-imm(1, d, d, logical(0 - a))
 # The stack pointer down and up by n bytes; from 4096 up it takes two instructions.
 template grow-stack(n) when n < 4096   = sub-imm(1, sp, sp, n)
 template grow-stack(n)                 = sub-imm(1, sp, sp, n % 4096) ; sub-imm-hi(1, sp, sp, n / 4096)
@@ -124,6 +132,10 @@ template table-jump(w, v, low, last, otherwise) = sub-imm(w, $i, v, low) ; subs-
 template table-entry(to) = distance-to(to)
 template count-into(d, k)  = movz(1, d, k, 0)
 template call-register(f)  = blr(f)
+# A call of a symbol whose address is read from the table of addresses, and
+# the same in tail position.
+template call-through-table(s) = adrp-got(x16, s) ; ldr-got(x16, x16, s) ; blr(x16)
+template tail-through-table(s) is return = adrp-got(x16, s) ; ldr-got(x16, x16, s) ; br(x16)
 template call-symbol(s)    = bl(s)
 template machine-code(bits) = raw(bits)
 
@@ -131,6 +143,47 @@ template machine-code(bits) = raw(bits)
 # make a copy with those bits filled, for the instructions that read them.
 template sign-extend(d, s, bits) = sbfm(0, d, s, 0, bits - 1)
 template zero-extend(d, s, bits) = ubfm(0, d, s, 0, bits - 1)
+
+# A 64-bit constant into register d, in as few pieces as it needs.
+template constant(d, k) when k >= 0 and k < 65536  = movz(1, d, k, 0)
+template constant(d, k) when k < 0 and k >= -65536 = movn(1, d, ~k, 0)
+template constant(d, k) = movz(1, d, k & 65535, 0) ; movk(1, d, (k >> 16) & 65535, 1) ; movk(1, d, (k >> 32) & 65535, 2) ; movk(1, d, (k >> 48) & 65535, 3)
+# The address `at` bytes from `base`, into d; a far one through x16.
+template address(d, base, at) when at == 0 and d == base = nothing
+template address(d, base, at) when at >= 0 and at < 4096  = add-imm(1, d, base, at)
+template address(d, base, at) when at < 0 and at > -4096  = sub-imm(1, d, base, 0 - at)
+template address(d, base, at)                             = constant(x16, at) ; add(1, d, base, x16)
+# `bytes` at `at` from `base`, read into d, their sign extended to 64 bits if
+# `signed`, by the shortest form the offset allows; a far one from x17.
+template load-word(d, base, at, bytes, signed) when bytes == 8 and at >= 0 and at < 32768 and at % 8 == 0 = ldr(d, base, at / 8)
+template load-word(d, base, at, bytes, signed) when bytes == 4 and signed == 0 and at >= 0 and at < 16384 and at % 4 == 0 = ldrw(d, base, at / 4)
+template load-word(d, base, at, bytes, signed) when bytes == 4 and at >= 0 and at < 16384 and at % 4 == 0 = ldrsw(d, base, at / 4)
+template load-word(d, base, at, bytes, signed) when bytes == 2 and signed == 0 and at >= 0 and at < 8192 and at % 2 == 0 = ldrh(d, base, at / 2)
+template load-word(d, base, at, bytes, signed) when bytes == 2 and at >= 0 and at < 8192 and at % 2 == 0 = ldrsh(d, base, at / 2)
+template load-word(d, base, at, bytes, signed) when bytes == 1 and signed == 0 and at >= 0 and at < 4096 = ldrb(d, base, at)
+template load-word(d, base, at, bytes, signed) when bytes == 1 and at >= 0 and at < 4096 = ldrsb(d, base, at)
+template load-word(d, base, at, bytes, signed) when at >= -256 and at < 256 and (signed == 0 or bytes == 8) = ldur(log2(bytes), d, base, at & 511)
+template load-word(d, base, at, bytes, signed) when at >= -256 and at < 256 = ldur(log2(bytes), d, base, at & 511) ; sbfm(1, d, d, 0, bytes * 8 - 1)
+template load-word(d, base, at, bytes, signed) = address(x17, base, at) ; load-word(d, x17, 0, bytes, signed)
+template store-word(s, base, at, bytes) when bytes == 8 and at >= 0 and at < 32768 and at % 8 == 0 = str(s, base, at / 8)
+template store-word(s, base, at, bytes) when bytes == 4 and at >= 0 and at < 16384 and at % 4 == 0 = strw(s, base, at / 4)
+template store-word(s, base, at, bytes) when bytes == 2 and at >= 0 and at < 8192 and at % 2 == 0 = strh(s, base, at / 2)
+template store-word(s, base, at, bytes) when bytes == 1 and at >= 0 and at < 4096 = strb(s, base, at)
+template store-word(s, base, at, bytes) when at >= -256 and at < 256 = stur(log2(bytes), s, base, at & 511)
+template store-word(s, base, at, bytes) = address(x17, base, at) ; store-word(s, x17, 0, bytes)
+# Zero into `bytes` at `at` from `base`.
+template store-zero(base, at, bytes) = store-word(zr, base, at, bytes)
+# The same for floating registers: 4, 8 or 16 bytes.
+template load-float(d, base, at, bytes) when bytes == 16 and at >= 0 and at < 65536 and at % 16 == 0 = ldr-q(d, base, at / 16)
+template load-float(d, base, at, bytes) when bytes == 8 and at >= 0 and at < 32768 and at % 8 == 0 = ldr-d(d, base, at / 8)
+template load-float(d, base, at, bytes) when bytes == 4 and at >= 0 and at < 16384 and at % 4 == 0 = ldr-s(d, base, at / 4)
+template load-float(d, base, at, bytes) when bytes <= 8 and at >= -256 and at < 256 = ldur-f(log2(bytes), d, base, at & 511)
+template load-float(d, base, at, bytes) = address(x17, base, at) ; load-float(d, x17, 0, bytes)
+template store-float(s, base, at, bytes) when bytes == 16 and at >= 0 and at < 65536 and at % 16 == 0 = str-q(s, base, at / 16)
+template store-float(s, base, at, bytes) when bytes == 8 and at >= 0 and at < 32768 and at % 8 == 0 = str-d(s, base, at / 8)
+template store-float(s, base, at, bytes) when bytes == 4 and at >= 0 and at < 16384 and at % 4 == 0 = str-s(s, base, at / 4)
+template store-float(s, base, at, bytes) when bytes <= 8 and at >= -256 and at < 256 = stur-f(log2(bytes), s, base, at & 511)
+template store-float(s, base, at, bytes) = address(x17, base, at) ; store-float(s, x17, 0, bytes)
 
 # Control that is only structure.
 rule START   => nothing

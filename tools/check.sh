@@ -7,7 +7,7 @@ cd "$(dirname $0)/.."
 mkdir -p out
 # A build that fails stops the check: nothing stale is run in its place.
 build() {
-  coil build tests/$1.coil -O1 -o out/$1 > out/build.log 2>&1 || { cat out/build.log; echo "check: tests/$1.coil did not build"; exit 1 }
+  coil build tests/$1.coil --release -O1 -o out/$1 > out/build.log 2>&1 || { cat out/build.log; echo "check: tests/$1.coil did not build"; exit 1 }
 }
 python3 tools/lines.py
 build rules
@@ -20,10 +20,21 @@ build link
 out/link
 clang tests/link-main.c out/link.o -o out/link-aot
 out/link-aot
+LINK_BASE=1 out/link
+clang tests/link-main.c out/link.o -o out/link-aot
+out/link-aot
 # The tests that are one program each.
 for t in variadic results passing; do
   build $t
   out/$t
 done
+# The compile straight from CIR: hand-built functions, and random CIR against
+# the reference interpreter made from cir.ops.
+build cir-interp
+out/cir-interp
+build direct
+out/direct
+build cir-fuzz
+out/cir-fuzz ${1:-2000}
 build fuzz
 tools/fuzz-chunks.sh out/fuzz ${1:-2000}

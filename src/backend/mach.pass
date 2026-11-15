@@ -96,6 +96,18 @@ fn set-local(n: Node, r: Int) {
 
 fn rule-of(n: Node) -> Int = n.tile
 
+# Instruction `at` also reads and writes these machine registers.
+fn implicit-at(at: Int, reads: Word, writes: Word) {
+  let i: Inst = id(at)
+  i.also-reads = reads
+  i.also-writes = writes
+}
+
+fn mark-call-at(at: Int) {
+  let i: Inst = id(at)
+  i.calling = true
+}
+
 # The instruction just emitted also reads and writes these machine registers.
 fn implicit(reads: Word, writes: Word) {
   let i = id(Inst.count)

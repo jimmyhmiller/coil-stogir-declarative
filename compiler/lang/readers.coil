@@ -18,6 +18,8 @@
 (import "lang.layout" :as layout)
 (import "lang.pipeline" :as pipeline)
 (import "lang.flow" :as flow)
+(import "lang.ops" :as ops)
+(import "lang.select" :as select)
 
 (reader-provider "lang.readers" read-any)
 
@@ -79,4 +81,6 @@
           (t/ends-with path ".layout") (layout/module-text context)
           (t/ends-with path ".pipeline") (pipeline/module-text context)
           (t/ends-with path ".flow") (flow/module-text context)
+          (t/ends-with path ".ops") (ops/module-text (t/source-of context) path)
+          (t/ends-with path ".select") (select/module-text context)
           :else (t/fail-at path 1 1 "no language reads a file with this extension"))))

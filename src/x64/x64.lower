@@ -39,6 +39,12 @@ template table-entry(to) = ud2()
 # Two words next to each other in memory: one after the other.
 template load-pair(a, b, base, at)  = load(1, a, base, at) ; load(1, b, base, at + 8)
 template store-pair(a, b, base, at) = store(1, a, base, at) ; store(1, b, base, at + 8)
+# Sixteen bytes `sat` bytes from `s` copied to `dat` bytes from `d`, and a
+# word of `bytes`, through r11: a word at a time, as what is copied was most
+# often just written a word at a time (a 16-byte read of two 8-byte writes
+# waits for both to reach the cache).
+template copy-sixteen(s, sat, d, dat) = copy-word(s, sat, d, dat, 8) ; copy-word(s, sat + 8, d, dat + 8, 8)
+template copy-word(s, sat, d, dat, bytes) = load-word(r11, s, sat, bytes, 0) ; store-word(r11, d, dat, bytes)
 # Two words of a frame object `below` bytes below the frame record.
 template load-pair-object(a, b, below)  = load(1, a, rbp, 0 - below) ; load(1, b, rbp, 8 - below)
 template store-pair-object(a, b, below) = store(1, a, rbp, 0 - below) ; store(1, b, rbp, 8 - below)
@@ -70,7 +76,7 @@ template from-stack-float(d, base, at, bytes)                 = loadf(0, d, base
 # of 16; and the address n bytes above it.
 template base-from-stack(d)  = mov(1, d, rsp)
 template stack-from-base(s)  = mov(1, rsp, s)
-template reserve(n)          = move($whole, n) ; add-imm(1, $whole, 15) ; and-imm(1, $whole, 0 - 16) ; sub(1, rsp, $whole)
+template reserve(n)          = move(r10, n) ; add-imm(1, r10, 15) ; and-imm(1, r10, 0 - 16) ; sub(1, rsp, r10)
 template above-arguments(d, n) = lea(d, rsp, n)
 template grow-stack(n)            = sub-imm(1, rsp, n)
 template shrink-stack(n)          = add-imm(1, rsp, n)
@@ -83,13 +89,73 @@ template open-record(rest)                = push(rbp) ; mov(1, rbp, rsp) ; sub-i
 template base-from-frame(d, n)    = lea(d, rbp, 0 - n)
 # Go to `to` if register v holds k; `w` is 1 to compare all 64 bits.
 template branch-if-equal(w, v, k, to) when s32(k) = cmp-imm(w, v, k) ; jcc(equal, to)
-template branch-if-equal(w, v, k, to)             = mov-imm64($t, k) ; cmp(w, v, $t) ; jcc(equal, to)
+template branch-if-equal(w, v, k, to)             = mov-imm64(r10, k) ; cmp(w, v, r10) ; jcc(equal, to)
 template tail-register(f) is return = jmp-reg(f)
 template tail-symbol(s) is return   = jmp-symbol(s)
 template count-into(d, k)         = mov-imm32(d, k)
 template call-register(f)         = call-reg(f)
 template call-symbol(s)           = call(s)
 template machine-code(bits) = raw(bits)
+# What the compile straight from CIR asks of the machine besides its rules:
+# a constant, an address, a word of `bytes` bytes to or from memory (one
+# narrower read back extended as `signed` says), a floating value likewise,
+# zeros, calls through the table of addresses, and a value rounded up to `a`.
+template constant(d, k) when k >= 0 and k < 4294967296 = mov-imm32(d, k)
+template constant(d, k) when s32(k)                    = mov-simm32(d, k)
+template constant(d, k)                                = mov-imm64(d, k)
+template address(d, base, at) when at == 0 and d == base = nothing
+template address(d, base, at) when s32(at)              = lea(d, base, at)
+template address(d, base, at)                           = mov-imm64(r11, at) ; lea-indexed(d, base, r11, 0, 0)
+template load-word(d, base, at, bytes, signed) when bytes == 8                  = load(1, d, base, at)
+template load-word(d, base, at, bytes, signed) when bytes == 4 and signed == 0  = load(0, d, base, at)
+template load-word(d, base, at, bytes, signed) when bytes == 4                  = load(0, d, base, at) ; movsx32(d, d)
+template load-word(d, base, at, bytes, signed) when bytes == 2 and signed == 0  = load16(d, base, at)
+template load-word(d, base, at, bytes, signed) when bytes == 2                  = load16(d, base, at) ; movsx16(1, d, d)
+template load-word(d, base, at, bytes, signed) when signed == 0                 = load8(d, base, at)
+template load-word(d, base, at, bytes, signed)                                  = load8(d, base, at) ; movsx8(1, d, d)
+template store-word(s, base, at, bytes) when bytes == 8 = store(1, s, base, at)
+template store-word(s, base, at, bytes) when bytes == 4 = store(0, s, base, at)
+template store-word(s, base, at, bytes) when bytes == 2 = store16(s, base, at)
+template store-word(s, base, at, bytes)                 = store8(s, base, at)
+# Zero stored as a constant of the instruction: no register is needed for it.
+template store-zero(base, at, bytes) when bytes == 8 = store-imm(1, base, at, 0)
+template store-zero(base, at, bytes) when bytes == 4 = store-imm(0, base, at, 0)
+template store-zero(base, at, bytes) when bytes == 2 = store16-imm(base, at, 0)
+template store-zero(base, at, bytes)                 = store8-imm(base, at, 0)
+template load-float(d, base, at, bytes) when bytes == 16 = loadv(d, base, at)
+template load-float(d, base, at, bytes) when bytes == 8  = loadf(1, d, base, at)
+template load-float(d, base, at, bytes)                  = loadf(0, d, base, at)
+template store-float(s, base, at, bytes) when bytes == 16 = storev(s, base, at)
+template store-float(s, base, at, bytes) when bytes == 8  = storef(1, s, base, at)
+template store-float(s, base, at, bytes)                  = storef(0, s, base, at)
+template call-through-table(s) = mov-got(r11, s) ; call-reg(r11)
+template tail-through-table(s) is return = mov-got(r11, s) ; jmp-reg(r11)
+template align-up(d, s, a) = move(d, s) ; add-imm(1, d, a - 1) ; and-imm(1, d, 0 - a)
+# What memory other threads share held, `bytes` wide, carried up with zeros;
+# and as a signed or unsigned number of that width, for comparing.
+template narrow(d, bytes) when bytes == 8 = nothing
+template narrow(d, bytes) when bytes == 4 = mov(0, d, d)
+template narrow(d, bytes) when bytes == 2 = movzx16(d, d)
+template narrow(d, bytes)                 = movzx8(d, d)
+template signed-of(d, s, bytes) when bytes == 8 = move(d, s)
+template signed-of(d, s, bytes) when bytes == 4 = movsx32(d, s)
+template signed-of(d, s, bytes) when bytes == 2 = movsx16(1, d, s)
+template signed-of(d, s, bytes)                 = movsx8(1, d, s)
+template unsigned-of(d, s, bytes) when bytes == 8 = move(d, s)
+template unsigned-of(d, s, bytes) when bytes == 4 = mov(0, d, s)
+template unsigned-of(d, s, bytes) when bytes == 2 = movzx16(d, s)
+template unsigned-of(d, s, bytes)                 = movzx8(d, s)
+# One round of an update the machine has no instruction for: `n`, what was
+# there, combined with `v` as `kind` says (CIR's ATOMIC-RMW: 2 and, 3 or,
+# 4 exclusive or, the larger and the smaller signed 6 7, unsigned 8 9), with
+# `a` and `b` registers of the caller's for comparing.
+template update(kind, bytes, n, v, a, b) when kind == 2 = and(1, n, v)
+template update(kind, bytes, n, v, a, b) when kind == 3 = or(1, n, v)
+template update(kind, bytes, n, v, a, b) when kind == 4 = xor(1, n, v)
+template update(kind, bytes, n, v, a, b) when kind == 6 = signed-of(a, n, bytes) ; signed-of(b, v, bytes) ; cmp(1, a, b) ; cmov(1, less, n, v)
+template update(kind, bytes, n, v, a, b) when kind == 7 = signed-of(a, n, bytes) ; signed-of(b, v, bytes) ; cmp(1, a, b) ; cmov(1, greater, n, v)
+template update(kind, bytes, n, v, a, b) when kind == 8 = unsigned-of(a, n, bytes) ; unsigned-of(b, v, bytes) ; cmp(1, a, b) ; cmov(1, below, n, v)
+template update(kind, bytes, n, v, a, b)                = unsigned-of(a, n, bytes) ; unsigned-of(b, v, bytes) ; cmp(1, a, b) ; cmov(1, above, n, v)
 
 # A value narrower than 32 bits has no promise about the bits above it. These
 # make a copy with those bits filled, for the instructions that read them.
@@ -193,7 +259,8 @@ rule POPCNT(x)                     => popcnt(sf, out, zx(x))
 rule BSWAP(x)                      => move(out, x) ; bswap(sf, out)
 # The bits in the opposite order: the bytes, then within each byte the halves,
 # within each half the pairs, and within each pair the bits.
-template swap-fields(w, d, mask, by) = mov-imm64($m, mask) ; move($t, d) ; shr-imm(w, $t, by) ; and(w, $t, $m) ; and(w, d, $m) ; shl-imm(w, d, by) ; or(w, d, $t)
+template swap-fields(w, d, mask, by) = swap-fields-in(w, d, mask, by, $m, $t)
+template swap-fields-in(w, d, mask, by, m, t) = mov-imm64(m, mask) ; move(t, d) ; shr-imm(w, t, by) ; and(w, t, m) ; and(w, d, m) ; shl-imm(w, d, by) ; or(w, d, t)
 rule BITREV(x) when width == 64    => move(out, x) ; bswap(1, out) ; swap-fields(1, out, 1085102592571150095, 4) ; swap-fields(1, out, 3689348814741910323, 2) ; swap-fields(1, out, 6148914691236517205, 1)
 rule BITREV(x)                     => move(out, x) ; bswap(0, out) ; swap-fields(0, out, 252645135, 4) ; swap-fields(0, out, 858993459, 2) ; swap-fields(0, out, 1431655765, 1)
 rule ROL(x, y)                     => move(out, x) ; move(rcx, y) ; rol-cl(sf, out)

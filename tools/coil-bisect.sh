@@ -7,13 +7,13 @@ set -uo pipefail
 tree=${COIL_TREE:-$HOME/Documents/Code/projects/coil/.worktrees/declarative}
 cd "$tree"
 flags=($(scripts/compiler/llvm-link-flags.sh dynamic))
-total=$(DECLARATIVE_SHOW='?' build/bin/coil-candidate emit-obj src/compiler/main.coil --backend declarative -O2 --no-debug -o build/bisect.o | grep -c '^; ')
+total=$(DECLARATIVE_SHOW='?' build/bin/coil-candidate emit-obj src/compiler/main.coil --backend native -O2 --no-debug -o build/bisect.o | grep -c '^; ')
 good=0; bad=$total
 while (( bad - good > 1 )); do
   mid=$(( (good + bad) / 2 ))
-  DECLARATIVE_TRIAL=$mid build/bin/coil-candidate build src/compiler/main.coil --backend declarative -O2 --no-debug -o build/bin/coil-self $flags >/dev/null 2>&1
+  DECLARATIVE_TRIAL=$mid build/bin/coil-candidate build src/compiler/main.coil --backend native -O2 --release -o build/bin/coil-self $flags >/dev/null 2>&1
   if zsh -c "$1" >/dev/null 2>&1; then good=$mid; else bad=$mid; fi
   echo "trial on for $mid: $([[ $good == $mid ]] && echo works || echo fails)"
 done
 echo "the trial goes wrong in function $good:"
-DECLARATIVE_SHOW='?' build/bin/coil-candidate emit-obj src/compiler/main.coil --backend declarative -O2 --no-debug -o build/bisect.o | grep "^; $good "
+DECLARATIVE_SHOW='?' build/bin/coil-candidate emit-obj src/compiler/main.coil --backend native -O2 --no-debug -o build/bisect.o | grep "^; $good "

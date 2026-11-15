@@ -308,6 +308,13 @@
       (when (and (< found 0) (= (get names i) name)) (set! found i)))
     found))
 
+;;; Where `part` first starts in `s`, or -1.
+(defn index-of-text [(s (slice u8)) (part (slice u8))] (-> i64)
+  (let [(mut found) -1]
+    (for i (range 0 (+ (- (len s) (len part)) 1))
+      (when (and (< found 0) (= (subslice s i (+ i (len part))) part)) (set! found i)))
+    found))
+
 (defn ends-with [(s (slice u8)) (suffix (slice u8))] (-> bool)
   (and (>= (len s) (len suffix))
        (= (subslice s (- (len s) (len suffix)) (len s)) suffix)))

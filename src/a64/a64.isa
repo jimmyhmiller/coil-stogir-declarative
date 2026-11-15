@@ -39,6 +39,7 @@ const ge = 10
 const lt = 11
 const gt = 12
 const le = 13
+const al = 14
 
 # Arithmetic on registers. `sf` picks 64-bit (1) or 32-bit (0) registers.
 inst add(sf: u1, rd: def gpr, rn: use gpr, rm: use gpr)   = sf 0 0 01011 00 0 rm 000000 rn rd
@@ -57,6 +58,10 @@ inst udiv(sf: u1, rd: def gpr, rn: use gpr, rm: use gpr)  = sf 0 0 11010110 rm 0
 inst sdiv(sf: u1, rd: def gpr, rn: use gpr, rm: use gpr)  = sf 0 0 11010110 rm 00001 1 rn rd
 inst csel(sf: u1, rd: def gpr, rn: use gpr, rm: use gpr, cond: u4) = sf 0 0 11010100 rm cond 0 0 rn rd
 inst adds(sf: u1, rd: def gpr, rn: use gpr, rm: use gpr)  = sf 0 1 01011 00 0 rm 000000 rn rd
+# With the carry: the high halves of a wider sum or difference.
+inst adc(sf: u1, rd: def gpr, rn: use gpr, rm: use gpr)   = sf 0 0 11010000 rm 000000 rn rd
+inst sbc(sf: u1, rd: def gpr, rn: use gpr, rm: use gpr)   = sf 1 0 11010000 rm 000000 rn rd
+inst sbcs(sf: u1, rd: def gpr, rn: use gpr, rm: use gpr)  = sf 1 1 11010000 rm 000000 rn rd
 inst rorv(sf: u1, rd: def gpr, rn: use gpr, rm: use gpr)  = sf 0 0 11010110 rm 0010 11 rn rd
 inst clz(sf: u1, rd: def gpr, rn: use gpr)                = sf 1 0 11010110 00000 00010 0 rn rd
 inst rbit(sf: u1, rd: def gpr, rn: use gpr)               = sf 1 0 11010110 00000 00000 0 rn rd
@@ -90,6 +95,7 @@ inst eor-lsr(sf: u1, rd: def gpr, rn: use gpr, rm: use gpr, amount: u6) = sf 10 
 immediate logical(size in 2 4 8 16 32 64, ones in 1..size - 1, rotate in 0..size - 1) = repeat(rotate-right(low-ones(ones), rotate, size), size) encoded (size == 64) << 12 | rotate << 6 | (~(size * 2 - 1)) & 63 | (ones - 1)
 
 inst and-imm(sf: u1, rd: def gpr, rn: use gpr, mask: u13) = sf 00 100100 mask rn rd
+inst ands-imm(sf: u1, rd: def gpr, rn: use gpr, mask: u13) = sf 11 100100 mask rn rd
 inst orr-imm(sf: u1, rd: def gpr, rn: use gpr, mask: u13) = sf 01 100100 mask rn rd
 inst eor-imm(sf: u1, rd: def gpr, rn: use gpr, mask: u13) = sf 10 100100 mask rn rd
 
@@ -190,6 +196,10 @@ inst str-s(rt: use simd, rn: use gpr, imm: u12)              = 1011110100 imm rn
 inst ldrb(rt: def gpr, rn: use gpr, imm: u12)             = 0011100101 imm rn rt
 inst ldrh(rt: def gpr, rn: use gpr, imm: u12)             = 0111100101 imm rn rt
 inst ldrw(rt: def gpr, rn: use gpr, imm: u12)             = 1011100101 imm rn rt
+# Loads of fewer than 64 bits that extend their sign to all 64.
+inst ldrsb(rt: def gpr, rn: use gpr, imm: u12)            = 0011100110 imm rn rt
+inst ldrsh(rt: def gpr, rn: use gpr, imm: u12)            = 0111100110 imm rn rt
+inst ldrsw(rt: def gpr, rn: use gpr, imm: u12)            = 1011100110 imm rn rt
 inst strb(rt: use gpr, rn: use gpr, imm: u12)             = 0011100100 imm rn rt
 inst strh(rt: use gpr, rn: use gpr, imm: u12)             = 0111100100 imm rn rt
 inst strw(rt: use gpr, rn: use gpr, imm: u12)             = 1011100100 imm rn rt

@@ -51,7 +51,11 @@
    (temps (ArrayList (slice u8)))
    (params (ArrayList (slice u8)))
    (locals (ArrayList (slice u8)))
-   (template-names (ArrayList (slice u8)))])
+   (template-names (ArrayList (slice u8)))
+   ; Registers are chosen as the instructions are written (a unit over an
+   ; IR said in `.ops`), so an instruction of a fixed-width machine whose
+   ; operands name no label and no symbol goes out already encoded.
+   (encoded bool)])
 
 (defn parse-pattern [(l (mut L))] (-> Pat)
   (let [tok (t/peek (mut (.c l)))
@@ -290,13 +294,17 @@
   (do
         (when (= number 0) (t/die (mut (.c l)) tok (t/cat2 "the target has no instruction " name)))
         (let [inst (get (.insts (.target l)) (- number 1))
+              encoded (and (.encoded l) (isa/encodable? (.target l) inst))
               (mut i) 0]
-          (t/emit! (mut o) (t/cat3 " (mach/emit (mut cx) " (t/int-text number) ""))
+          (t/emit! (mut o) (if encoded
+                               (t/cat4 " (mach/emit-word (mut cx) " (t/int-text number) " (cast u64 (isa/word-" (t/int-text number))
+                               (t/cat3 " (mach/emit (mut cx) " (t/int-text number) "")))
           (t/expect! (mut (.c l)) "(")
           (unless (t/at? (mut (.c l)) ")")
             (let [(mut going) true]
               (while going
-                (t/emit! (mut o) (t/cat2 " " (value-expr (mut l) 0 true)))
+                (let [code (value-expr (mut l) 0 true)]
+                  (t/emit! (mut o) (t/cat2 " " (if encoded (isa/operand-code-text inst i code) code))))
                 (set! i (+ i 1))
                 (set! going (t/accept! (mut (.c l)) ",")))))
           (t/expect! (mut (.c l)) ")")
@@ -304,7 +312,7 @@
             (t/die (mut (.c l)) tok
                    (t/cat4 name " takes " (t/int-text (len (.operands inst))) " operands")))
           (for _ (range i 5) (t/emit! (mut o) " 0"))
-          (t/emit! (mut o) ")"))))
+          (t/emit! (mut o) (if encoded ")))" ")")))))
 
 ;; ---------------------------------------------------------------- the module
 
@@ -332,6 +340,10 @@
     (t/expect! (mut c) "lower")
     (t/expect! (mut c) "in")
     (set! unit (project/resolve p (module-name! (mut c)) 1 1))
+    ; A unit that lists this file as `templates` has no node set: its rules
+    ; are not read, and its templates are all it gives.
+    (let [only (and (templates-only? (project/read-file (project/file-of p unit 1 1) path) (project/module-of p path))
+                    (ops-unit? (project/read-file (project/file-of p unit 1 1) path)))]
     (let [(mut header) true]
       (while header
         (let [at (t/peek-at (mut c) 1)]
@@ -355,7 +367,8 @@
                     :temps (ArrayList::new [(slice u8)] (malloc-allocator))
                     :params (ArrayList::new [(slice u8)] (malloc-allocator))
                     :locals locals
-                    :template-names template-names)
+                    :template-names template-names
+                    :encoded only)
           (mut o) (t/out-new)
           (mut selects) (t/out-new)
           (mut marks) (t/out-new)
@@ -367,6 +380,7 @@
           (mut rule) 0
           names (templates (t/source-of context) path)
           (mut extends) false]
+      (block :done
       (for one names (when (= (get one 0) "sign-extend") (set! extends true)))
       (t/line! (mut o) (t/cat4 "(depends-on \"" nodes-file "\" \"" (t/cat2 target-file "\")")))
       (t/line! (mut o) "(import \"coil.primitive\" :as primitive)")
@@ -432,6 +446,13 @@
                             (t/cat4 (get template-cases index) "    " guard
                                     (t/cat4 " (let [" (t/text-of (mut fresh)) "] (do"
                                             (t/cat3 body mark " (do)))\n"))))))))
+            ; Read for its templates alone: a rule is passed over.
+            (and only (t/tok-is? tok "rule"))
+              (while (and (not (t/eof? (mut (.c l))))
+                          (not (and (= (.col (t/peek (mut (.c l)))) 1)
+                                    (or (t/tok-is? (t/peek (mut (.c l))) "rule")
+                                        (t/tok-is? (t/peek (mut (.c l))) "template")))))
+                (t/advance! (mut (.c l))))
             (t/tok-is? tok "rule")
               (let [pattern (parse-pattern (mut l))
                     commutative (and (!= (.node pattern) "")
@@ -485,6 +506,7 @@
         (t/line! (mut o) "  (cond")
         (t/emit! (mut o) (get template-cases i))
         (t/line! (mut o) (t/cat3 "    :else (panic \"no case of template " (get template-order i) " applies\")))")))
+      (when only (return-from :done (t/text-of (mut o))))
       (t/line! (mut o) ";;; The rule that computes `n`, or 0 if none matches.")
       (t/line! (mut o) "(defn select [(cx (mut st/State)) (n i32)] (-> i64)")
             (t/line! (mut o) "  (cond")
@@ -540,7 +562,28 @@
             (t/line! (mut o) "  (match rule")
       (t/emit! (mut o) (t/text-of (mut emits)))
       (t/line! (mut o) "    (_ (do))))")
-      (t/text-of (mut o)))))
+      (t/text-of (mut o)))))))
+
+;;; Whether the unit whose text is `unit-src` lists the module `name` as
+;;; `templates`, to be read for its templates alone.
+;;; Whether the unit is over an IR said in `.ops`, whose registers are chosen
+;;; as instructions are written.
+(defn ops-unit? [(unit-src (slice u8))] (-> bool)
+  (let [(mut c) (t/cursor unit-src "")
+        (mut found) false]
+    (while (not (t/eof? (mut c)))
+      (let [tok (t/advance! (mut c))]
+        (when (and (t/tok-is? tok "ops") (= (.col tok) 1)) (set! found true))))
+    found))
+
+(defn templates-only? [(unit-src (slice u8)) (name (slice u8))] (-> bool)
+  (let [(mut c) (t/cursor unit-src "")
+        (mut found) false]
+    (while (not (t/eof? (mut c)))
+      (let [tok (t/advance! (mut c))]
+        (when (and (t/tok-is? tok "templates") (not (t/eof? (mut c))))
+          (when (= (module-name! (mut c)) name) (set! found true)))))
+    found))
 
 ;;; The functions a `.lower` file gives the passes: its templates' names and
 ;;; parameters, for the unit's table of functions.

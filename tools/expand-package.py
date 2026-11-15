@@ -33,5 +33,5 @@ for f in files:
 (root / "Coil.toml").write_text(
     f"# Written by coil-stogir-declarative's tools/expand.sh: see NOTICE.\n"
     f"[package]\nname = \"{package}\"\nsource-roots = [\".\"]\n\n"
-    f"[dependencies]\ntpde = {{ path = \"../tpde\" }}\n")
+    f"[dependencies]\nnative = {{ path = \"../native\" }}\n")
 print(f"expand-package: {len(files)} modules named {package}.*")

@@ -9,12 +9,14 @@ reg r8..r15 : gpr
 class simd 4
 reg xmm0..xmm15 : simd
 
-set allocatable  = rax rcx rdx rbx rsi rdi r8 r9 r10 r12..r15 xmm0..xmm14
+set allocatable  = rax rcx rdx rbx rsi rdi r8 r9 r12..r15 xmm0..xmm14
 set caller-saved = rax rcx rdx rsi rdi r8..r11 xmm0..xmm15
 set callee-saved = rbx r12..r15
 
-# Registers the emitter may use to open a ring of copies.
+# Registers the emitter may use to open a ring of copies, or to pass a word
+# along through.
 const scratch0 = 11
+const scratch1 = 10
 const fscratch = 47
 # Machine code is bytes.
 # A switch goes by comparing with each case; this machine's tables are not described.
@@ -81,6 +83,9 @@ inst or(w: u1, dst: mod gpr, src: use gpr)           = rex(w, src, dst) byte(0x0
 inst and(w: u1, dst: mod gpr, src: use gpr)          = rex(w, src, dst) byte(0x21) modrm(src, dst)
 inst sub(w: u1, dst: mod gpr, src: use gpr)          = rex(w, src, dst) byte(0x29) modrm(src, dst)
 inst xor(w: u1, dst: mod gpr, src: use gpr)          = rex(w, src, dst) byte(0x31) modrm(src, dst)
+# With the carry: the high halves of a wider sum or difference.
+inst adc(w: u1, dst: mod gpr, src: use gpr)          = rex(w, src, dst) byte(0x11) modrm(src, dst)
+inst sbb(w: u1, dst: mod gpr, src: use gpr)          = rex(w, src, dst) byte(0x19) modrm(src, dst)
 inst cmp(w: u1, x: use gpr, y: use gpr)              = rex(w, y, x) byte(0x39) modrm(y, x)
 inst test(w: u1, x: use gpr, y: use gpr)             = rex(w, y, x) byte(0x85) modrm(y, x)
 inst add-imm(w: u1, dst: mod gpr, imm: s32)          = rex(w, 0, dst) byte(0x81) modrm(0, dst) le32(imm)
@@ -203,6 +208,10 @@ inst load8(dst: def gpr, base: use gpr, disp: s32)   = rex(0, dst, base) byte(0x
 inst store(w: u1, src: use gpr, base: use gpr, disp: s32)  = rex(w, src, base) byte(0x89) mem(src, base, disp)
 inst store16(src: use gpr, base: use gpr, disp: s32) = byte(0x66) rex(0, src, base) byte(0x89) mem(src, base, disp)
 inst store8(src: use gpr, base: use gpr, disp: s32)  = rex8(0, src, base) byte(0x88) mem(src, base, disp)
+# A constant stored: 8 bytes (sign-extended from 32 bits) or 4, then 2 and 1.
+inst store-imm(w: u1, base: use gpr, disp: s32, imm: s32) = rex(w, 0, base) byte(0xC7) mem(0, base, disp) le32(imm)
+inst store16-imm(base: use gpr, disp: s32, imm: s32)      = byte(0x66) rex(0, 0, base) byte(0xC7) mem(0, base, disp) byte(imm & 0xFF) byte((imm >> 8) & 0xFF)
+inst store8-imm(base: use gpr, disp: s32, imm: s32)       = rex(0, 0, base) byte(0xC6) mem(0, base, disp) byte(imm & 0xFF)
 
 # Memory shared between threads, 8, 16, 32 or 64 bits of it at `base`: the
 # prefix that makes an operation 16 bits, the prefix byte, and an opcode whose

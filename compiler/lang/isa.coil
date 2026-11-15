@@ -62,6 +62,12 @@
    (form-names (ArrayList (slice u8)))
    (form-heads (ArrayList (slice u8)))
    (form-cases (ArrayList (slice u8)))
+   ; The most bytes each form writes, whichever case applies, and whether an
+   ; instruction or form has used it yet (its cases must all come before).
+   (form-longest (ArrayList i64))
+   (form-used (ArrayList bool))
+   ; The most bytes any instruction takes.
+   (longest i64)
    (immediates (ArrayList (slice u8)))
    (immediate-text (slice u8))
    (align i64)])
@@ -176,12 +182,17 @@
           (set! more (t/accept! (mut c) ",")))))
     (t/expect! (mut c) ")")
     (when (> (len (.operands inst)) 5) (t/die (mut c) at "an instruction has at most five operands"))
+    (let [(mut labels) 0]
+      (for x (.operands inst) (when (= (.kind x) K-LABEL) (set! labels (+ labels 1))))
+      (when (> labels 1) (t/die (mut c) at "an instruction has at most one label")))
     (t/expect! (mut c) "=")
     (when (= (.word spec) 0)
       ; A byte-encoded machine: the encoding is pieces over the operands.
       (let [(mut names) (ArrayList::new [(slice u8)] (malloc-allocator))]
         (for operand (.operands inst) (push! (mut names) (.name operand)))
-        (set! (.body inst) (byte-pieces (mut c) spec names "" true))))
+        (let [(mut longest) 0]
+          (set! (.body inst) (byte-pieces (mut c) (mut spec) names "" true (mut longest)))
+          (when (> longest (.longest spec)) (set! (.longest spec) longest)))))
     (while (and (!= (.word spec) 0) (not (t/at-line-start? (mut c))) (not (t/at? (mut c) "reloc"))
                 (not (t/at? (mut c) "reads")) (not (t/at? (mut c) "writes")) (not (t/at? (mut c) "opposite")))
       (let [tok (t/advance! (mut c))]
@@ -468,8 +479,8 @@
 ;;; The pieces of a byte encoding, up to the end of the line or a clause that
 ;;; follows an encoding: bytes, little-endian numbers, forms, and the two that
 ;;; only an instruction has, a label's distance and a symbol's place.
-(defn byte-pieces [(c (mut t/Cur)) (spec Spec) (names (ArrayList (slice u8))) (prefix (slice u8))
-                   (in-inst bool)] (-> (slice u8))
+(defn byte-pieces [(c (mut t/Cur)) (spec (mut Spec)) (names (ArrayList (slice u8))) (prefix (slice u8))
+                   (in-inst bool) (longest (mut i64))] (-> (slice u8))
   (let [(mut o) (t/out-new)]
     (while (and (not (t/at-line-start? (mut c))) (not (t/at? (mut c) "reloc"))
                 (not (t/at? (mut c) "reads")) (not (t/at? (mut c) "writes")) (not (t/at? (mut c) "opposite")))
@@ -481,20 +492,28 @@
               (t/expect! (mut c) "(")
               (cond
                 (= name "byte")
-                  (t/emit! (mut o) (t/cat3 " (push! (mut out) (primitive/cast u8 (& " (byte-expr (mut c) names prefix 0) " 255)))"))
+                  (do (t/emit! (mut o) (t/cat3 " (put-byte! (mut out) (primitive/cast u8 (& " (byte-expr (mut c) names prefix 0) " 255)))"))
+                      (set! longest (+ longest 1)))
                 (or (= name "le16") (= name "le32") (= name "le64"))
-                  (t/emit! (mut o)
-                           (t/cat4 " (little! (mut out) " (byte-expr (mut c) names prefix 0) " "
-                                   (cond (= name "le16") "2)" (= name "le32") "4)" :else "8)")))
+                  (let [bytes (cond (= name "le16") 2 (= name "le32") 4 :else 8)]
+                    (t/emit! (mut o)
+                             (t/cat4 " (little! (mut out) " (byte-expr (mut c) names prefix 0) " "
+                                     (t/cat2 (t/int-text bytes) ")")))
+                    (set! longest (+ longest bytes)))
                 (and in-inst (= name "rel32"))
-                  (t/emit! (mut o)
-                           (t/cat3 " (little! (mut out) (- " (byte-expr (mut c) names prefix 0)
-                                   " (+ (- (len out) start) 4)) 4)"))
+                  (do (t/emit! (mut o)
+                               (t/cat3 " (little! (mut out) (- " (byte-expr (mut c) names prefix 0)
+                                       " (+ (- (len out) start) 4)) 4)"))
+                      (set! longest (+ longest 4)))
                 (and in-inst (= name "sym32"))
                   (do (byte-expr (mut c) names prefix 0)
-                      (t/emit! (mut o) " (set! field (- (len out) start)) (little! (mut out) 0 4)"))
+                      (t/emit! (mut o) " (set! field (- (len out) start)) (little! (mut out) 0 4)")
+                      (set! longest (+ longest 4)))
                 (>= (t/index-of (.form-names spec) name) 0)
-                  (do (t/emit! (mut o) (t/cat3 " (form-" name " (mut out)"))
+                  (let [index (t/index-of (.form-names spec) name)]
+                    (set! longest (+ longest (get (.form-longest spec) index)))
+                    (set! (mut (.form-used spec)) index true)
+                    (t/emit! (mut o) (t/cat3 " (form-" name " (mut out)"))
                       (let [(mut more) (not (t/at? (mut c) ")"))]
                         (while more
                           (t/emit! (mut o) (t/cat2 " " (byte-expr (mut c) names prefix 0)))
@@ -511,7 +530,7 @@
         (mut params) (ArrayList::new [(slice u8)] (malloc-allocator))
         (mut head) (t/out-new)
         (mut index) (t/index-of (.form-names spec) name)]
-    (t/emit! (mut head) (t/cat3 "(defn form-" name " [(out (mut (ArrayList u8)))"))
+    (t/emit! (mut head) (t/cat3 "(defn form-" name " :inline (Always) [(out (mut (ArrayList u8)))"))
     (t/expect! (mut c) "(")
     (while (not (t/accept! (mut c) ")"))
       (let [param (t/name! (mut c) "a parameter")]
@@ -523,10 +542,17 @@
       (push! (mut (.form-names spec)) name)
       (push! (mut (.form-heads spec)) (t/text-of (mut head)))
       (push! (mut (.form-cases spec)) "")
+      (push! (mut (.form-longest spec)) 0)
+      (push! (mut (.form-used spec)) false)
       (set! index (- (len (.form-names spec)) 1)))
+    ; What an instruction takes is counted from its forms as it is read.
+    (when (get (.form-used spec) index)
+      (t/die (mut c) (t/peek (mut c)) (t/cat3 "a case of form " name " comes after the form is used")))
     (let [guard (if (t/accept! (mut c) "when") (byte-expr (mut c) params "f-" 0) "true")]
       (t/expect! (mut c) "=")
-      (let [pieces (byte-pieces (mut c) spec params "f-" false)]
+      (let [(mut longest) 0
+            pieces (byte-pieces (mut c) (mut spec) params "f-" false (mut longest))]
+        (when (> longest (get (.form-longest spec) index)) (set! (mut (.form-longest spec)) index longest))
         (set! (mut (.form-cases spec)) index
               (t/cat4 (get (.form-cases spec) index) "    " guard (t/cat3 " (do" pieces " (do))\n")))))))
 
@@ -580,6 +606,9 @@
                      :form-names (ArrayList::new [(slice u8)] (malloc-allocator))
                      :form-heads (ArrayList::new [(slice u8)] (malloc-allocator))
                      :form-cases (ArrayList::new [(slice u8)] (malloc-allocator))
+                     :form-longest (ArrayList::new [i64] (malloc-allocator))
+                     :form-used (ArrayList::new [bool] (malloc-allocator))
+                     :longest 0
                      :immediates (ArrayList::new [(slice u8)] (malloc-allocator))
                      :immediate-text ""
                      :align 4)]
@@ -725,8 +754,10 @@
                                              0))))))
     (t/line! (mut o) "])")
     (t/line! (mut o) (t/cat3 "(const REGISTERS " (t/int-text (* 32 (len (.classes spec)))) ")"))
-    (t/line! (mut o) "(defn operand-class [(op i64) (i i64)] (-> i64) (get CLASSES (+ (* op 5) i)))")
-    (t/line! (mut o) "(defn reg-class [(r i64)] (-> i64) (/ r 32))")
+    (t/line! (mut o) "(defn operand-class :inline (Always) [(op i64) (i i64)] (-> i64) (get CLASSES (+ (* op 5) i)))")
+    (t/line! (mut o) "(defn reg-class :inline (Always) [(r i64)] (-> i64) (/ r 32))")
+    (t/line! (mut o) ";;; The registers of class `c`, as a set.")
+    (t/line! (mut o) "(defn class-registers :inline (Always) [(c i64)] (-> u64) (<< (: 0xFFFFFFFF u64) (cast u64 (* c 32))))")
     (t/emit! (mut o) "(def REG-NAMES [")
     (for n (range 0 64)
       (let [(mut name) "?"]
@@ -741,9 +772,25 @@
     (t/line! (mut o) "(const K-SYMBOL 6)")
     (t/line! (mut o) "(defn name [(op i64)] (-> (slice u8)) (get NAMES op))")
     (t/line! (mut o) "(defn reg-name [(r i64)] (-> (slice u8)) (get REG-NAMES r))")
-    (t/line! (mut o) "(defn operand-count [(op i64)] (-> i64) (get COUNTS op))")
-    (t/line! (mut o) "(defn operand-kind [(op i64) (i i64)] (-> i64) (get KINDS (+ (* op 5) i)))")
-    (t/line! (mut o) "(defn in-set? [(set u64) (r i64)] (-> bool) (!= (& set (<< (: 1 u64) (cast u64 r))) 0))")
+    (t/line! (mut o) "(defn operand-count :inline (Always) [(op i64)] (-> i64) (get COUNTS op))")
+    (t/line! (mut o) "(defn operand-kind :inline (Always) [(op i64) (i i64)] (-> i64) (get KINDS (+ (* op 5) i)))")
+    (t/line! (mut o) "(defn in-set? :inline (Always) [(set u64) (r i64)] (-> bool) (!= (& set (<< (: 1 u64) (cast u64 r))) 0))")
+    ; What writing an instruction asks of its operands at once: which are
+    ; registers, which a symbol, and which one is a label (at most one is).
+    (t/emit! (mut o) "(def OPERAND-MASKS [0")
+    (for inst (.insts spec)
+      (let [(mut regs) 0
+            (mut syms) 0
+            (mut label) -1]
+        (for i (range 0 (len (.operands inst)))
+          (let [k (.kind (get (.operands inst) i))]
+            (when (or (= k K-DEF) (= k K-USE) (= k K-MOD)) (set! regs (| regs (<< 1 i))))
+            (when (= k K-SYMBOL) (set! syms (| syms (<< 1 i))))
+            (when (= k K-LABEL) (set! label i))))
+        (t/emit! (mut o) (t/cat2 " " (t/int-text (| (| regs (<< syms 8)) (<< (+ label 1) 16)))))))
+    (t/line! (mut o) "])")
+    (t/line! (mut o) ";;; Bit k: operand k is a register; bit 8 + k: a symbol; bits 16 up: the label operand + 1, 0 if none.")
+    (t/line! (mut o) "(defn operand-mask :inline (Always) [(op i64)] (-> i64) (get OPERAND-MASKS op))")
     ; Relocations: a number per name, which one an instruction carries, and how
     ; its word is finished once the addresses are known.
     (let [(mut relocs) (ArrayList::new [(slice u8)] (malloc-allocator))]
@@ -760,7 +807,7 @@
         (t/emit! (mut o) (t/cat2 " " (t/int-text (+ (t/index-of relocs (.reloc inst)) 1)))))
       (t/line! (mut o) "])")
       (t/line! (mut o) "(defn reloc-name [(reloc i64)] (-> (slice u8)) (get RELOC-NAMES reloc))")
-      (t/line! (mut o) "(defn reloc-of [(op i64)] (-> i64) (get RELOCS op))")
+      (t/line! (mut o) "(defn reloc-of :inline (Always) [(op i64)] (-> i64) (get RELOCS op))")
       (when (!= (.word spec) 0)
         (t/line! (mut o) ";;; An instruction's word with its symbol's value filled in: `s` is the symbol's")
         (t/line! (mut o) ";;; address, `g` the address of its slot in the table of addresses, `p` the")
@@ -809,15 +856,31 @@
         (t/fail-at "" (.line inst) 1 (t/cat2 "opposite names no instruction and no operand: " (.opposite inst))))
       (t/emit! (mut o) (t/cat2 " " (t/int-text (if (= (.opposite inst) "") -1 (operand-index inst (.opposite inst)))))))
     (t/line! (mut o) "])")
-    (t/line! (mut o) "(defn opposite-op [(op i64)] (-> i64) (get OPPOSITE-OPS op))")
-    (t/line! (mut o) "(defn opposite-turn [(op i64)] (-> i64) (get OPPOSITE-TURNS op))")
-    (t/line! (mut o) "(defn implicit-reads [(op i64)] (-> u64) (get IMPLICIT-READS op))")
-    (t/line! (mut o) "(defn implicit-writes [(op i64)] (-> u64) (get IMPLICIT-WRITES op))")
+    (t/line! (mut o) "(defn opposite-op :inline (Always) [(op i64)] (-> i64) (get OPPOSITE-OPS op))")
+    (t/line! (mut o) "(defn opposite-turn :inline (Always) [(op i64)] (-> i64) (get OPPOSITE-TURNS op))")
+    (t/line! (mut o) "(defn implicit-reads :inline (Always) [(op i64)] (-> u64) (get IMPLICIT-READS op))")
+    (t/line! (mut o) "(defn implicit-writes :inline (Always) [(op i64)] (-> u64) (get IMPLICIT-WRITES op))")
     (t/emit! (mut o) (.immediate-text spec))
     (if (!= (.word spec) 0)
         (emit-word-encoder! (mut o) spec)
         (emit-byte-encoder! (mut o) spec))
     (t/text-of (mut o))))
+
+;;; Whether an instruction can go out already encoded by whoever knows which it
+;;; is: the machine's instructions are words, and it names no label or symbol.
+(defn encodable? [(spec Spec) (inst Inst)] (-> bool)
+  (let [(mut plain) (!= (.word spec) 0)]
+    (for x (.operands inst)
+      (when (or (= (.kind x) K-LABEL) (= (.kind x) K-SYMBOL)) (set! plain false)))
+    plain))
+
+;;; Operand `i`'s Coil `code` as the encoder takes it: a register's number
+;;; from its marker (-r - 1), anything else as it is.
+(defn operand-code-text [(inst Inst) (i i64) (code (slice u8))] (-> (slice u8))
+  (if (and (< i (len (.operands inst)))
+           (let [k (.kind (get (.operands inst) i))] (or (= k K-DEF) (= k K-USE) (= k K-MOD))))
+      (t/cat3 "(- -1 " code ")")
+      code))
 
 (defn emit-word-encoder! [(o (mut t/Out)) (spec Spec)] (-> void)
   (do
@@ -835,16 +898,42 @@
     (t/line! (mut o) ";;; bytes from this instruction to its target. Returns where in the instruction")
     (t/line! (mut o) ";;; its symbol's bits are, to be filled in when addresses are known, or -1.")
     (t/line! (mut o) "(defn encode! [(out (mut (ArrayList u8))) (op i64) (a i64) (b i64) (c i64) (d i64) (e i64)] (-> i64)")
-    (t/line! (mut o) "  (let [w (word-of op a b c d e)]")
-    (t/line! (mut o) "    (for k (range 0 ALIGN)")
-    (t/line! (mut o) "      (push! (mut out) (primitive/cast u8 (& (>> w (cast u32 (* k 8))) 255))))")
-    (t/line! (mut o) "    (if (!= (get RELOCS op) 0) 0 -1)))")
+    (t/line! (mut o) "  (put-word! (mut out) (cast u64 (word-of op a b c d e)))")
+    (t/line! (mut o) "  (if (!= (get RELOCS op) 0) 0 -1))")
+    ; The word's bytes, least significant first, written in room made for all
+    ; of them at once.
+    (t/line! (mut o) ";;; A finished word appended to `out`.")
+    (t/line! (mut o) "(defn put-word! :inline (Always) [(out (mut (ArrayList u8))) (word u64)] (-> void)")
+    (t/line! (mut o) "  (let [w (cast u32 word)")
+    (t/line! (mut o) "        at (len out)]")
+    (t/line! (mut o) "    (when (> (+ at ALIGN) (cap out)) (reserve! (mut out) (if (< (cap out) 256) 256 (* (cap out) 2))))")
+    (t/line! (mut o) "    (let [p (primitive/index (load (field out data)) at)]")
+    (t/line! (mut o) "      (for k (range 0 ALIGN)")
+    (t/line! (mut o) "        (primitive/store! (primitive/index p k) (primitive/cast u8 (& (>> w (cast u32 (* k 8))) 255)))))")
+    (t/line! (mut o) "    (primitive/store! (field out len) (+ at ALIGN))))")
+    ; Each instruction's word on its own, for whoever writes it knowing which
+    ; instruction it is: its operands as the encoder takes them.
+    (for i (range 0 (len (.insts spec)))
+      (t/line! (mut o) (t/cat3 "(defn word-" (t/int-text (+ i 1)) " :inline (Always) [(a i64) (b i64) (c i64) (d i64) (e i64)] (-> u32)"))
+      (t/line! (mut o) (t/cat3 "  " (encode-text spec (get (.insts spec) i)) ")")))
     (do)))
 
 (defn emit-byte-encoder! [(o (mut t/Out)) (spec Spec)] (-> void)
   (t/line! (mut o) (t/cat3 "(const ALIGN " (t/int-text (.align spec)) ")"))
-  (t/line! (mut o) "(defn little! [(out (mut (ArrayList u8))) (v i64) (bytes i64)] (-> void)")
-  (t/line! (mut o) "  (for k (range 0 bytes) (push! (mut out) (primitive/cast u8 (& (>> v (* k 8)) 255)))))")
+  ; Instructions of bytes are never handed over as finished words.
+  (t/line! (mut o) ";;; A finished word: what a machine of bytes is never given.")
+  (t/line! (mut o) "(defn put-word! [(out (mut (ArrayList u8))) (word u64)] (-> void)")
+  (t/line! (mut o) "  (panic \"this machine's instructions are bytes, not words: none is put as a finished word\"))")
+  ; Room for the longest instruction is made once, before it is written: each
+  ; byte is then a store.
+  (t/line! (mut o) ";;; The most bytes an instruction takes.")
+  (t/line! (mut o) (t/cat3 "(const LONGEST " (t/int-text (.longest spec)) ")"))
+  (t/line! (mut o) "(defn put-byte! :inline (Always) [(out (mut (ArrayList u8))) (b u8)] (-> void)")
+  (t/line! (mut o) "  (let [n (len out)]")
+  (t/line! (mut o) "    (primitive/store! (primitive/index (load (field out data)) n) b)")
+  (t/line! (mut o) "    (primitive/store! (field out len) (+ n 1))))")
+  (t/line! (mut o) "(defn little! :inline (Always) [(out (mut (ArrayList u8))) (v i64) (bytes i64)] (-> void)")
+  (t/line! (mut o) "  (for k (range 0 bytes) (put-byte! (mut out) (primitive/cast u8 (& (>> v (* k 8)) 255)))))")
   (for i (range 0 (len (.form-names spec)))
     (t/emit! (mut o) (get (.form-heads spec) i))
     (t/line! (mut o) "  (cond")
@@ -854,6 +943,8 @@
   (t/line! (mut o) ";;; bytes from this instruction to its target. Returns where in the instruction")
   (t/line! (mut o) ";;; its symbol's bytes are, to be filled in when addresses are known, or -1.")
   (t/line! (mut o) "(defn encode! [(out (mut (ArrayList u8))) (op i64) (a i64) (b i64) (c i64) (d i64) (e i64)] (-> i64)")
+  (t/line! (mut o) "  (when (> (+ (len out) LONGEST) (cap out))")
+  (t/line! (mut o) "    (reserve! (mut out) (+ (if (< (cap out) 128) 256 (* (cap out) 2)) LONGEST)))")
   (t/line! (mut o) "  (let [start (len out)")
   (t/line! (mut o) "        (mut field) -1]")
   (t/line! (mut o) "    (match op")

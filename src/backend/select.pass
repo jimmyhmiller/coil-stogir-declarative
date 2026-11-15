@@ -248,6 +248,9 @@ fn pinned-call(n: Node) {
   let passed = pass-arguments(n, true)
   let bytes = shape-code-bytes(shape)
   var writes = shape-clobbers(shape)
+  # What it reads and writes is said of its first instruction: code that is
+  # bytes may be pieces of one instruction, with nothing to go between them.
+  let first = Inst.count + 1
   if bytes > 0 {
     var at = 0
     while at < bytes {
@@ -263,8 +266,8 @@ fn pinned-call(n: Node) {
   }
   let to = shape-result(shape)
   if to >= 0 { writes = set-bit(writes, to) }
-  mach.mark-call()
-  mach.implicit(passed, writes)
+  mach.mark-call-at(first)
+  mach.implicit-at(first, passed, writes)
   pinned-writes = pinned-writes | writes
   calls = true
   # The registers the frame is found by are put back if the call wrote them.

@@ -5,6 +5,7 @@
 # the function, the line, the backtrace and the arguments' values must agree.
 # Addresses on the stack are left out: the two lay their frames out differently.
 #   tools/coil-debugger.sh [stops]      (after tools/coil-candidate.sh)
+#   DEBUGGER_OPT=-O0 tools/coil-debugger.sh    ours as the quick compile builds it
 set -uo pipefail
 here=$(cd "$(dirname $0)" && pwd)
 tree=${COIL_TREE:-$HOME/Documents/Code/projects/coil/.worktrees/declarative}
@@ -16,8 +17,8 @@ failed=0
 for source in tests/corpus/*.coil; do
   stem=${source:t:r}
   module=$(sed -n 's/^(module \([^)]*\)).*/\1/p' $source | head -1)
-  build/bin/coil-candidate build $source --backend declarative -g -o $work/$stem-ours > $work/build.log 2>&1 || { echo "debugger: $stem did not build"; cat $work/build.log | tail -5; failed=1; continue }
-  build/bin/coil-candidate build $source -g -O0 -o $work/$stem-llvm > $work/build.log 2>&1 || { echo "debugger: $stem did not build with LLVM"; failed=1; continue }
+  build/bin/coil-candidate build $source --backend native ${DEBUGGER_OPT:-} -g -o $work/$stem-ours > $work/build.log 2>&1 || { echo "debugger: $stem did not build"; cat $work/build.log | tail -5; failed=1; continue }
+  build/bin/coil-candidate build $source --backend llvm -g -O0 -o $work/$stem-llvm > $work/build.log 2>&1 || { echo "debugger: $stem did not build with LLVM"; failed=1; continue }
   for which in ours llvm; do
     xcrun python3 $here/debugger-trace.py $work/$stem-$which $module $stops 2>&1 | sed -E 's/0x[0-9a-f]{12,16}/ADDR/g' > $work/$stem-$which.txt
   done

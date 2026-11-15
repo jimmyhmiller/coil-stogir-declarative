@@ -8,15 +8,14 @@ pass in unit
 use mach as mach
 use alloc as alloc
 use lower as lower
+use frames as frames
 import target as isa
 import abi as abi
 
 column final-first: Block -> Int      # a block's first final instruction
 column onward: Block -> Block         # for a block that is only a jump: where it jumps
 state final-start: Int                # final instructions follow the selected ones
-state frame: Int                      # bytes of frame, a multiple of 16
 tally unplanned: Int                  # a plan to open the frame late that did not hold, here or in alloc
-state saved: Word                     # the registers the caller expects back unchanged
 state move-to: [Int]                  # moves to make together: the registers written
 state move-from: [Int]                # and read; -(slot + 1) for a value in the frame
 state move-wide: [Bool]               # and whether what moves is sixteen bytes
@@ -73,7 +72,7 @@ fn finish(i: Inst, k: Int) {
   if k < isa.operand-count(op) and alloc.writes?(isa.operand-kind(op, k)) {
     let a = mach.arg(i, k)
     if a > 0 and id(a).slot != 0 {
-      keep(here(id(a), 2 * int(i) + 1).reg - 1, out-slots + id(a).slot - 1, id(a).wide)
+      frames.keep(here(id(a), 2 * int(i) + 1).reg - 1, out-slots + id(a).slot - 1, id(a).wide)
     }
   }
 }
@@ -88,37 +87,8 @@ fn move(to: Int, from: Int, wide: Bool) {
   }
 }
 
-fn floating?(r: Int) -> Bool = isa.reg-class(r) == 1
-
-# The register the frame is found from: the stack pointer, unless the
-# function moves that as it runs.
-fn base() -> Int = marker(if dynamic then abi.BASE else abi.STACK)
-
-# Register `r` to and from frame slot `at` above `from`, by the kind of
-# register it is.
-fn keep-at(r: Int, from: Int, at: Int) {
-  if floating?(r) { lower.to-frame-float(marker(r), from, at) } else { lower.to-frame(marker(r), from, at) }
-}
-
-fn fetch-at(r: Int, from: Int, at: Int) {
-  if floating?(r) { lower.from-frame-float(marker(r), from, at) } else { lower.from-frame(marker(r), from, at) }
-}
-
-# The same for a value's own slot: sixteen bytes if it is `wide`.
-fn keep(r: Int, at: Int, wide: Bool) {
-  if wide { lower.to-frame-wide(marker(r), base(), at) } else { keep-at(r, base(), at) }
-}
-
-fn fetch(r: Int, at: Int, wide: Bool) {
-  if wide { lower.from-frame-wide(marker(r), base(), at) } else { fetch-at(r, base(), at) }
-}
-
-fn copy(to: Int, from: Int) {
-  if floating?(to) { lower.move-float(marker(to), marker(from)) } else { lower.move(marker(to), marker(from)) }
-}
-
 fn emit-move(to: Int, from: Int, wide: Bool) {
-  if from < 0 { fetch(to, out-slots + (0 - from) - 1, wide) } else { copy(to, from) }
+  if from < 0 { frames.fetch(to, out-slots + (0 - from) - 1, wide) } else { frames.copy(to, from) }
 }
 
 # Every pending move, each source read before anything overwrites it. A ring
@@ -142,8 +112,8 @@ fn flush-moves() {
     if not progress {
       var d = -1
       for j in 0..move-to.len { if d < 0 and move-to[j] >= 0 { d = move-to[j] } }
-      let aside = if floating?(d) then isa.FSCRATCH else isa.SCRATCH0
-      copy(aside, d)
+      let aside = if frames.floating?(d) then isa.FSCRATCH else isa.SCRATCH0
+      frames.copy(aside, d)
       for j in 0..move-to.len { if move-to[j] >= 0 and move-from[j] == d { move-from[j] = aside } }
     }
   }
@@ -287,40 +257,40 @@ fn rewrite(i: Inst, next: Int) {
     # A parameter from the caller's frame, now that this frame's size is known.
     let d = placed(i.copy-to, 2 * int(i) + 1)
     let at = i.copy-from + frame + abi.RETURN-SLOTS * 8
-    if floating?(0 - d - 1) { lower.from-stack-float(d, base(), at, i.caller-bytes) }
-    else { lower.from-stack(d, base(), at, i.caller-bytes) }
+    if frames.floating?(0 - d - 1) { lower.from-stack-float(d, frames.base(), at, i.caller-bytes) }
+    else { lower.from-stack(d, frames.base(), at, i.caller-bytes) }
   } else if i.kind == 12 {
     let r = placed(i.copy-to, 2 * int(i))
     let at = i.copy-from + frame + abi.RETURN-SLOTS * 8
-    if floating?(0 - r - 1) { lower.to-object-float(r, base(), at, i.caller-bytes) }
-    else { lower.to-object(r, base(), at, i.caller-bytes) }
+    if frames.floating?(0 - r - 1) { lower.to-object-float(r, frames.base(), at, i.caller-bytes) }
+    else { lower.to-object(r, frames.base(), at, i.caller-bytes) }
   } else if i.kind == 11 {
-    lower.frame-address(placed(i.copy-to, 2 * int(i) + 1), base(), i.copy-from + frame + abi.RETURN-SLOTS * 8)
+    lower.frame-address(placed(i.copy-to, 2 * int(i) + 1), frames.base(), i.copy-from + frame + abi.RETURN-SLOTS * 8)
   } else if i.kind == 8 {
     # A frame object, now that it is known how far above the base it is.
     let d = placed(i.copy-to, 2 * int(i) + 1)
-    let at = record-slot() * 8 - i.copy-from
-    if floating?(0 - d - 1) { lower.from-object-float(d, base(), at, i.caller-bytes) }
-    else { lower.from-object(d, base(), at, i.caller-bytes) }
+    let at = frames.record-slot() * 8 - i.copy-from
+    if frames.floating?(0 - d - 1) { lower.from-object-float(d, frames.base(), at, i.caller-bytes) }
+    else { lower.from-object(d, frames.base(), at, i.caller-bytes) }
   } else if i.kind == 9 {
     let r = placed(i.copy-to, 2 * int(i))
-    let at = record-slot() * 8 - i.copy-from
-    if floating?(0 - r - 1) { lower.to-object-float(r, base(), at, i.caller-bytes) }
-    else { lower.to-object(r, base(), at, i.caller-bytes) }
+    let at = frames.record-slot() * 8 - i.copy-from
+    if frames.floating?(0 - r - 1) { lower.to-object-float(r, frames.base(), at, i.caller-bytes) }
+    else { lower.to-object(r, frames.base(), at, i.caller-bytes) }
   } else if i.kind == 10 {
-    lower.frame-address(placed(i.copy-to, 2 * int(i) + 1), base(), record-slot() * 8 - i.copy-from)
+    lower.frame-address(placed(i.copy-to, 2 * int(i) + 1), frames.base(), frames.record-slot() * 8 - i.copy-from)
   } else if i.kind == 6 {
     # The frame register is where the record is, which is known from the base;
     # in a function that moves the stack pointer, the base must have survived.
     if dynamic and has-bit(i.also-writes, abi.BASE) { panic("a call writes both registers the frame is found by, in a function that moves the stack pointer") }
-    lower.frame-record(base(), record-slot() * 8)
+    lower.frame-record(frames.base(), frames.record-slot() * 8)
   } else if i.kind == 7 {
     # Only a function that moves the stack pointer keeps a base, below the record.
-    if dynamic { lower.base-from-frame(marker(abi.BASE), record-slot() * 8) }
+    if dynamic { lower.base-from-frame(marker(abi.BASE), frames.record-slot() * 8) }
   } else if i.kind == 5 {
     lower.above-arguments(placed(i.copy-to, 2 * int(i) + 1), out-slots * 8)
   } else if not same-register and not falls-through {
-    if i.kind == 3 and frame > 0 and (frame-at == none or i.home.framed) { leave() }
+    if i.kind == 3 and frame > 0 and (frame-at == none or i.home.framed) { frames.leave() }
     mach.emit(op, x0, x1, x2, x3, x4)
   }
   for k in 0..5 { finish(i, k) }
@@ -378,73 +348,6 @@ fn encode() {
   }
 }
 
-# The frame, from the stack pointer up: arguments for calls, values that have
-# no register, the other registers the caller expects back, frame objects, and
-# at the very top the frame record: the caller's frame register and, on
-# machines with a link register, the return address, with the frame register
-# pointing at it. On machines whose calls leave the return address on the
-# stack, that is the word just above, so the record is the pair every unwinder
-# expects either way. Frame objects end at the record, so each is a fixed
-# distance below the frame register.
-fn keeps-record?() -> Bool = has-bit(saved, abi.FRAME)
-
-fn record-slots() -> Int = if not keeps-record?() then 0 else if abi.LINK >= 0 then 2 else 1
-
-fn record-slot() -> Int = frame / 8 - record-slots()
-
-# The saved registers that are not part of the frame record, and where they start.
-fn others-saved() -> Word =
-  if abi.LINK >= 0 then clear-bit(clear-bit(saved, abi.FRAME), abi.LINK) else clear-bit(saved, abi.FRAME)
-
-fn others-slot() -> Int = record-slot() - object-bytes / 8 - bit-count(others-saved())
-
-# The other saved registers to their slots (`keeping`) or back from them, two
-# of a kind at a time where the machine can.
-fn others(keeping: Bool) {
-  let sp = marker(abi.STACK)
-  var rest = others-saved()
-  var at = others-slot()
-  while rest != word(0) {
-    let r = lowest-bit(rest)
-    rest = clear-bit(rest, r)
-    let r2 = if rest != word(0) then lowest-bit(rest) else -1
-    if r2 >= 0 and floating?(r) == floating?(r2) {
-      if floating?(r) {
-        if keeping { lower.to-frame-float-pair(marker(r), marker(r2), sp, at) } else { lower.from-frame-float-pair(marker(r), marker(r2), sp, at) }
-      } else {
-        if keeping { lower.to-frame-pair(marker(r), marker(r2), sp, at) } else { lower.from-frame-pair(marker(r), marker(r2), sp, at) }
-      }
-      rest = clear-bit(rest, r2)
-      at = at + 2
-    } else {
-      if keeping { keep-at(r, sp, at) } else { fetch-at(r, sp, at) }
-      at = at + 1
-    }
-  }
-}
-
-fn enter() {
-  # The frame, with its record if it keeps one, as the machine opens frames.
-  # It comes from no place in the source: what the instruction before it in
-  # the code came from is no reason for a debugger to stop here.
-  emitting-from = 0
-  if keeps-record?() { lower.open-record(record-slot() * 8) } else { lower.grow-stack(frame) }
-  others(true)
-  if dynamic { lower.base-from-stack(marker(abi.BASE)) }
-}
-
-fn leave() {
-  let sp = marker(abi.STACK)
-  # The stack pointer back to where the frame is, before anything is read from it.
-  if dynamic { lower.stack-from-base(marker(abi.BASE)) }
-  others(false)
-  if keeps-record?() {
-    if abi.LINK >= 0 { lower.from-frame-pair(marker(abi.FRAME), marker(abi.LINK), sp, record-slot()) }
-    else { lower.from-frame(marker(abi.FRAME), sp, record-slot()) }
-  }
-  lower.shrink-stack(frame)
-}
-
 # The final code of block `b`, which block `next` follows.
 # Whether the plan to open the frame at `frame-at` holds now that every value
 # has its homes: before there, nothing waits in the frame or comes back from
@@ -487,12 +390,12 @@ fn plan-holds?() -> Bool {
 # waits in the frame is stored there now, from where the block before left it,
 # none having been stored as it was written.
 fn open-frame(b: Block) {
-  enter()
+  frames.enter()
   let before = b.preds[0]
   for v in b.live-in {
     if v.slot != 0 {
       let from = alloc.piece-at(v, 2 * before.last-inst + 1)
-      keep(from.reg - 1, out-slots + v.slot - 1, v.wide)
+      frames.keep(from.reg - 1, out-slots + v.slot - 1, v.wide)
     }
   }
 }
@@ -510,7 +413,7 @@ fn block-code(b: Block, next: Int) {
     # Before a block's closing jump, the values the next block expects.
     if at == b.last-inst and b.succs.len == 1 { bring(b, b.succs[0]) }
     # Going on to where the frame was never opened, it is closed first.
-    if at == b.last-inst and frame-at != none and b.framed and b.succs.len == 1 and not b.succs[0].framed { leave() }
+    if at == b.last-inst and frame-at != none and b.framed and b.succs.len == 1 and not b.succs[0].framed { frames.leave() }
     # A branch to the next block, then a jump elsewhere, is the opposite
     # branch to elsewhere, if the branch is the block's only one.
     let last = id(b.last-inst)
@@ -531,22 +434,14 @@ fn block-code(b: Block, next: Int) {
 }
 
 fn run() {
-  saved = (used | pinned-writes) & isa.CALLEE-SAVED
-  if dynamic { saved = set-bit(saved, abi.BASE) }
-  if calls or object-bytes > 0 or dynamic {
-    saved = set-bit(saved, abi.FRAME)
-    if abi.LINK >= 0 { saved = set-bit(saved, abi.LINK) }
-  }
-  # With the return address a call left there, the stack is a multiple of 16,
-  # and so is the frame record's place, below which frame objects are aligned.
-  frame = ((out-slots + slots + bit-count(saved) + abi.RETURN-SLOTS) * 8 + object-bytes + 15) / 16 * 16 - abi.RETURN-SLOTS * 8
+  frames.settle(used, slots, false)
   final-start = Inst.count
   if frame-at != none and (frame == 0 or not plan-holds?()) {
     if frame > 0 { unplanned = unplanned + 1 }
     frame-at = none
     for b in order { b.framed = true }
   }
-  if frame > 0 and frame-at == none { enter() }
+  if frame > 0 and frame-at == none { frames.enter() }
   find-onward()
   for index in 0..order.len {
     let b = order[index]

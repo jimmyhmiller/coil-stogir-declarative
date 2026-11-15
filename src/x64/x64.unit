@@ -23,4 +23,5 @@ pass x64.blocks
 pass x64.split
 pass x64.select
 pass x64.alloc
+pass x64.frames
 pass x64.emit
