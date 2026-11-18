@@ -8,7 +8,7 @@ We’re building a native code generator to compete with LLVM on compile time an
 | --- | ---: | ---: |
 | Code generation at `-O0` | **8× as fast** | **10× as fast** |
 | Code generation at `-O0` with debug info | **14× as fast** | **16× as fast** |
-| Generated-code runtime at `-O0` | About the same | 15% longer |
+| Generated-code runtime at `-O0` | About the same | 15% slower |
 | Optimized code vs. LLVM `-O3` | 10% more CPU cycles | 20% more CPU cycles |
 
 In these benchmarks, we generated code 8–10× as fast as LLVM at `-O0`, and our optimized compiler build used 10–20% more CPU cycles to check its own source. [Benchmark notes](handoff.md)
