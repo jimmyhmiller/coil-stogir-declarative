@@ -1,6 +1,27 @@
-# Coil’s declarative native backend
+# A declarative native backend
 
-This project builds native code from Coil’s intermediate representation (CIR). It describes compiler internals in small domain-specific languages (DSLs). The files in [`src/`](src/) define the IR, optimization rules, pass algorithms, calling conventions, and instruction encodings. Coil readers in [`compiler/lang/`](compiler/lang/) turn those descriptions into Coil modules, and [`compiler/rt/`](compiler/rt/) provides the runtime they use.
+We’re building a native code generator to compete with LLVM on compile time and the speed of the code it produces. Coil is its first compiler integration. It feeds the backend Coil IR (CIR), and the backend takes it from there through optimization, instruction selection, register allocation, and machine-code emission. It’s early days, but the lowest optimization level already has a clear advantage in code-generation time.
+
+## How it compares with LLVM
+
+**At `-O0`, the native backend generated code for the Coil compiler about 8× as fast as LLVM on AArch64 macOS and 10× as fast on x86-64 Linux.** With debug info, the measured code-generation phase was about 14× and 16× as fast, respectively. End-to-end gains are smaller because both backends use the same frontend.
+
+| Compiler benchmark at `-O0` | AArch64 macOS | x86-64 Linux |
+| --- | --- | --- |
+| Code-generation phase, native / LLVM | 0.47 s / 3.84 s | 0.74 s / 7.17 s |
+| Code-generation phase with `-g`, native / LLVM | 0.50 s / 7.06 s | 0.88 s / 14.4 s |
+| Emit the compiler object, native / LLVM | 7.87 s / 10.20 s (1.30× speedup) | 14.6 s / 22.0 s (1.51×) |
+| Emit the compiler object with `-g`, native / LLVM | 6.22 s / 14.24 s (2.29×) | 14.7 s / 30.9 s (2.10×) |
+
+Across 11 smaller programs, full builds including linking were 1.19× as fast on macOS and 1.17× on Linux at `-O0` (geometric means). The object and build times are medians from interleaved runs on November 15, 2026. The code-generation rows come from Coil’s internal phase timers.
+
+**Generated code at `-O0` trades wins with LLVM.** Across eight workloads that ran under both backends, geometric-mean runtime was essentially tied on macOS and about 15% longer with the native backend on Linux. The native-built compiler itself checked its own source in 65.1 s versus LLVM’s 73.0 s on macOS and 55.8 s versus 58.7 s on Linux. The native backend’s compiler executable had 23% less text on macOS and 13% less on Linux at `-O0`. One slice benchmark crashed in the LLVM `-O0` builds on both hosts and was excluded from the runtime aggregate.
+
+**The optimizing path has a bigger code-quality gap.** In a separate November 13 checkpoint, the graph backend’s measured generation phase took about 0.9 s versus 9.8 s for LLVM on macOS and 0.8 s versus 10.8 s on Linux. In the [final comparison from that checkpoint](handoff.md), the optimized native-built compiler used 10% more CPU cycles on AArch64 and 20% more on x86-64 than the LLVM `-O3` build when checking its own source. That’s one workload. Optimization coverage is still narrower than LLVM’s, with room to improve copy elimination, x86-64 addressing and instruction selection, and code size.
+
+## How it’s built
+
+The backend describes its internals in small domain-specific languages (DSLs). The files in [`src/`](src/) define the IR, optimization rules, pass algorithms, calling conventions, and instruction encodings. Coil readers in [`compiler/lang/`](compiler/lang/) turn those descriptions into Coil modules, and [`compiler/rt/`](compiler/rt/) provides the runtime they use.
 
 Development has moved to the [Coil repository](https://github.com/jimmyhmiller/coil). This checkout preserves the standalone project. The maintained backend lives in [`src/declarative/`](https://github.com/jimmyhmiller/coil/tree/main/src/declarative) and runs as `--backend native`. See Coil’s [native backend reference](https://github.com/jimmyhmiller/coil/blob/main/docs/reference/NATIVE_BACKEND.md) for current usage and integration details.
 
