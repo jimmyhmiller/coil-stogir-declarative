@@ -1,0 +1,76 @@
+coil-stogir-declarative
+Copyright (c) 2026 Jimmy Miller
+
+The project is distributed under the MIT license in LICENSE, except for
+src/cir/cir.ops, which retains the Apache-2.0 WITH LLVM-exception license
+of the Coil CIR definitions it incorporates. The complete Apache license
+and LLVM exception are in LICENSES/.
+
+Stogir and IR
+-------------
+
+coil-stogir-declarative implements a backend in DSLs. It draws on prior
+work from coil-stogir, Jimmy Miller's Coil port of IR. The graph
+representation, optimization passes, split-interval register allocation,
+and machine-code emission use IR as a design reference.
+
+coil-stogir
+Copyright (c) 2026 Jimmy Miller
+https://github.com/jimmyhmiller/coil-stogir
+
+IR — Lightweight JIT Compilation Framework
+Author: Dmitry Stogov <dmitry@php.net>
+Copyright (c) 2022 Zend by Perforce
+Copyright (c) 2025 Dmitry Stogov
+https://github.com/dstogov/ir
+Reference revision for coil-stogir: 92171d0a4a36b0acf707f2dea7998de615dd4acd
+Upstream license: MIT (https://github.com/dstogov/ir/blob/master/LICENSE).
+
+IR's design acknowledgments also apply here:
+
+- Cliff Click and Michael Paleczny, “A Simple Graph-Based Intermediate
+  Representation” (1995), for Sea-of-Nodes.
+- Mike Pall and LuaJIT, “LuaJIT 2.0 intellectual property disclosure and
+  research opportunities” (2009), for the compact physical IR representation.
+- Christian Wimmer, “Optimized Interval Splitting in a Linear Scan Register
+  Allocator” (2005), and Christian Wimmer and Michael Franz, “Linear Scan
+  Register Allocation on SSA Form” (2010).
+
+TPDE and CIR
+------------
+
+Coil's original direct code generator was coil-tpde, Jimmy Miller's Coil
+port of TPDE. It introduced CIR and served as the reference and performance
+baseline for this project's direct compilation path. The operation numbers
+and operand shapes in src/cir/cir.ops come from that CIR lineage. The DSL
+version adds operation semantics used by the reference interpreter and
+instruction selector.
+
+coil-tpde
+Copyright 2026 Jimmy Miller
+https://github.com/jimmyhmiller/coil-tpde
+Apache-2.0 WITH LLVM-exception
+
+TPDE — A Fast Adaptable Compiler Back-End Framework
+Copyright 2025 Contributors to TPDE <https://tpde.org>
+https://github.com/tpde2/tpde
+Reference revision for coil-tpde: 9779acf
+Apache-2.0 WITH LLVM-exception
+Upstream credits: Alexis Engelke <engelke@in.tum.de> and
+T0b1 <github@t0b1.dev>.
+Paper: Tobias Schwarz, Tobias Kamm, and Alexis Engelke (2025).
+https://arxiv.org/abs/2505.22610
+
+CIR's SSA builder in coil-tpde follows Matthias Braun et al., “Simple and
+Efficient Construction of Static Single Assignment Form” (2013).
+
+External components
+-------------------
+
+The native CIR implementation and assembler come from the Coil dependency
+in Coil.toml. The maintained Coil tree carries their TPDE lineage and
+licensing in src/declarative/native/NOTICE and its accompanying license files.
+The historical benchmark under tools/old-bench uses an external checkout of
+coil-stogir. coil-tpde also credits Alexis Engelke's BSD-3-Clause fadec and
+disarm64 projects in its own NOTICE. Those encoder libraries are external
+prior art. This checkout describes its target encodings in .isa files.

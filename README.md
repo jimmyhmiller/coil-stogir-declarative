@@ -64,3 +64,7 @@ From a checkout of Coil, run the maintained suite on AArch64 macOS or x86-64 Lin
 ```sh
 python3 scripts/tests/declarative.py /path/to/coil
 ```
+
+## License and credits
+
+[MIT](LICENSE), with [CIR’s operation declarations](src/cir/cir.ops) under [Apache 2.0 with the LLVM exception](LICENSES/). The [NOTICE](NOTICE) traces the backend’s lineage through coil-stogir and Dmitry Stogov’s IR, and through coil-tpde and TPDE.

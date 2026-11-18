@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Jimmy Miller
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+# Adapted from coil-tpde's CIR definitions for the .ops DSL. See NOTICE.
+#
 # CIR, Coil's IR for code generation, as the direct compile reads it. The
 # numbers are CIR's own (native/cir.coil); how its functions are stored is the
 # adapter's (adapter/view.coil).
