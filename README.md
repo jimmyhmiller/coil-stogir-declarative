@@ -4,7 +4,7 @@ We’re building a native code generator to compete with LLVM on compile time an
 
 ## How it compares with LLVM
 
-**At `-O0`, the native backend generated code for the Coil compiler about 8× as fast as LLVM on AArch64 macOS and 10× as fast on x86-64 Linux.** With debug info, the measured code-generation phase was about 14× and 16× as fast, respectively. End-to-end gains are smaller because both backends use the same frontend.
+**At `-O0`, the native backend generated code for the Coil compiler about 8× as fast as LLVM on AArch64 macOS and 10× as fast on x86-64 Linux.** With debug info, the measured code-generation phase was about 14× and 16× as fast, respectively. The full compilation timings include the shared frontend and writing the object file. They stop before linking the compiler executable.
 
 ### AArch64 macOS
 
@@ -12,8 +12,8 @@ We’re building a native code generator to compete with LLVM on compile time an
 | --- | ---: | ---: | ---: |
 | Code generation | 0.47 s | 3.84 s | 8.2× |
 | Code generation with `-g` | 0.50 s | 7.06 s | 14.1× |
-| Full object emission | 7.87 s | 10.20 s | 1.30× |
-| Full object emission with `-g` | 6.22 s | 14.24 s | 2.29× |
+| Compile Coil’s compiler to an object file | 7.87 s | 10.20 s | 1.30× |
+| Compile Coil’s compiler to an object file with `-g` | 6.22 s | 14.24 s | 2.29× |
 
 ### x86-64 Linux
 
@@ -21,8 +21,8 @@ We’re building a native code generator to compete with LLVM on compile time an
 | --- | ---: | ---: | ---: |
 | Code generation | 0.74 s | 7.17 s | 9.7× |
 | Code generation with `-g` | 0.88 s | 14.4 s | 16.4× |
-| Full object emission | 14.6 s | 22.0 s | 1.51× |
-| Full object emission with `-g` | 14.7 s | 30.9 s | 2.10× |
+| Compile Coil’s compiler to an object file | 14.6 s | 22.0 s | 1.51× |
+| Compile Coil’s compiler to an object file with `-g` | 14.7 s | 30.9 s | 2.10× |
 
 Across 11 smaller programs, full builds including linking were 1.19× as fast on macOS and 1.17× on Linux at `-O0` (geometric means). The object and build times are medians from interleaved runs on November 15, 2026. The code-generation rows come from Coil’s internal phase timers.
 
