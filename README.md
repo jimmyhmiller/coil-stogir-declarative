@@ -11,9 +11,7 @@ We’re building a native code generator to compete with LLVM on compile time an
 | Generated-code runtime at `-O0` | About the same | 15% longer |
 | Optimized code vs. LLVM `-O3` | 10% more CPU cycles | 20% more CPU cycles |
 
-The code-generation figures come from timing that phase while compiling Coil itself. Runtime at `-O0` is the geometric mean across eight workloads that ran on both backends. The optimized comparison measures the Coil compiler checking its own source. These are November 2026 benchmarks. [Optimized benchmark notes](handoff.md)
-
-Optimization coverage is still narrower than LLVM’s. Copy elimination, x86-64 instruction selection, and code size are areas for improvement.
+In these benchmarks, we generated code 8–10× as fast as LLVM at `-O0`, and our optimized compiler build used 10–20% more CPU cycles to check its own source. [Benchmark notes](handoff.md)
 
 ## How it’s built
 
