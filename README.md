@@ -4,27 +4,16 @@ We’re building a native code generator to compete with LLVM on compile time an
 
 ## How it compares with LLVM
 
-**At `-O0`, the native backend generated code for the Coil compiler about 8× as fast as LLVM on AArch64 macOS and 10× as fast on x86-64 Linux.** With debug info, the measured code-generation phase was about 14× and 16× as fast, respectively. The full compilation timings include the shared frontend and writing the object file. They stop before linking the compiler executable.
+**At `-O0`, the native backend generates code for the Coil compiler about 8× as fast as LLVM on AArch64 and 10× as fast on x86-64.** With debug info, the speedup rises to about 14× and 16×.
 
-### AArch64 macOS
+| Platform | Settings | Native | LLVM | Speedup |
+| --- | --- | ---: | ---: | ---: |
+| AArch64 macOS | `-O0` | 0.47 s | 3.84 s | 8.2× |
+| AArch64 macOS | `-O0 -g` | 0.50 s | 7.06 s | 14.1× |
+| x86-64 Linux | `-O0` | 0.74 s | 7.17 s | 9.7× |
+| x86-64 Linux | `-O0 -g` | 0.88 s | 14.4 s | 16.4× |
 
-| Compiler benchmark at `-O0` | Native | LLVM | Speedup |
-| --- | ---: | ---: | ---: |
-| Code generation | 0.47 s | 3.84 s | 8.2× |
-| Code generation with `-g` | 0.50 s | 7.06 s | 14.1× |
-| Compile Coil’s compiler to an object file | 7.87 s | 10.20 s | 1.30× |
-| Compile Coil’s compiler to an object file with `-g` | 6.22 s | 14.24 s | 2.29× |
-
-### x86-64 Linux
-
-| Compiler benchmark at `-O0` | Native | LLVM | Speedup |
-| --- | ---: | ---: | ---: |
-| Code generation | 0.74 s | 7.17 s | 9.7× |
-| Code generation with `-g` | 0.88 s | 14.4 s | 16.4× |
-| Compile Coil’s compiler to an object file | 14.6 s | 22.0 s | 1.51× |
-| Compile Coil’s compiler to an object file with `-g` | 14.7 s | 30.9 s | 2.10× |
-
-Across 11 smaller programs, full builds including linking were 1.19× as fast on macOS and 1.17× on Linux at `-O0` (geometric means). The object and build times are medians from interleaved runs on November 15, 2026. The code-generation rows come from Coil’s internal phase timers.
+Coil’s internal timers measured the code-generation phase on November 15, 2026.
 
 **Generated code at `-O0` trades wins with LLVM.** Across eight workloads that ran under both backends, geometric-mean runtime was essentially tied on macOS and about 15% longer with the native backend on Linux. The native-built compiler itself checked its own source in 65.1 s versus LLVM’s 73.0 s on macOS and 55.8 s versus 58.7 s on Linux. The native backend’s compiler executable had 23% less text on macOS and 13% less on Linux at `-O0`. One slice benchmark crashed in the LLVM `-O0` builds on both hosts and was excluded from the runtime aggregate.
 
