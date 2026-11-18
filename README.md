@@ -4,20 +4,16 @@ We’re building a native code generator to compete with LLVM on compile time an
 
 ## How it compares with LLVM
 
-**At `-O0`, the native backend generates code for the Coil compiler about 8× as fast as LLVM on AArch64 and 10× as fast on x86-64.** With debug info, the speedup rises to about 14× and 16×.
+| Compared with LLVM | AArch64 macOS | x86-64 Linux |
+| --- | ---: | ---: |
+| Code generation at `-O0` | **8× as fast** | **10× as fast** |
+| Code generation at `-O0` with debug info | **14× as fast** | **16× as fast** |
+| Generated-code runtime at `-O0` | About the same | 15% longer |
+| Optimized code vs. LLVM `-O3` | 10% more CPU cycles | 20% more CPU cycles |
 
-| Platform | Settings | Native | LLVM | Speedup |
-| --- | --- | ---: | ---: | ---: |
-| AArch64 macOS | `-O0` | 0.47 s | 3.84 s | 8.2× |
-| AArch64 macOS | `-O0 -g` | 0.50 s | 7.06 s | 14.1× |
-| x86-64 Linux | `-O0` | 0.74 s | 7.17 s | 9.7× |
-| x86-64 Linux | `-O0 -g` | 0.88 s | 14.4 s | 16.4× |
+The code-generation figures come from timing that phase while compiling Coil itself. Runtime at `-O0` is the geometric mean across eight workloads that ran on both backends. The optimized comparison measures the Coil compiler checking its own source. These are November 2026 benchmarks. [Optimized benchmark notes](handoff.md)
 
-Coil’s internal timers measured the code-generation phase on November 15, 2026.
-
-**Generated code at `-O0` trades wins with LLVM.** Across eight workloads that ran under both backends, geometric-mean runtime was essentially tied on macOS and about 15% longer with the native backend on Linux. The native-built compiler itself checked its own source in 65.1 s versus LLVM’s 73.0 s on macOS and 55.8 s versus 58.7 s on Linux. The native backend’s compiler executable had 23% less text on macOS and 13% less on Linux at `-O0`. One slice benchmark crashed in the LLVM `-O0` builds on both hosts and was excluded from the runtime aggregate.
-
-**The optimizing path has a bigger code-quality gap.** In a separate November 13 checkpoint, the graph backend’s measured generation phase took about 0.9 s versus 9.8 s for LLVM on macOS and 0.8 s versus 10.8 s on Linux. In the [final comparison from that checkpoint](handoff.md), the optimized native-built compiler used 10% more CPU cycles on AArch64 and 20% more on x86-64 than the LLVM `-O3` build when checking its own source. That’s one workload. Optimization coverage is still narrower than LLVM’s, with room to improve copy elimination, x86-64 addressing and instruction selection, and code size.
+Optimization coverage is still narrower than LLVM’s. Copy elimination, x86-64 instruction selection, and code size are areas for improvement.
 
 ## How it’s built
 
